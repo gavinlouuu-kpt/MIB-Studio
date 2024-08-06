@@ -37,6 +37,10 @@ public:
             buffer_.begin() + ((latestIndex + 1) * imageSize_));
     }
 
+    size_t getLatestIndex() const {
+        return (head_ == 0) ? size_ - 1 : head_ - 1;
+    }
+
     size_t size() const { return size_; }
 
 private:
@@ -129,78 +133,125 @@ static void sample() {
     std::mutex queueMutex;
     std::condition_variable queueCondition;
     std::atomic<bool> done(false);
+    std::atomic<bool> paused(false);
+    int currentFrameIndex = -1;
+    std::mutex currentFrameIndexMutex;
 
     auto processingThreadTask = [&]() {
         while (!done) {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done; });
+            if (!paused) {
+                std::unique_lock<std::mutex> lock(queueMutex);
+                queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done; });
 
-            if (framesToProcess.empty() && done) break;
+                if (framesToProcess.empty() && done) break;
 
-            if (!framesToProcess.empty()) {
-                size_t frame = framesToProcess.front();
-                framesToProcess.pop();
-                lock.unlock();
+                if (!framesToProcess.empty()) {
+                    size_t frame = framesToProcess.front();
+                    framesToProcess.pop();
+                    lock.unlock();
 
-                auto imageData = circularBuffer.get(frame % bufferCount);
-                std::cout << "Processing frame " << frame << std::endl;
-                // Process imageData here
+                    auto imageData = circularBuffer.get(frame % bufferCount);
+                    std::cout << "Processing frame " << frame << std::endl;
+                    // Process imageData here
+                }
             }
+            cv::waitKey(1);
         }
     };
 
     auto displayThreadTask = [&]() {
         while (!done) {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done; });
-
-            if (framesToProcess.empty() && done) break;
-
-            if (!framesToProcess.empty()) {
-                size_t frame = framesToProcess.front();
-                framesToProcess.pop();
-                lock.unlock();
-
-                auto imageData = circularBuffer.getLatest();
+            if (paused) {
+                std::lock_guard<std::mutex> lock(currentFrameIndexMutex);
+                auto imageData = circularBuffer.get(currentFrameIndex);
                 cv::Mat image(height, width, CV_8UC1, imageData.data()); // Adjust CV_8UC1 based on pixel format
                 cv::imshow("Live Feed", image);
-                cv::waitKey(40); // Small delay to allow the image to be displayed
-                //std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                cv::waitKey(40);
+            }
+            else {
+                std::unique_lock<std::mutex> lock(queueMutex);
+                queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done; });
+
+                if (framesToProcess.empty() && done) break;
+                if (!framesToProcess.empty()) {
+                    size_t frame = framesToProcess.front();
+                    framesToProcess.pop();
+                    lock.unlock();
+                    auto imageData = circularBuffer.getLatest();
+                    cv::Mat image(height, width, CV_8UC1, imageData.data()); // Adjust CV_8UC1 based on pixel format
+                    cv::imshow("Live Feed", image);
+                    cv::waitKey(1);
+                }
             }
         }
     };
 
     std::thread workerThread(processingThreadTask);
     std::thread displayThread(displayThreadTask);
-    //std::thread workerThread(processingThreadTask, std::ref(framesToProcess), std::ref(queueMutex), std::ref(queueCondition), std::ref(done));
-
 
     grabber.start();
     size_t frameCount = 0;
     while (!done) {  // Run indefinitely until stopped
-        ScopedBuffer buffer(grabber);
-        printBufferInfo(buffer, frameCount);
+        if (paused) {
+            //currentFrameIndex = circularBuffer.getLatestIndex();
+            // if 'a' key is hit minus currentFrameIndex by 1 and the oppose for 'd' key
+            if (_kbhit()) {
+				int ch = _getch();
+				if (ch == 27) {
+					std::cout << "ESC pressed. Stopping capture..." << std::endl;
+					done = true;
+				}
+				else if (ch == 32) { // Space bar
+					paused = !paused;
+                    std::cout << (paused ? "Paused" : "Resumed") << std::endl;
+				}
+                else if (ch == 97) { // 'a' key
+                    std::lock_guard<std::mutex> lock(currentFrameIndexMutex);
+                    currentFrameIndex = (currentFrameIndex == 0) ? bufferCount - 1 : currentFrameIndex - 1;
+                    std::cout << "a key pressed\nCurrent Frame Index: " << currentFrameIndex << std::endl;
+                }
+                else if (ch == 100) { // 'd' key
+                    std::lock_guard<std::mutex> lock(currentFrameIndexMutex);
+                    currentFrameIndex = (currentFrameIndex == bufferCount - 1) ? 0 : currentFrameIndex + 1;
+                    std::cout << "d key pressed\nCurrent Frame Index: " << currentFrameIndex << std::endl;
+                }
+			}
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			continue;
+		}
+        
+            ScopedBuffer buffer(grabber);
+            printBufferInfo(buffer, frameCount);
 
-        uint8_t* imagePointer = buffer.getInfo<uint8_t*>(gc::BUFFER_INFO_BASE);
-        circularBuffer.push(imagePointer);
+            uint8_t* imagePointer = buffer.getInfo<uint8_t*>(gc::BUFFER_INFO_BASE);
+            circularBuffer.push(imagePointer);
 
-        {
-            std::lock_guard<std::mutex> lock(queueMutex);
-            framesToProcess.push(frameCount);
-        }
-        queueCondition.notify_one();
+            {
+                std::lock_guard<std::mutex> lock(queueMutex);
+                framesToProcess.push(frameCount);
+            }
+            queueCondition.notify_one();
 
-        frameCount++;
+            frameCount++;
 
+		
         // Check for stop condition (e.g., user input, max frames, etc.)
         if (_kbhit()) {
             int ch = _getch();
             if (ch == 27) {
-                std::cout << "ESC pressed. Stopping cature..." << std::endl;
+                std::cout << "ESC pressed. Stopping capture..." << std::endl;
                 done = true;
             }
-            
+            else if (ch == 32) { // Space bar
+                paused = !paused;
+                if (paused) {
+                    std::lock_guard<std::mutex> lock(currentFrameIndexMutex);
+                    currentFrameIndex = circularBuffer.getLatestIndex();
+                }
+                std::cout << (paused ? "Paused" : "Resumed") << std::endl;
+            }
         }
+        cv::waitKey(1);
     }
 
     grabber.stop();
