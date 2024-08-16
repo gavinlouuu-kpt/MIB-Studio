@@ -9,8 +9,9 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
-#include <iostream>
 #include <conio.h>
+#include <chrono>
+#include <iomanip>
 
 
 class CircularBuffer {
@@ -57,276 +58,319 @@ private:
     std::atomic<size_t> tail_;
 };
 
+// General template for toString
+template <typename T>
+inline std::string toString(const T& v) {
+    std::stringstream ss;
+    ss << v;
+    return ss.str();
+}
+
+// Specialization for std::string
+template <>
+inline std::string toString<std::string>(const std::string& v) {
+    return v;
+}
+
 using namespace Euresys;
 
-void configure_js() {
-    EGenTL gentl;
-    EGrabber<> grabber(gentl);
-    grabber.runScript("./config.js");
+
+struct GrabberParams {
+    size_t width;
+    size_t height;
+    uint64_t pixelFormat;
+    size_t imageSize;
+    size_t bufferCount;
+};
+
+struct SharedResources {
+    std::atomic<bool> done{ false };
+    std::atomic<bool> paused{ false };
+    std::atomic<int> currentFrameIndex{ -1 };
+    std::atomic<bool> displayNeedsUpdate{ false };
+    std::atomic<size_t> frameRateCount{ 0 };
+    std::queue<size_t> framesToProcess;
+    std::queue<size_t> framesToDisplay;
+    std::mutex displayQueueMutex;
+    std::mutex processingQueueMutex;
+    std::condition_variable displayQueueCondition;
+    std::condition_variable processingQueueCondition;
+};
+
+
+void configure(EGrabber<CallbackOnDemand>& grabber) {
+    grabber.setInteger<RemoteModule>("Width", 512);
+    grabber.setInteger<RemoteModule>("Height", 512);
+    grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
+    // ... (other configuration settings)
 }
 
-
-void printBufferInfo(ScopedBuffer& buffer, size_t i) {
-    //// Get and print pixel format
-    //uint64_t pixelFormat = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_PIXELFORMAT);
-    //std::cout << "Pixel Format: " << std::hex << pixelFormat << std::dec << std::endl;
-
-    //// Get and print buffer width
-    //size_t width = buffer.getInfo<size_t>(gc::BUFFER_INFO_WIDTH);
-    //std::cout << "Width: " << width << " pixels" << std::endl;
-
-    //// Get and print buffer height
-    //size_t height = buffer.getInfo<size_t>(gc::BUFFER_INFO_HEIGHT);
-    //std::cout << "Height: " << height << " pixels" << std::endl;
-
-    // Get and print timestamp
-    uint64_t timestamp = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_TIMESTAMP);
-    std::cout << i << ".Timestamp: " << timestamp << " us" << std::endl;
-
-    // Get and print the base address of the buffer memory
-    //uint8_t* baseAddress = buffer.getInfo<uint8_t*>(gc::BUFFER_INFO_BASE);
-    //std::cout << i <<". Base Address: " << static_cast<void*>(baseAddress) << std::endl;
-
-    //// Get and print the size of the buffer
-    //size_t bufferSize = buffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE);
-    //std::cout << "Buffer Size: " << bufferSize << " bytes" << std::endl;
-}
-
-void processingThreadTask(std::queue<size_t>& framesToProcess, std::mutex& queueMutex, std::condition_variable& queueCondition, bool& done) {
-    while (true) {
-        std::unique_lock<std::mutex> lock(queueMutex);
-        queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done; });
-
-        if (done && framesToProcess.empty()) {
-            break;
-        }
-
-        size_t frame = framesToProcess.front();
-        framesToProcess.pop();
-        lock.unlock();
-
-        // Print a message to the console
-        std::cout << "Processing frame " << frame << std::endl;
-
-        // Empty processing task
-        // Add your processing code here if needed
-    }
-}
-
-static void sample() {
-    EGenTL genTL; // load GenTL producer
-    EGrabberDiscovery egrabberDiscovery(genTL);
-    egrabberDiscovery.discover();
-    EGrabber<CallbackOnDemand> grabber(egrabberDiscovery.cameras(0));
-
-    size_t bufferCount = 5000;
-    grabber.reallocBuffers(3); // prepare 3 buffers for internal use
-
-    // Get image dimensions and pixel format from the first buffer
+GrabberParams initializeGrabber(EGrabber<CallbackOnDemand>& grabber) {
+    grabber.reallocBuffers(3);
     grabber.start(1);
     ScopedBuffer firstBuffer(grabber);
-    size_t width = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_WIDTH);
-    size_t height = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_HEIGHT);
-    uint64_t pixelFormat = firstBuffer.getInfo<uint64_t>(gc::BUFFER_INFO_PIXELFORMAT);
-    size_t imageSize = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE);
+
+    GrabberParams params;
+    params.width = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_WIDTH);
+    params.height = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_HEIGHT);
+    params.pixelFormat = firstBuffer.getInfo<uint64_t>(gc::BUFFER_INFO_PIXELFORMAT);
+    params.imageSize = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE);
+    params.bufferCount = 5000;  // You can adjust this as needed
+
     grabber.stop();
+    return params;
+}
 
-    // Allocate memory for the new buffer to hold 5000 images
-    CircularBuffer circularBuffer(bufferCount, imageSize);
 
-    // Synchronization primitives for the producer-consumer pattern
-    std::queue<size_t> framesToProcess;
-    std::mutex queueMutex;
-    std::condition_variable queueCondition;
-    std::atomic<bool> done(false);
-    std::atomic<bool> paused(false);
-    int currentFrameIndex = -1;
-    bool displayNeedsUpdate = false;
-    //std::mutex currentFrameIndexMutex;
+void processingThreadTask(
+    std::atomic<bool>& done,
+    std::atomic<bool>& paused,
+    std::mutex& processingQueueMutex,
+    std::condition_variable& processingQueueCondition,
+    std::queue<size_t>& framesToProcess,
+    const CircularBuffer& circularBuffer,
+    size_t width,
+    size_t height
+) {
+    while (!done) {
+        std::unique_lock<std::mutex> lock(processingQueueMutex);
+        processingQueueCondition.wait(lock, [&]() {
+            return !framesToProcess.empty() || done || paused;
+            });
 
-    //auto processingThreadTask = [&]() {
-    //    while (!done) {
-    //        if (!paused) {
-    //            std::unique_lock<std::mutex> lock(queueMutex);
-    //            queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done; });
+        if (done) break;
 
-    //            if (framesToProcess.empty() && done) break;
+        if (!framesToProcess.empty() && !paused) {
+            size_t frame = framesToProcess.front();
+            framesToProcess.pop();
+            lock.unlock();
 
-    //            if (!framesToProcess.empty()) {
-    //                size_t frame = framesToProcess.front();
-    //                framesToProcess.pop();
-    //                lock.unlock();
+            auto imageData = circularBuffer.getLatest();
 
-    //                auto imageData = circularBuffer.get(frame % bufferCount);
-    //                std::cout << "Processing frame " << frame << std::endl;
-    //                // Process imageData here
-    //            }
-    //        }
-    //        cv::waitKey(1);
-    //    }
-    //};
-    auto processingThreadTask = [&]() {
-        cv::namedWindow("Binary Feed", cv::WINDOW_NORMAL);
-        cv::resizeWindow("Binary Feed", width, height);
+            // Create OpenCV Mat from the image data
+            cv::Mat original(height, width, CV_8UC1, imageData.data());
 
-        while (!done) {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done || paused; });
+            // Create binary image
+            cv::Mat binary;
+            cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
 
-            if (done) break;
-
-            if (!framesToProcess.empty() && !paused) {
-                size_t frame = framesToProcess.front();
-                framesToProcess.pop();
-                lock.unlock();
-                auto imageData = circularBuffer.getLatest();
-                std::cout << "Processing frame " << frame << std::endl;
-
-                // Create OpenCV Mat from the image data
-                cv::Mat original(height, width, CV_8UC1, imageData.data());
-
-                // Create binary image
-                cv::Mat binary;
-                cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
-
-                // Display binary image
-                cv::imshow("Binary Feed", binary);
-            }
-            else {
-                lock.unlock();
-            }
-
-            cv::waitKey(1); // Process GUI events and display the image
-
-            // Short sleep to reduce CPU usage when not actively processing
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // If you want to display the binary image, uncomment the following lines:
+            // cv::namedWindow("Binary Feed", cv::WINDOW_NORMAL);
+            // cv::resizeWindow("Binary Feed", width, height);
+            // cv::imshow("Binary Feed", binary);
+            // cv::waitKey(1);
+        }
+        else {
+            lock.unlock();
         }
 
-        cv::destroyWindow("Binary Feed");
-        };
+        // Short sleep to reduce CPU usage when not actively processing
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 
-    auto displayThreadTask = [&]() {
-        while (!done) {
-            if (!paused) {
-                std::unique_lock<std::mutex> lock(queueMutex);
-                queueCondition.wait(lock, [&]() { return !framesToProcess.empty() || done || paused; });
+    // If you've created a window, make sure to destroy it:
+    // cv::destroyWindow("Binary Feed");
+}
 
-                if (done) break;
-                if (!framesToProcess.empty() && !paused) {
-                    size_t frame = framesToProcess.front();
-                    framesToProcess.pop();
+void displayThreadTask(
+    const std::atomic<bool>& done,
+    const std::atomic<bool>& paused,
+    const std::atomic<int>& currentFrameIndex,
+    std::atomic<bool>& displayNeedsUpdate,
+    std::queue<size_t>& framesToDisplay,
+    std::mutex& displayQueueMutex,
+    const CircularBuffer& circularBuffer,
+    size_t width,
+    size_t height,
+    size_t bufferCount
+) {
+    const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
+    auto nextFrameTime = std::chrono::steady_clock::now();
+
+    while (!done) {
+        if (!paused) {
+            std::unique_lock<std::mutex> lock(displayQueueMutex);
+            auto now = std::chrono::steady_clock::now();
+            if (now >= nextFrameTime) {
+                if (!framesToDisplay.empty()) {
+                    size_t frame = framesToDisplay.front();
+                    framesToDisplay.pop();
                     lock.unlock();
-                    //const uint8_t* imageData = circularBuffer.getPointer(circularBuffer.getLatestIndex());
-                    //cv::Mat image(height, width, CV_8UC1, const_cast<uint8_t*>(imageData));
+
                     auto imageData = circularBuffer.getLatest();
                     cv::Mat image(height, width, CV_8UC1, imageData.data());
                     cv::imshow("Live Feed", image);
+                    cv::waitKey(1); // Process GUI events
+
+                    nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
+                    if (nextFrameTime < now) {
+                        nextFrameTime = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
+                    }
+                }
+                else {
+                    lock.unlock();
                 }
             }
-            cv::waitKey(1); // Process GUI events
+            else {
+                lock.unlock();
+                cv::waitKey(1); // Process GUI events
+            }
         }
-        };
-
-
-    std::thread workerThread(processingThreadTask);
-    std::thread displayThread(displayThreadTask);
-
-    grabber.start();
-    size_t frameCount = 0;
-    while (!done) {  // Run indefinitely until stopped
-        if (paused) {
-            //currentFrameIndex = circularBuffer.getLatestIndex();
-            // if 'a' key is hit minus currentFrameIndex by 1 and the oppose for 'd' key
-            if (_kbhit()) {
-				int ch = _getch();
-				if (ch == 27) {
-					std::cout << "ESC pressed. Stopping capture..." << std::endl;
-					done = true;
-				}
-				else if (ch == 32) { // Space bar
-                    paused = false;
-                    grabber.start(); // Start the grabber when unpausing
-                    std::cout << "Resumed" << std::endl;
-				}
-                else if (ch == 97) { // 'a' key
-                    //std::lock_guard<std::mutex> lock(currentFrameIndexMutex);
-                    currentFrameIndex = (currentFrameIndex == 0) ? bufferCount - 1 : currentFrameIndex - 1;
-                    std::cout << "a key pressed\nCurrent Frame Index: " << currentFrameIndex << std::endl;
-                    displayNeedsUpdate = true;
-                }
-                else if (ch == 100) { // 'd' key
-                    //std::lock_guard<std::mutex> lock(currentFrameIndexMutex);
-                    currentFrameIndex = (currentFrameIndex == bufferCount - 1) ? 0 : currentFrameIndex + 1;
-                    std::cout << "d key pressed\nCurrent Frame Index: " << currentFrameIndex << std::endl;
-                    displayNeedsUpdate = true;
-                }
-			}
+        else {
             if (displayNeedsUpdate) {
-                const uint8_t* imageData = circularBuffer.getPointer(currentFrameIndex);
+                auto imageData = circularBuffer.get(currentFrameIndex);
+
                 std::cout << "Showing frame: " << currentFrameIndex << std::endl;
-                cv::Mat image(height, width, CV_8UC1, const_cast<uint8_t*>(imageData));
+                cv::Mat image(height, width, CV_8UC1, imageData.data());
+
+                if (image.empty()) {
+                    std::cout << "Failed to create image from buffer" << std::endl;
+                    continue;
+                }
+
                 cv::imshow("Live Feed", image);
+                std::cout << "Displaying frame: " << currentFrameIndex << std::endl;
                 cv::waitKey(1); // Ensure the image is displayed
                 displayNeedsUpdate = false;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            //cv::waitKey(1);
-			continue;
-		}
-        
-            ScopedBuffer buffer(grabber);
-            printBufferInfo(buffer, frameCount);
+            cv::waitKey(1);
+        }
+    }
+}
 
-            uint8_t* imagePointer = buffer.getInfo<uint8_t*>(gc::BUFFER_INFO_BASE);
-            circularBuffer.push(imagePointer);
-
-            {
-                std::lock_guard<std::mutex> lock(queueMutex);
-                framesToProcess.push(frameCount);
-            }
-            queueCondition.notify_one();
-
-            frameCount++;
-
-		
-        // Check for stop condition (e.g., user input, max frames, etc.)
+void keyboardHandlingThread(
+    std::atomic<bool>& done,
+    std::atomic<bool>& paused,
+    std::atomic<int>& currentFrameIndex,
+    std::atomic<bool>& displayNeedsUpdate,
+    EGrabber<CallbackOnDemand>& grabber,
+    const CircularBuffer& circularBuffer,
+    size_t bufferCount
+) {
+    while (!done) {
         if (_kbhit()) {
             int ch = _getch();
-            if (ch == 27) {
+            if (ch == 27) { // ESC key
                 std::cout << "ESC pressed. Stopping capture..." << std::endl;
                 done = true;
             }
             else if (ch == 32) { // Space bar
-                paused = true;
-                //if (paused) {
-                grabber.stop();
-                    //std::lock_guard<std::mutex> lock(currentFrameIndexMutex);
-                currentFrameIndex = circularBuffer.getLatestIndex();
-                //}
-                //std::cout << (paused ? "Paused" : "Resumed") << std::endl;
-                std::cout << "Paused" << std::endl;
-                displayNeedsUpdate = true; // Ensure we display the latest frame when pausing
+                paused = !paused;
+                if (paused) {
+                    uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
+                    uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
+                    std::cout << "EGrabber Frame Rate: " << fr << " FPS" << std::endl;
+                    std::cout << "EGrabber Data Rate: " << dr << " MB/s" << std::endl;
+                    grabber.stop();
+                    currentFrameIndex = circularBuffer.getLatestIndex();
+                    std::cout << "Paused" << std::endl;
+                    displayNeedsUpdate = true;
+                }
+                else {
+                    grabber.start();
+                    std::cout << "Resumed" << std::endl;
+                }
+            }
+            else if (ch == 97) { // 'a' key
+                int newIndex = (currentFrameIndex == 0) ? bufferCount - 1 : currentFrameIndex - 1;
+                currentFrameIndex = newIndex;
+                std::cout << "a key pressed\nCurrent Frame Index: " << newIndex << std::endl;
+                displayNeedsUpdate = true;
+            }
+            else if (ch == 100) { // 'd' key
+                int newIndex = (currentFrameIndex == bufferCount - 1) ? 0 : currentFrameIndex + 1;
+                currentFrameIndex = newIndex;
+                std::cout << "d key pressed\nCurrent Frame Index: " << newIndex << std::endl;
+                displayNeedsUpdate = true;
             }
         }
-        cv::waitKey(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small sleep to reduce CPU usage
+    }
+}
+
+void sample(EGrabber<CallbackOnDemand>& grabber, const GrabberParams& params, CircularBuffer& circularBuffer, SharedResources& shared) {
+    std::thread processingThread(processingThreadTask,
+        std::ref(shared.done), std::ref(shared.paused),
+        std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
+        std::ref(shared.framesToProcess), std::ref(circularBuffer),
+        params.width, params.height);
+    std::thread displayThread(displayThreadTask,
+        std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
+        std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
+        std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
+        params.width, params.height, params.bufferCount);
+    std::thread keyboardThread(keyboardHandlingThread,
+        std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
+        std::ref(shared.displayNeedsUpdate), std::ref(grabber),
+        std::ref(circularBuffer), params.bufferCount);
+
+    grabber.start();
+    size_t frameCount = 0;
+    uint64_t lastFrameId = 0;
+    uint64_t duplicateCount = 0;
+    while (!shared.done) {
+        if (shared.paused) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            cv::waitKey(1);
+            continue;
+        }
+
+        ScopedBuffer buffer(grabber);
+        uint8_t* imagePointer = buffer.getInfo<uint8_t*>(gc::BUFFER_INFO_BASE);
+        uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);
+        uint64_t timestamp = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_TIMESTAMP);
+        bool isIncomplete = buffer.getInfo<bool>(gc::BUFFER_INFO_IS_INCOMPLETE);
+        size_t sizeFilled = buffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE_FILLED);
+
+        if (!isIncomplete) {
+            if (frameId <= lastFrameId) {
+                ++duplicateCount;
+                std::cout << "Duplicate frame detected: FrameID=" << frameId << ", Timestamp=" << timestamp << std::endl;
+            }
+            else {
+                circularBuffer.push(imagePointer);
+                {
+                    std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+                    std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+                    shared.framesToProcess.push(frameCount);
+                    shared.framesToDisplay.push(frameCount);
+                }
+                shared.displayQueueCondition.notify_one();
+                shared.processingQueueCondition.notify_one();
+                frameCount++;
+            }
+            lastFrameId = frameId;
+        }
+        else {
+            std::cout << "Incomplete frame received: FrameID=" << frameId << std::endl;
+        }
     }
 
     grabber.stop();
-    workerThread.join();
-    displayThread.join();
 
+    processingThread.join();
+    displayThread.join();
+    keyboardThread.join();
 }
+
 
 int main() {
     try {
-        //grab_live();
-        sample();
-        //high_sample();
+        EGenTL genTL;
+        EGrabberDiscovery egrabberDiscovery(genTL);
+        egrabberDiscovery.discover();
+        EGrabber<CallbackOnDemand> grabber(egrabberDiscovery.cameras(0));
+
+        configure(grabber);
+        GrabberParams params = initializeGrabber(grabber);
+
+        CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
+        SharedResources shared;
+
+        sample(grabber, params, circularBuffer, shared);
     }
     catch (const std::exception& e) {
         std::cout << "error: " << e.what() << std::endl;
     }
-    //open_cv_test();
+    return 0;
 }
- 
-
