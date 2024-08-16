@@ -13,49 +13,57 @@
 #include <chrono>
 #include <iomanip>
 
-
 class CircularBuffer {
 public:
     CircularBuffer(size_t size, size_t imageSize)
-        : buffer_(size* imageSize), size_(size), imageSize_(imageSize), head_(0), tail_(0) {}
+        : buffer_(size* imageSize), size_(size), imageSize_(imageSize), head_(0), count_(0) {}
 
     void push(const uint8_t* data) {
         std::copy(data, data + imageSize_, buffer_.begin() + (head_ * imageSize_));
         head_ = (head_ + 1) % size_;
-        if (head_ == tail_) {
-            tail_ = (tail_ + 1) % size_;
-        }
+        if (count_ < size_) count_++;
     }
 
     std::vector<uint8_t> get(size_t index) const {
-        size_t actualIndex = (tail_ + index) % size_;
+        if (index >= count_) throw std::out_of_range("Index out of range");
+        size_t actualIndex = (head_ - 1 - index + size_) % size_;
         return std::vector<uint8_t>(buffer_.begin() + (actualIndex * imageSize_),
             buffer_.begin() + ((actualIndex + 1) * imageSize_));
     }
 
-    std::vector<uint8_t> getLatest() const {
-        size_t latestIndex = (head_ == 0) ? size_ - 1 : head_ - 1;
-        return std::vector<uint8_t>(buffer_.begin() + (latestIndex * imageSize_),
-            buffer_.begin() + ((latestIndex + 1) * imageSize_));
-    }
-
     const uint8_t* getPointer(size_t index) const {
-        size_t actualIndex = (tail_ + index) % size_;
+        if (index >= count_) throw std::out_of_range("Index out of range");
+        size_t actualIndex = (head_ - 1 - index + size_) % size_;
         return buffer_.data() + (actualIndex * imageSize_);
     }
 
-    size_t getLatestIndex() const {
-        return (head_ == 0) ? size_ - 1 : head_ - 1;
-    }
+    size_t size() const { return count_; }
+    bool isFull() const { return count_ == size_; }
 
-    size_t size() const { return size_; }
+    // Iterator class for CircularBuffer
+    class Iterator {
+    public:
+        Iterator(const CircularBuffer& buffer, size_t index) : buffer_(buffer), index_(index) {}
+
+        std::vector<uint8_t> operator*() const { return buffer_.get(index_); }
+        Iterator& operator++() { ++index_; return *this; }
+        bool operator!=(const Iterator& other) const { return index_ != other.index_; }
+
+    private:
+        const CircularBuffer& buffer_;
+        size_t index_;
+    };
+
+    // Methods to support range-based for loop
+    Iterator begin() const { return Iterator(*this, 0); }
+    Iterator end() const { return Iterator(*this, count_); }
 
 private:
     std::vector<uint8_t> buffer_;
     size_t size_;
     size_t imageSize_;
-    std::atomic<size_t> head_;
-    std::atomic<size_t> tail_;
+    size_t head_;
+    size_t count_;
 };
 
 // General template for toString
@@ -145,7 +153,7 @@ void processingThreadTask(
             framesToProcess.pop();
             lock.unlock();
 
-            auto imageData = circularBuffer.getLatest();
+            auto imageData = circularBuffer.get(0);
 
             // Create OpenCV Mat from the image data
             cv::Mat original(height, width, CV_8UC1, imageData.data());
@@ -197,7 +205,7 @@ void displayThreadTask(
                     framesToDisplay.pop();
                     lock.unlock();
 
-                    auto imageData = circularBuffer.getLatest();
+                    auto imageData = circularBuffer.get(0);
                     cv::Mat image(height, width, CV_8UC1, imageData.data());
                     cv::imshow("Live Feed", image);
                     cv::waitKey(1); // Process GUI events
@@ -262,7 +270,7 @@ void keyboardHandlingThread(
                     std::cout << "EGrabber Frame Rate: " << fr << " FPS" << std::endl;
                     std::cout << "EGrabber Data Rate: " << dr << " MB/s" << std::endl;
                     grabber.stop();
-                    currentFrameIndex = circularBuffer.getLatestIndex();
+                    currentFrameIndex = 0;
                     std::cout << "Paused" << std::endl;
                     displayNeedsUpdate = true;
                 }
@@ -271,17 +279,50 @@ void keyboardHandlingThread(
                     std::cout << "Resumed" << std::endl;
                 }
             }
-            else if (ch == 97) { // 'a' key
-                int newIndex = (currentFrameIndex == 0) ? bufferCount - 1 : currentFrameIndex - 1;
-                currentFrameIndex = newIndex;
-                std::cout << "a key pressed\nCurrent Frame Index: " << newIndex << std::endl;
-                displayNeedsUpdate = true;
+            else if (ch == 97) { // 'a' key - move to older frame
+                if (currentFrameIndex < circularBuffer.size() - 1) {
+                    currentFrameIndex++;
+                    std::cout << "a key pressed\nMoved to older frame. Current Frame Index: " << currentFrameIndex << std::endl;
+                    displayNeedsUpdate = true;
+                }
+                else {
+                    std::cout << "Already at oldest frame." << std::endl;
+                }
             }
-            else if (ch == 100) { // 'd' key
-                int newIndex = (currentFrameIndex == bufferCount - 1) ? 0 : currentFrameIndex + 1;
-                currentFrameIndex = newIndex;
-                std::cout << "d key pressed\nCurrent Frame Index: " << newIndex << std::endl;
-                displayNeedsUpdate = true;
+            else if (ch == 100) { // 'd' key - move to newer frame
+                if (currentFrameIndex > 0) {
+                    currentFrameIndex--;
+                    std::cout << "d key pressed\nMoved to newer frame. Current Frame Index: " << currentFrameIndex << std::endl;
+                    displayNeedsUpdate = true;
+                }
+                else {
+                    std::cout << "Already at newest frame." << std::endl;
+                }
+            }
+            else if (ch == 115) { // 's' key - save the current frame
+                std::filesystem::path outputDir = "output";
+                if (!std::filesystem::exists(outputDir)) {
+                    std::filesystem::create_directory(outputDir);
+                }
+
+                size_t frameCount = circularBuffer.size();
+                std::cout << "Saving " << frameCount << " frames..." << std::endl;
+
+                for (size_t i = 0; i < frameCount; ++i) {
+                    auto imageData = circularBuffer.get(frameCount - 1 - i);  // Start from oldest frame
+                    cv::Mat image(512, 512, CV_8UC1, imageData.data());
+
+                    std::ostringstream oss;
+                    oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".png";
+                    std::string filename = oss.str();
+
+                    std::filesystem::path fullPath = outputDir / filename;
+
+                    cv::imwrite(fullPath.string(), image);
+                    std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
+                }
+
+                std::cout << "\nAll frames saved in the 'output' directory." << std::endl;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small sleep to reduce CPU usage
