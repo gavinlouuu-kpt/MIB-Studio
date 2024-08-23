@@ -103,6 +103,7 @@ struct SharedResources {
     std::mutex processingQueueMutex;
     std::condition_variable displayQueueCondition;
     std::condition_variable processingQueueCondition;
+
 };
 
 
@@ -180,6 +181,12 @@ void processingThreadTask(
     // cv::destroyWindow("Binary Feed");
 }
 
+void onTrackbar(int pos, void* userdata) {
+    auto* shared = static_cast<SharedResources*>(userdata);
+    shared->currentFrameIndex = pos;
+    shared->displayNeedsUpdate = true;
+}
+
 void displayThreadTask(
     const std::atomic<bool>& done,
     const std::atomic<bool>& paused,
@@ -190,13 +197,23 @@ void displayThreadTask(
     const CircularBuffer& circularBuffer,
     size_t width,
     size_t height,
-    size_t bufferCount
+    size_t bufferCount,
+    SharedResources& shared
 ) {
     const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
     auto nextFrameTime = std::chrono::steady_clock::now();
 
+    cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Live Feed", width, height);
+
+    int trackbarPos = 0;
+    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+
+
     while (!done) {
         if (!paused) {
+            
+
             std::unique_lock<std::mutex> lock(displayQueueMutex);
             auto now = std::chrono::steady_clock::now();
             if (now >= nextFrameTime) {
@@ -226,19 +243,25 @@ void displayThreadTask(
         }
         else {
             if (displayNeedsUpdate) {
-                auto imageData = circularBuffer.get(currentFrameIndex);
+                
+                int index = currentFrameIndex;
+                if (index >= 0 && index < circularBuffer.size()) {
+                    auto imageData = circularBuffer.get(index);
 
-                std::cout << "Showing frame: " << currentFrameIndex << std::endl;
-                cv::Mat image(height, width, CV_8UC1, imageData.data());
+                    cv::Mat image(height, width, CV_8UC1, imageData.data());
 
-                if (image.empty()) {
-                    std::cout << "Failed to create image from buffer" << std::endl;
-                    continue;
+                    if (!image.empty()) {
+                        cv::imshow("Live Feed", image);
+                        cv::setTrackbarPos("Frame", "Live Feed", index);
+                        std::cout << "Displaying frame: " << index << std::endl;
+                    }
+                    else {
+                        std::cout << "Failed to create image from buffer" << std::endl;
+                    }
                 }
-
-                cv::imshow("Live Feed", image);
-                std::cout << "Displaying frame: " << currentFrameIndex << std::endl;
-                cv::waitKey(1); // Ensure the image is displayed
+                else {
+                    std::cout << "Invalid frame index: " << index << std::endl;
+                }
                 displayNeedsUpdate = false;
             }
             cv::waitKey(1);
@@ -339,7 +362,7 @@ void sample(EGrabber<CallbackOnDemand>& grabber, const GrabberParams& params, Ci
         std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
         std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
         std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
-        params.width, params.height, params.bufferCount);
+        params.width, params.height, params.bufferCount, std::ref(shared));
     std::thread keyboardThread(keyboardHandlingThread,
         std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
         std::ref(shared.displayNeedsUpdate), std::ref(grabber),
