@@ -141,6 +141,9 @@ void processingThreadTask(
     size_t width,
     size_t height
 ) {
+    auto lastPrintTime = std::chrono::steady_clock::now();
+    int frameCount = 0;
+
     while (!done) {
         std::unique_lock<std::mutex> lock(processingQueueMutex);
         processingQueueCondition.wait(lock, [&]() {
@@ -163,11 +166,21 @@ void processingThreadTask(
             cv::Mat binary;
             cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
 
-            // If you want to display the binary image, uncomment the following lines:
-            // cv::namedWindow("Binary Feed", cv::WINDOW_NORMAL);
-            // cv::resizeWindow("Binary Feed", width, height);
-            // cv::imshow("Binary Feed", binary);
-            // cv::waitKey(1);
+            // Increment frame count
+            ++frameCount;
+
+            // Check if 5 seconds have passed
+            auto currentTime = std::chrono::steady_clock::now();
+            auto elapsedTime = std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPrintTime).count();
+            if (elapsedTime >= 5) {
+                // Calculate frames per second
+                double fps = static_cast<double>(frameCount) / elapsedTime;
+                std::cout << "Frames processed per second: " << fps << std::endl;
+
+                // Reset frame count and update last print time
+                frameCount = 0;
+                lastPrintTime = currentTime;
+            }
         }
         else {
             lock.unlock();
