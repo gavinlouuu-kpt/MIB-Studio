@@ -109,7 +109,7 @@ struct SharedResources {
 
 void configure(EGrabber<CallbackOnDemand>& grabber) {
     grabber.setInteger<RemoteModule>("Width", 512);
-    grabber.setInteger<RemoteModule>("Height", 96);
+    grabber.setInteger<RemoteModule>("Height", 512);
     grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
     // ... (other configuration settings)
 }
@@ -136,18 +136,19 @@ GrabberParams initializeGrabber(EGrabber<CallbackOnDemand>& grabber) {
     return params;
 }
 
-void processFrame(const std::vector<uint8_t>& imageData, size_t width, size_t height) {
+cv::Mat processFrame(const std::vector<uint8_t>& imageData, size_t width, size_t height) {
     // Create OpenCV Mat from the image data
     cv::Mat original(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t*>(imageData.data()));
 
 
     // Create binary image
-    cv::Mat binary;
-    cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
+    cv::Mat processed;
+    cv::threshold(original, processed, 70, 255, cv::THRESH_BINARY);
 
     // Add any additional processing steps here
     // For example, you might want to analyze the binary image,
     // perform feature detection, or apply other CV algorithms
+    return processed;
 }
 
 void processingThreadTask(
@@ -184,7 +185,7 @@ void processingThreadTask(
             //// Create binary image
             //cv::Mat binary;
             //cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
-            processFrame(imageData, width, height);
+            cv::Mat processedImage = processFrame(imageData, width, height);
 
 
             // Increment frame count
@@ -221,6 +222,87 @@ void onTrackbar(int pos, void* userdata) {
     shared->displayNeedsUpdate = true;
 }
 
+//void displayThreadTask(
+//    const std::atomic<bool>& done,
+//    const std::atomic<bool>& paused,
+//    const std::atomic<int>& currentFrameIndex,
+//    std::atomic<bool>& displayNeedsUpdate,
+//    std::queue<size_t>& framesToDisplay,
+//    std::mutex& displayQueueMutex,
+//    const CircularBuffer& circularBuffer,
+//    size_t width,
+//    size_t height,
+//    size_t bufferCount,
+//    SharedResources& shared
+//) {
+//    const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
+//    auto nextFrameTime = std::chrono::steady_clock::now();
+//
+//    cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
+//    cv::resizeWindow("Live Feed", width, height);
+//
+//    int trackbarPos = 0;
+//    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+//
+//
+//    while (!done) {
+//        if (!paused) {
+//            
+//
+//            std::unique_lock<std::mutex> lock(displayQueueMutex);
+//            auto now = std::chrono::steady_clock::now();
+//            if (now >= nextFrameTime) {
+//                if (!framesToDisplay.empty()) {
+//                    size_t frame = framesToDisplay.front();
+//                    framesToDisplay.pop();
+//                    lock.unlock();
+//
+//                    auto imageData = circularBuffer.get(0);
+//                    cv::Mat image(height, width, CV_8UC1, imageData.data());
+//                    cv::imshow("Live Feed", image);
+//                    cv::waitKey(1); // Process GUI events
+//
+//                    nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
+//                    if (nextFrameTime < now) {
+//                        nextFrameTime = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
+//                    }
+//                }
+//                else {
+//                    lock.unlock();
+//                }
+//            }
+//            else {
+//                lock.unlock();
+//                cv::waitKey(1); // Process GUI events
+//            }
+//        }
+//        else {
+//            if (displayNeedsUpdate) {
+//                
+//                int index = currentFrameIndex;
+//                if (index >= 0 && index < circularBuffer.size()) {
+//                    auto imageData = circularBuffer.get(index);
+//
+//                    cv::Mat image(height, width, CV_8UC1, imageData.data());
+//
+//                    if (!image.empty()) {
+//                        cv::imshow("Live Feed", image);
+//                        cv::setTrackbarPos("Frame", "Live Feed", index);
+//                        std::cout << "Displaying frame: " << index << std::endl;
+//                    }
+//                    else {
+//                        std::cout << "Failed to create image from buffer" << std::endl;
+//                    }
+//                }
+//                else {
+//                    std::cout << "Invalid frame index: " << index << std::endl;
+//                }
+//                displayNeedsUpdate = false;
+//            }
+//            cv::waitKey(1);
+//        }
+//    }
+//}
 void displayThreadTask(
     const std::atomic<bool>& done,
     const std::atomic<bool>& paused,
@@ -240,14 +322,14 @@ void displayThreadTask(
     cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
     cv::resizeWindow("Live Feed", width, height);
 
+    cv::namedWindow("Processed Feed", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Processed Feed", width, height);
+
     int trackbarPos = 0;
     cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
 
-
     while (!done) {
         if (!paused) {
-            
-
             std::unique_lock<std::mutex> lock(displayQueueMutex);
             auto now = std::chrono::steady_clock::now();
             if (now >= nextFrameTime) {
@@ -259,6 +341,11 @@ void displayThreadTask(
                     auto imageData = circularBuffer.get(0);
                     cv::Mat image(height, width, CV_8UC1, imageData.data());
                     cv::imshow("Live Feed", image);
+
+                    // Process and display the binary image using processFrame
+                    cv::Mat processedImage = processFrame(imageData, width, height);
+                    cv::imshow("Processed Feed", processedImage);
+
                     cv::waitKey(1); // Process GUI events
 
                     nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
@@ -277,20 +364,23 @@ void displayThreadTask(
         }
         else {
             if (displayNeedsUpdate) {
-                
                 int index = currentFrameIndex;
                 if (index >= 0 && index < circularBuffer.size()) {
                     auto imageData = circularBuffer.get(index);
 
-                    cv::Mat image(height, width, CV_8UC1, imageData.data());
-
-                    if (!image.empty()) {
+                    if (!imageData.empty()) {
+                        cv::Mat image(height, width, CV_8UC1, imageData.data());
                         cv::imshow("Live Feed", image);
+
+                        // Process and display the binary image using processFrame
+                        cv::Mat processedImage = processFrame(imageData, width, height);
+                        cv::imshow("Processed Feed", processedImage);
+
                         cv::setTrackbarPos("Frame", "Live Feed", index);
                         std::cout << "Displaying frame: " << index << std::endl;
                     }
                     else {
-                        std::cout << "Failed to create image from buffer" << std::endl;
+                        std::cout << "Failed to get image data from buffer" << std::endl;
                     }
                 }
                 else {
@@ -298,7 +388,7 @@ void displayThreadTask(
                 }
                 displayNeedsUpdate = false;
             }
-            cv::waitKey(1);
+            cv::waitKey(1); // Process GUI events
         }
     }
 }
