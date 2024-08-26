@@ -109,9 +109,15 @@ struct SharedResources {
 
 void configure(EGrabber<CallbackOnDemand>& grabber) {
     grabber.setInteger<RemoteModule>("Width", 512);
-    grabber.setInteger<RemoteModule>("Height", 512);
+    grabber.setInteger<RemoteModule>("Height", 96);
     grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
     // ... (other configuration settings)
+}
+
+void configure_js() {
+    Euresys::EGenTL gentl;
+    Euresys::EGrabber<> grabber(gentl);
+    grabber.runScript("config.js");
 }
 
 GrabberParams initializeGrabber(EGrabber<CallbackOnDemand>& grabber) {
@@ -130,6 +136,19 @@ GrabberParams initializeGrabber(EGrabber<CallbackOnDemand>& grabber) {
     return params;
 }
 
+void processFrame(const std::vector<uint8_t>& imageData, size_t width, size_t height) {
+    // Create OpenCV Mat from the image data
+    cv::Mat original(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t*>(imageData.data()));
+
+
+    // Create binary image
+    cv::Mat binary;
+    cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
+
+    // Add any additional processing steps here
+    // For example, you might want to analyze the binary image,
+    // perform feature detection, or apply other CV algorithms
+}
 
 void processingThreadTask(
     std::atomic<bool>& done,
@@ -160,11 +179,13 @@ void processingThreadTask(
             auto imageData = circularBuffer.get(0);
 
             // Create OpenCV Mat from the image data
-            cv::Mat original(height, width, CV_8UC1, imageData.data());
+            //cv::Mat original(height, width, CV_8UC1, imageData.data());
 
-            // Create binary image
-            cv::Mat binary;
-            cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
+            //// Create binary image
+            //cv::Mat binary;
+            //cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
+            processFrame(imageData, width, height);
+
 
             // Increment frame count
             ++frameCount;
@@ -433,11 +454,15 @@ void sample(EGrabber<CallbackOnDemand>& grabber, const GrabberParams& params, Ci
 
 int main() {
     try {
+        
+        
         EGenTL genTL;
         EGrabberDiscovery egrabberDiscovery(genTL);
         egrabberDiscovery.discover();
         EGrabber<CallbackOnDemand> grabber(egrabberDiscovery.cameras(0));
+        //grabber.runScript("config.js");
 
+        
         configure(grabber);
         GrabberParams params = initializeGrabber(grabber);
 
