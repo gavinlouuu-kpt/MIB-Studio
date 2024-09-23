@@ -13,6 +13,7 @@
 #include <chrono>
 #include <iomanip>
 #include <../CircularBuffer.h>
+#include <tuple>
 
 cv::Mat backgroundFrame;
 
@@ -46,7 +47,7 @@ struct SharedResources
     std::mutex processingQueueMutex;
     std::condition_variable displayQueueCondition;
     std::condition_variable processingQueueCondition;
-    std::vector<double> circularities;
+    std::vector < std::tuple<double, double> circularities;
     std::mutex circularitiesMutex;
 };
 
@@ -139,21 +140,21 @@ ContourResult findContours(const cv::Mat &processedImage)
     return {contours, findTime};
 }
 
-double calculateCircularity(const std::vector<cv::Point> &contour)
+std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour)
 {
     // use deformability instead of circularity (1-circularity)
     cv::Moments m = cv::moments(contour);
     double area = m.m00;
     double perimeter = cv::arcLength(contour, true);
+    double circularity = 0.0;
+
     if (perimeter > 0)
     {
-        double circularity = 4 * M_PI * area / (perimeter * perimeter);
-        return circularity;
+        circularity = 4 * M_PI * area / (perimeter * perimeter);
     }
-    return 0.0;
-}
 
-std::vector<double> circularities;
+    return std::make_tuple(circularity, area);
+}
 
 void processingThreadTask(
     std::atomic<bool> &done,
@@ -202,8 +203,8 @@ void processingThreadTask(
             {
                 if (contour.size() >= 5)
                 { // Ensure there are enough points to calculate circularity
-                    double circularity = calculateCircularity(contour);
-                    circularities.push_back(circularity);
+                    auto [circularity, area] = calculateMetrics(contour);
+                    circularities.emplace_back(circularity, area);
                 }
             }
 
@@ -246,6 +247,48 @@ void onTrackbar(int pos, void *userdata)
     shared->displayNeedsUpdate = true;
 }
 
+void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities, std::mutex &mutex)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+
+    plot = cv::Scalar(255, 255, 255); // Clear the plot
+
+    if (circularities.empty())
+    {
+        return;
+    }
+
+    // Find the range of values
+    double minCirc = std::numeric_limits<double>::max();
+    double maxCirc = std::numeric_limits<double>::lowest();
+    double minArea = std::numeric_limits<double>::max();
+    double maxArea = std::numeric_limits<double>::lowest();
+
+    for (const auto &[circ, area] : circularities)
+    {
+        minCirc = std::min(minCirc, circ);
+        maxCirc = std::max(maxCirc, circ);
+        minArea = std::min(minArea, area);
+        maxArea = std::max(maxArea, area);
+    }
+
+    // Draw axes
+    cv::line(plot, cv::Point(50, 350), cv::Point(350, 350), cv::Scalar(0, 0, 0), 2);
+    cv::line(plot, cv::Point(50, 350), cv::Point(50, 50), cv::Scalar(0, 0, 0), 2);
+
+    // Draw points
+    for (const auto &[circ, area] : circularities)
+    {
+        int x = 50 + static_cast<int>((circ - minCirc) / (maxCirc - minCirc) * 300);
+        int y = 350 - static_cast<int>((area - minArea) / (maxArea - minArea) * 300);
+        cv::circle(plot, cv::Point(x, y), 3, cv::Scalar(0, 0, 255), -1);
+    }
+
+    // Add labels
+    cv::putText(plot, "Circularity", cv::Point(160, 390), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+    cv::putText(plot, "Area", cv::Point(10, 200), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1, cv::LINE_AA, true);
+}
+
 void displayThreadTask(
     const std::atomic<bool> &done,
     const std::atomic<bool> &paused,
@@ -268,8 +311,14 @@ void displayThreadTask(
     cv::namedWindow("Processed Feed", cv::WINDOW_NORMAL);
     cv::resizeWindow("Processed Feed", width, height);
 
+    cv::namedWindow("Scatter Plot", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Scatter Plot", 400, 400);
+
     int trackbarPos = 0;
     cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+
+    // Variable for scatter plot
+    cv::Mat scatterPlot(400, 400, CV_8UC3, cv::Scalar(255, 255, 255));
 
     while (!done)
     {
@@ -292,6 +341,10 @@ void displayThreadTask(
                     // Process and display the binary image using processFrame
                     cv::Mat processedImage = processFrame(imageData, width, height);
                     cv::imshow("Processed Feed", processedImage);
+
+                    // Update scatter plot using the global circularities vector
+                    updateScatterPlot(scatterPlot, shared.circularities, shared.circularitiesMutex);
+                    cv::imshow("Scatter Plot", scatterPlot);
 
                     cv::waitKey(1); // Process GUI events
 
