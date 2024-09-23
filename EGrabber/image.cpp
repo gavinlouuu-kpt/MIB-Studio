@@ -12,73 +12,8 @@
 #include <conio.h>
 #include <chrono>
 #include <iomanip>
+#include <../CircularBuffer.h>
 
-class CircularBuffer {
-public:
-    CircularBuffer(size_t size, size_t imageSize)
-        : buffer_(size* imageSize), size_(size), imageSize_(imageSize), head_(0), count_(0) {}
-
-    void push(const uint8_t* data) {
-        std::copy(data, data + imageSize_, buffer_.begin() + (head_ * imageSize_));
-        head_ = (head_ + 1) % size_;
-        if (count_ < size_) count_++;
-    }
-
-    std::vector<uint8_t> get(size_t index) const {
-        if (index >= count_) throw std::out_of_range("Index out of range");
-        size_t actualIndex = (head_ - 1 - index + size_) % size_;
-        return std::vector<uint8_t>(buffer_.begin() + (actualIndex * imageSize_),
-            buffer_.begin() + ((actualIndex + 1) * imageSize_));
-    }
-
-    const uint8_t* getPointer(size_t index) const {
-        if (index >= count_) throw std::out_of_range("Index out of range");
-        size_t actualIndex = (head_ - 1 - index + size_) % size_;
-        return buffer_.data() + (actualIndex * imageSize_);
-    }
-
-    size_t size() const { return count_; }
-    bool isFull() const { return count_ == size_; }
-
-    // Iterator class for CircularBuffer
-    class Iterator {
-    public:
-        Iterator(const CircularBuffer& buffer, size_t index) : buffer_(buffer), index_(index) {}
-
-        std::vector<uint8_t> operator*() const { return buffer_.get(index_); }
-        Iterator& operator++() { ++index_; return *this; }
-        bool operator!=(const Iterator& other) const { return index_ != other.index_; }
-
-    private:
-        const CircularBuffer& buffer_;
-        size_t index_;
-    };
-
-    // Methods to support range-based for loop
-    Iterator begin() const { return Iterator(*this, 0); }
-    Iterator end() const { return Iterator(*this, count_); }
-
-private:
-    std::vector<uint8_t> buffer_;
-    size_t size_;
-    size_t imageSize_;
-    size_t head_;
-    size_t count_;
-};
-
-// General template for toString
-template <typename T>
-inline std::string toString(const T& v) {
-    std::stringstream ss;
-    ss << v;
-    return ss.str();
-}
-
-// Specialization for std::string
-template <>
-inline std::string toString<std::string>(const std::string& v) {
-    return v;
-}
 
 using namespace Euresys;
 
@@ -163,6 +98,7 @@ void processingThreadTask(
 ) {
     auto lastPrintTime = std::chrono::steady_clock::now();
     int frameCount = 0;
+    double totalProcessingTime = 0.0;
 
     while (!done) {
         std::unique_lock<std::mutex> lock(processingQueueMutex);
@@ -179,42 +115,41 @@ void processingThreadTask(
 
             auto imageData = circularBuffer.get(0);
 
-            // Create OpenCV Mat from the image data
-            //cv::Mat original(height, width, CV_8UC1, imageData.data());
+            // Measure processing time
+            auto startTime = std::chrono::high_resolution_clock::now();
 
-            //// Create binary image
-            //cv::Mat binary;
-            //cv::threshold(original, binary, 25, 255, cv::THRESH_BINARY);
             cv::Mat processedImage = processFrame(imageData, width, height);
 
+            auto endTime = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
 
-            // Increment frame count
+            double processingTime = duration.count(); // Convert to milliseconds
+            totalProcessingTime += processingTime;
+
+            //std::cout << "Frame " << frameCount + 1 << " processed in " << processingTime << " ms" << std::endl;
+
             ++frameCount;
 
             // Check if 5 seconds have passed
             auto currentTime = std::chrono::steady_clock::now();
             auto elapsedTime = std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPrintTime).count();
             if (elapsedTime >= 5) {
-                // Calculate frames per second
-                double fps = static_cast<double>(frameCount) / elapsedTime;
-                std::cout << "Frames processed per second: " << fps << std::endl;
+                double averageProcessingTime = totalProcessingTime / frameCount;
+                std::cout << "Average processing time over last " << frameCount << " frames: "
+                    << averageProcessingTime << " us" << std::endl;
 
-                // Reset frame count and update last print time
+                // Reset counters and update last print time
                 frameCount = 0;
+                totalProcessingTime = 0.0;
                 lastPrintTime = currentTime;
             }
         }
         else {
             lock.unlock();
         }
-
-        // Short sleep to reduce CPU usage when not actively processing
-        // std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-
-    // If you've created a window, make sure to destroy it:
-    // cv::destroyWindow("Binary Feed");
 }
+
 
 void onTrackbar(int pos, void* userdata) {
     auto* shared = static_cast<SharedResources*>(userdata);
@@ -222,87 +157,6 @@ void onTrackbar(int pos, void* userdata) {
     shared->displayNeedsUpdate = true;
 }
 
-//void displayThreadTask(
-//    const std::atomic<bool>& done,
-//    const std::atomic<bool>& paused,
-//    const std::atomic<int>& currentFrameIndex,
-//    std::atomic<bool>& displayNeedsUpdate,
-//    std::queue<size_t>& framesToDisplay,
-//    std::mutex& displayQueueMutex,
-//    const CircularBuffer& circularBuffer,
-//    size_t width,
-//    size_t height,
-//    size_t bufferCount,
-//    SharedResources& shared
-//) {
-//    const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
-//    auto nextFrameTime = std::chrono::steady_clock::now();
-//
-//    cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
-//    cv::resizeWindow("Live Feed", width, height);
-//
-//    int trackbarPos = 0;
-//    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
-//
-//
-//    while (!done) {
-//        if (!paused) {
-//            
-//
-//            std::unique_lock<std::mutex> lock(displayQueueMutex);
-//            auto now = std::chrono::steady_clock::now();
-//            if (now >= nextFrameTime) {
-//                if (!framesToDisplay.empty()) {
-//                    size_t frame = framesToDisplay.front();
-//                    framesToDisplay.pop();
-//                    lock.unlock();
-//
-//                    auto imageData = circularBuffer.get(0);
-//                    cv::Mat image(height, width, CV_8UC1, imageData.data());
-//                    cv::imshow("Live Feed", image);
-//                    cv::waitKey(1); // Process GUI events
-//
-//                    nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
-//                    if (nextFrameTime < now) {
-//                        nextFrameTime = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
-//                    }
-//                }
-//                else {
-//                    lock.unlock();
-//                }
-//            }
-//            else {
-//                lock.unlock();
-//                cv::waitKey(1); // Process GUI events
-//            }
-//        }
-//        else {
-//            if (displayNeedsUpdate) {
-//                
-//                int index = currentFrameIndex;
-//                if (index >= 0 && index < circularBuffer.size()) {
-//                    auto imageData = circularBuffer.get(index);
-//
-//                    cv::Mat image(height, width, CV_8UC1, imageData.data());
-//
-//                    if (!image.empty()) {
-//                        cv::imshow("Live Feed", image);
-//                        cv::setTrackbarPos("Frame", "Live Feed", index);
-//                        std::cout << "Displaying frame: " << index << std::endl;
-//                    }
-//                    else {
-//                        std::cout << "Failed to create image from buffer" << std::endl;
-//                    }
-//                }
-//                else {
-//                    std::cout << "Invalid frame index: " << index << std::endl;
-//                }
-//                displayNeedsUpdate = false;
-//            }
-//            cv::waitKey(1);
-//        }
-//    }
-//}
 void displayThreadTask(
     const std::atomic<bool>& done,
     const std::atomic<bool>& paused,
