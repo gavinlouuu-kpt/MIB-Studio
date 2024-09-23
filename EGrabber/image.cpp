@@ -14,6 +14,8 @@
 #include <iomanip>
 #include <../CircularBuffer.h>
 #include <tuple>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
 
 cv::Mat backgroundFrame;
 
