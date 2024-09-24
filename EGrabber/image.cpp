@@ -49,6 +49,7 @@ struct SharedResources
     std::vector < std::tuple<double, double>> circularities;
     std::mutex circularitiesMutex;
     cv::Mat backgroundFrame;
+    cv::Mat blurredBackground;
     std::mutex backgroundFrameMutex;
 };
 
@@ -88,46 +89,48 @@ void initializeBackgroundFrame(SharedResources& shared, const GrabberParams& par
 {
     std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
     shared.backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, cv::Scalar(255));
+    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
-cv::Mat processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height, SharedResources& shared)
+cv::Mat processFrame(const std::vector<uint8_t>& imageData, size_t width, size_t height, SharedResources& shared)
 {
+    // Thread-local static variables
+    thread_local cv::Mat original;
+    thread_local cv::Mat blurred_target;
+    thread_local cv::Mat bg_sub;
+    thread_local cv::Mat binary;
+    thread_local cv::Mat dilate1, erode1, erode2, dilate2;
 
     // Create OpenCV Mat from the image data
-    static cv::Mat original(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t *>(imageData.data()));
-    
- 
-    // Blur background and target image
-    static cv::Mat blurred_bg, blurred_target;
+    original = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t*>(imageData.data()));
+
+    // Access the pre-blurred background
+    cv::Mat blurred_bg;
     {
         std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-        cv::GaussianBlur(shared.backgroundFrame, blurred_bg, cv::Size(3, 3), 0);
+        blurred_bg = shared.blurredBackground.clone();
     }
+
+    // Blur only the target image
     cv::GaussianBlur(original, blurred_target, cv::Size(3, 3), 0);
 
     // Background subtraction
-    static cv::Mat bg_sub;
     cv::subtract(blurred_bg, blurred_target, bg_sub);
 
     // Apply threshold
-    static cv::Mat binary;
     cv::threshold(bg_sub, binary, 10, 255, cv::THRESH_BINARY);
 
     // Create kernel for morphological operations
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
 
     // Erode and dilate to remove noise
-    static cv::Mat dilate1, erode1, erode2, dilate2;
     cv::dilate(binary, dilate1, kernel, cv::Point(-1, -1), 2);
     cv::erode(dilate1, erode1, kernel, cv::Point(-1, -1), 2);
     cv::erode(erode1, erode2, kernel, cv::Point(-1, -1), 1);
     cv::dilate(erode2, dilate2, kernel, cv::Point(-1, -1), 1);
 
-    //cv::Mat processed = dilate2;
-
     return dilate2;
 }
-
 
 struct ContourResult
 {
@@ -143,7 +146,7 @@ ContourResult findContours(const cv::Mat &processedImage)
     auto start = std::chrono::high_resolution_clock::now();
     cv::findContours(processedImage, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
     auto end = std::chrono::high_resolution_clock::now();
-    double findTime = std::chrono::duration<double, std::milli>(end - start).count();
+    double findTime = std::chrono::duration<double, std::micro>(end - start).count();
 
     return {contours, findTime};
 }
@@ -178,6 +181,7 @@ void processingThreadTask(
     auto lastPrintTime = std::chrono::steady_clock::now();
     int frameCount = 0;
     double totalProcessingTime = 0.0;
+    double totalFindTime = 0.0;
 
     while (!done)
     {
@@ -194,16 +198,17 @@ void processingThreadTask(
             framesToProcess.pop();
             lock.unlock();
 
-            auto imageData = circularBuffer.get(0);
+            static auto imageData = circularBuffer.get(0);
 
             // Measure processing time
             auto startTime = std::chrono::high_resolution_clock::now();
             // Preprocess Image
-            cv::Mat processedImage = processFrame(imageData, width, height, shared);
+            static cv::Mat processedImage = processFrame(imageData, width, height, shared);
             // Find contour
             ContourResult contourResult = findContours(processedImage);
             std::vector<std::vector<cv::Point>> contours = contourResult.contours;
             double contourFindTime = contourResult.findTime;
+
             // Calculate deformability
             // Calculate circularity for each contour
 
@@ -220,8 +225,9 @@ void processingThreadTask(
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
 
-            double processingTime = duration.count(); // Convert to milliseconds
+            double processingTime = duration.count(); // measure in microseconds
             totalProcessingTime += processingTime;
+            totalFindTime += contourFindTime;
 
             // std::cout << "Frame " << frameCount + 1 << " processed in " << processingTime << " ms" << std::endl;
 
@@ -233,12 +239,16 @@ void processingThreadTask(
             if (elapsedTime >= 5)
             {
                 double averageProcessingTime = totalProcessingTime / frameCount;
+                double averageFindTime = totalFindTime / frameCount;
                 std::cout << "Average processing time over last " << frameCount << " frames: "
                           << averageProcessingTime << " us" << std::endl;
+                std::cout << "Average contour find time: " << averageFindTime << " us" << std::endl;
+
 
                 // Reset counters and update last print time
                 frameCount = 0;
                 totalProcessingTime = 0.0;
+                totalFindTime = 0.0;
                 lastPrintTime = currentTime;
             }
         }
@@ -448,9 +458,10 @@ void keyboardHandlingThread(
                     {
                         std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
                         shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, BackgroundImageData.data()).clone();
+                        cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
                     }
 
-                    std::cout << "Background frame captured." << std::endl;
+                    std::cout << "Background frame captured and blurred." << std::endl;
 
                     std::cout << "Paused" << std::endl;
                     displayNeedsUpdate = true;
