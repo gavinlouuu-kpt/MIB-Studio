@@ -16,14 +16,11 @@
 #include <tuple>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+//#include <../egrabber_config.h>
+
+#define M_PI       3.14159265358979323846   // pi
 
 cv::Mat backgroundFrame;
-
-void initializeBackgroundFrame(const GrabberParams &params)
-{
-    // Create an all-white frame
-    backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, cv::Scalar(255));
-}
 
 using namespace Euresys;
 
@@ -49,14 +46,16 @@ struct SharedResources
     std::mutex processingQueueMutex;
     std::condition_variable displayQueueCondition;
     std::condition_variable processingQueueCondition;
-    std::vector < std::tuple<double, double> circularities;
+    std::vector < std::tuple<double, double>> circularities;
     std::mutex circularitiesMutex;
+    cv::Mat backgroundFrame;
+    std::mutex backgroundFrameMutex;
 };
 
 void configure(EGrabber<CallbackOnDemand> &grabber)
 {
-    grabber.setInteger<RemoteModule>("Width", 512);
-    grabber.setInteger<RemoteModule>("Height", 512);
+    grabber.setInteger<RemoteModule>("Width", 256);
+    grabber.setInteger<RemoteModule>("Height", 64);
     grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
     // ... (other configuration settings)
 }
@@ -85,43 +84,50 @@ GrabberParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
     return params;
 }
 
-cv::Mat processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height)
+void initializeBackgroundFrame(SharedResources& shared, const GrabberParams& params)
 {
-    // Blurr background
-    cv::Mat blurred_bg = cv::GaussianBlur(backgroundFrame, cv::Size(3, 3), 0);
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+    std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+    shared.backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, cv::Scalar(255));
+}
+
+cv::Mat processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height, SharedResources& shared)
+{
 
     // Create OpenCV Mat from the image data
-    cv::Mat original(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t *>(imageData.data()));
-
+    static cv::Mat original(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t *>(imageData.data()));
+    
+ 
     // Blur background and target image
-    cv::Mat blurred_bg, blurred_target;
-    cv::GaussianBlur(backgroundFrame, blurred_bg, cv::Size(3, 3), 0);
+    static cv::Mat blurred_bg, blurred_target;
+    {
+        std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+        cv::GaussianBlur(shared.backgroundFrame, blurred_bg, cv::Size(3, 3), 0);
+    }
     cv::GaussianBlur(original, blurred_target, cv::Size(3, 3), 0);
 
     // Background subtraction
-    cv::Mat bg_sub;
+    static cv::Mat bg_sub;
     cv::subtract(blurred_bg, blurred_target, bg_sub);
 
     // Apply threshold
-    cv::Mat binary;
+    static cv::Mat binary;
     cv::threshold(bg_sub, binary, 10, 255, cv::THRESH_BINARY);
 
     // Create kernel for morphological operations
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
 
     // Erode and dilate to remove noise
-    cv::Mat dilate1, erode1, erode2, dilate2;
+    static cv::Mat dilate1, erode1, erode2, dilate2;
     cv::dilate(binary, dilate1, kernel, cv::Point(-1, -1), 2);
     cv::erode(dilate1, erode1, kernel, cv::Point(-1, -1), 2);
     cv::erode(erode1, erode2, kernel, cv::Point(-1, -1), 1);
     cv::dilate(erode2, dilate2, kernel, cv::Point(-1, -1), 1);
 
-    // The final processed image is dilate2
-    cv::Mat processed = dilate2;
+    //cv::Mat processed = dilate2;
 
-    return processed;
+    return dilate2;
 }
+
 
 struct ContourResult
 {
@@ -166,7 +172,8 @@ void processingThreadTask(
     std::queue<size_t> &framesToProcess,
     const CircularBuffer &circularBuffer,
     size_t width,
-    size_t height)
+    size_t height,
+    SharedResources& shared)
 {
     auto lastPrintTime = std::chrono::steady_clock::now();
     int frameCount = 0;
@@ -192,7 +199,7 @@ void processingThreadTask(
             // Measure processing time
             auto startTime = std::chrono::high_resolution_clock::now();
             // Preprocess Image
-            cv::Mat processedImage = processFrame(imageData, width, height);
+            cv::Mat processedImage = processFrame(imageData, width, height, shared);
             // Find contour
             ContourResult contourResult = findContours(processedImage);
             std::vector<std::vector<cv::Point>> contours = contourResult.contours;
@@ -206,7 +213,7 @@ void processingThreadTask(
                 if (contour.size() >= 5)
                 { // Ensure there are enough points to calculate circularity
                     auto [circularity, area] = calculateMetrics(contour);
-                    circularities.emplace_back(circularity, area);
+                    //shared.circularities.emplace_back(circularity, area);
                 }
             }
 
@@ -341,7 +348,7 @@ void displayThreadTask(
                     cv::imshow("Live Feed", image);
 
                     // Process and display the binary image using processFrame
-                    cv::Mat processedImage = processFrame(imageData, width, height);
+                    cv::Mat processedImage = processFrame(imageData, width, height, shared);
                     cv::imshow("Processed Feed", processedImage);
 
                     // Update scatter plot using the global circularities vector
@@ -382,7 +389,7 @@ void displayThreadTask(
                         cv::imshow("Live Feed", image);
 
                         // Process and display the binary image using processFrame
-                        cv::Mat processedImage = processFrame(imageData, width, height);
+                        cv::Mat processedImage = processFrame(imageData, width, height, shared);
                         cv::imshow("Processed Feed", processedImage);
 
                         cv::setTrackbarPos("Frame", "Live Feed", index);
@@ -411,7 +418,10 @@ void keyboardHandlingThread(
     std::atomic<bool> &displayNeedsUpdate,
     EGrabber<CallbackOnDemand> &grabber,
     const CircularBuffer &circularBuffer,
-    size_t bufferCount)
+    size_t bufferCount,
+    size_t width,
+    size_t height,
+    SharedResources& shared)
 {
     while (!done)
     {
@@ -434,6 +444,14 @@ void keyboardHandlingThread(
                     std::cout << "EGrabber Data Rate: " << dr << " MB/s" << std::endl;
                     grabber.stop();
                     currentFrameIndex = 0;
+                    auto BackgroundImageData = circularBuffer.get(currentFrameIndex);
+                    {
+                        std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+                        shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, BackgroundImageData.data()).clone();
+                    }
+
+                    std::cout << "Background frame captured." << std::endl;
+
                     std::cout << "Paused" << std::endl;
                     displayNeedsUpdate = true;
                 }
@@ -441,19 +459,6 @@ void keyboardHandlingThread(
                 {
                     grabber.start();
                     std::cout << "Resumed" << std::endl;
-                }
-            }
-            else if (ch == 98)
-            { // 'b' key - capture background frame
-                if (currentFrameIndex >= 0 && currentFrameIndex < circularBuffer.size())
-                {
-                    auto imageData = circularBuffer.get(currentFrameIndex);
-                    backgroundFrame = cv::Mat(height, width, CV_8UC1, imageData.data());
-                    std::cout << "Background frame captured." << std::endl;
-                }
-                else
-                {
-                    std::cout << "Invalid frame index for background capture." << std::endl;
                 }
             }
             else if (ch == 97)
@@ -527,7 +532,7 @@ void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params, Ci
                                  std::ref(shared.done), std::ref(shared.paused),
                                  std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
                                  std::ref(shared.framesToProcess), std::ref(circularBuffer),
-                                 params.width, params.height);
+                                 params.width, params.height, std::ref(shared));
     std::thread displayThread(displayThreadTask,
                               std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
                               std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
@@ -536,7 +541,7 @@ void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params, Ci
     std::thread keyboardThread(keyboardHandlingThread,
                                std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
                                std::ref(shared.displayNeedsUpdate), std::ref(grabber),
-                               std::ref(circularBuffer), params.bufferCount, std::ref(shared));
+                               std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     grabber.start();
     size_t frameCount = 0;
@@ -606,10 +611,11 @@ int main()
 
         configure(grabber);
         GrabberParams params = initializeGrabber(grabber);
-        initializeBackgroundFrame(params);
+        
 
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
         SharedResources shared;
+        initializeBackgroundFrame(shared, params);
 
         sample(grabber, params, circularBuffer, shared);
     }
