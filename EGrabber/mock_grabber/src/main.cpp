@@ -194,7 +194,7 @@ void simulateCameraThread(
     size_t currentIndex = 0;
     size_t totalFrames = cameraBuffer.size();
     std::chrono::steady_clock::time_point lastFrameTime = std::chrono::steady_clock::now();
-    const std::chrono::duration<double, std::micro> frameInterval(1000); // 1000 FPS
+    const std::chrono::duration<double, std::micro> frameInterval(100000); // 10 FPS
 
     while (!done)
     {
@@ -242,6 +242,12 @@ void processingThreadTask(
     double totalProcessingTime = 0.0;
     double totalFindTime = 0.0;
 
+    cv::namedWindow("debug-preprocess", cv::WINDOW_NORMAL);
+    cv::resizeWindow("debug-preprocess", width, height);
+
+    cv::namedWindow("debug-postprocess", cv::WINDOW_NORMAL);
+    cv::resizeWindow("debug-postprocess", width, height);
+
     while (!done)
     {
         std::unique_lock<std::mutex> lock(processingQueueMutex);
@@ -257,12 +263,19 @@ void processingThreadTask(
             framesToProcess.pop();
             lock.unlock();
 
-            static auto imageData = circularBuffer.get(0);
+            auto imageData = circularBuffer.get(0);
+            cv::Mat image(height, width, CV_8UC1, imageData.data());
+            cv::imshow("debug-preprocess", image);
+            cv::waitKey(1);
 
             // Measure processing time
             auto startTime = std::chrono::high_resolution_clock::now();
             // Preprocess Image
-            static cv::Mat processedImage = processFrame(imageData, width, height, shared);
+            cv::Mat processedImage = processFrame(imageData, width, height, shared);
+
+            cv::imshow("debug-postprocess", processedImage);
+            cv::waitKey(1);
+
             // Find contour
             ContourResult contourResult = findContours(processedImage);
             std::vector<std::vector<cv::Point>> contours = contourResult.contours;
@@ -281,6 +294,10 @@ void processingThreadTask(
                     std::cout << "Contour metrics: Circularity = " << circularity << ", Area = " << area << std::endl;
                     // std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
                     shared.circularities.emplace_back(circularity, area);
+                    for (const auto &[circularity, area] : shared.circularities)
+                    {
+                        std::cout << "Circularity: " << circularity << ", Area: " << area << std::endl;
+                    }
                     shared.newScatterDataAvailable = true;
                     shared.scatterDataCondition.notify_one();
                 }
