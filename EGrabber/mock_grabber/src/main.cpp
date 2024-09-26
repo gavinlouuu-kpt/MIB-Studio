@@ -41,6 +41,8 @@ struct SharedResources
     std::condition_variable processingQueueCondition;
     std::vector<std::tuple<double, double>> circularities;
     std::mutex circularitiesMutex;
+    std::atomic<bool> newScatterDataAvailable{false};
+    std::condition_variable scatterDataCondition;
     cv::Mat backgroundFrame;
     cv::Mat blurredBackground;
     std::mutex backgroundFrameMutex;
@@ -69,7 +71,7 @@ ImageParams initializeImageParams(const std::string &directory)
     throw std::runtime_error("No valid TIFF images found in the directory");
 }
 
-void loadImages(const std::string &directory, CircularBuffer &cameraBuffer)
+void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder = false)
 {
     std::vector<std::filesystem::path> imagePaths;
     for (const auto &entry : std::filesystem::directory_iterator(directory))
@@ -82,6 +84,12 @@ void loadImages(const std::string &directory, CircularBuffer &cameraBuffer)
 
     // Sort the paths to ensure consistent order
     std::sort(imagePaths.begin(), imagePaths.end());
+
+    // Reverse the order if specified
+    if (reverseOrder)
+    {
+        std::reverse(imagePaths.begin(), imagePaths.end());
+    }
 
     for (const auto &path : imagePaths)
     {
@@ -151,10 +159,9 @@ struct ContourResult
 ContourResult findContours(const cv::Mat &processedImage)
 {
     std::vector<std::vector<cv::Point>> contours;
-    std::vector<cv::Vec4i> hierarchy;
 
     auto start = std::chrono::high_resolution_clock::now();
-    cv::findContours(processedImage, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    cv::findContours(processedImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
     auto end = std::chrono::high_resolution_clock::now();
     double findTime = std::chrono::duration<double, std::micro>(end - start).count();
 
@@ -187,7 +194,7 @@ void simulateCameraThread(
     size_t currentIndex = 0;
     size_t totalFrames = cameraBuffer.size();
     std::chrono::steady_clock::time_point lastFrameTime = std::chrono::steady_clock::now();
-    const std::chrono::duration<double, std::micro> frameInterval(10000); // 100 FPS
+    const std::chrono::duration<double, std::micro> frameInterval(1000); // 1000 FPS
 
     while (!done)
     {
@@ -259,6 +266,7 @@ void processingThreadTask(
             // Find contour
             ContourResult contourResult = findContours(processedImage);
             std::vector<std::vector<cv::Point>> contours = contourResult.contours;
+            // std::cout << "Number of contours found: " << contours.size() << std::endl;
             double contourFindTime = contourResult.findTime;
 
             // Calculate deformability
@@ -270,7 +278,11 @@ void processingThreadTask(
                 if (contour.size() >= 5)
                 { // Ensure there are enough points to calculate circularity
                     auto [circularity, area] = calculateMetrics(contour);
-                    // shared.circularities.emplace_back(circularity, area);
+                    std::cout << "Contour metrics: Circularity = " << circularity << ", Area = " << area << std::endl;
+                    // std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
+                    shared.circularities.emplace_back(circularity, area);
+                    shared.newScatterDataAvailable = true;
+                    shared.scatterDataCondition.notify_one();
                 }
             }
 
@@ -317,9 +329,9 @@ void onTrackbar(int pos, void *userdata)
     shared->displayNeedsUpdate = true;
 }
 
-void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities, std::mutex &mutex)
+void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities)
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    // std::lock_guard<std::mutex> lock(mutex);
 
     plot = cv::Scalar(255, 255, 255); // Clear the plot
 
@@ -413,8 +425,18 @@ void displayThreadTask(
                     cv::imshow("Processed Feed", processedImage);
 
                     // Update scatter plot using the global circularities vector
-                    updateScatterPlot(scatterPlot, shared.circularities, shared.circularitiesMutex);
-                    cv::imshow("Scatter Plot", scatterPlot);
+                    std::unique_lock<std::mutex> lock(shared.circularitiesMutex);
+                    shared.scatterDataCondition.wait_for(lock, std::chrono::milliseconds(1),
+                                                         [&shared]
+                                                         { return shared.newScatterDataAvailable.load(); });
+
+                    if (shared.newScatterDataAvailable)
+                    {
+                        std::cout << "Updating scatter plot with " << shared.circularities.size() << " points" << std::endl;
+                        updateScatterPlot(scatterPlot, shared.circularities);
+                        cv::imshow("Scatter Plot", scatterPlot);
+                        shared.newScatterDataAvailable = false;
+                    }
 
                     cv::waitKey(1); // Process GUI events
 
@@ -451,6 +473,18 @@ void displayThreadTask(
 
                         // Process and display the binary image using processFrame
                         cv::Mat processedImage = processFrame(imageData, width, height, shared);
+                        // Find contour during pause
+                        ContourResult contourResult = findContours(processedImage);
+                        std::vector<std::vector<cv::Point>> contours = contourResult.contours;
+
+                        for (const auto &contour : contours)
+                        {
+                            if (contour.size() >= 5)
+                            { // Ensure there are enough points to calculate circularity
+                                auto [circularity, area] = calculateMetrics(contour);
+                                std::cout << "Contour metrics: Circularity = " << circularity << ", Area = " << area << std::endl;
+                            }
+                        }
                         cv::imshow("Processed Feed", processedImage);
 
                         cv::setTrackbarPos("Frame", "Live Feed", index);
@@ -660,27 +694,14 @@ int main()
     try
     {
 
-        // EGenTL genTL;
-        // EGrabberDiscovery egrabberDiscovery(genTL);
-        // egrabberDiscovery.discover();
-        // EGrabber<CallbackOnDemand> grabber(egrabberDiscovery.cameras(0));
-        // // grabber.runScript("config.js");
-
-        // configure(grabber);
-        // GrabberParams params = initializeGrabber(grabber);
-
-        // CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
-        // SharedResources shared;
-        // initializeBackgroundFrame(shared, params);
-
-        // sample(grabber, params, circularBuffer, shared);
-        const std::string imageDirectory = "D:/test_images/2";
+        bool loadInReverse = true;
+        const std::string imageDirectory = "C:\\Users\\gavin\\code\\test_image\\3";
 
         ImageParams params = initializeImageParams(imageDirectory);
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
         CircularBuffer cameraBuffer(params.bufferCount, params.imageSize);
 
-        loadImages(imageDirectory, cameraBuffer);
+        loadImages(imageDirectory, cameraBuffer, loadInReverse);
 
         SharedResources shared;
         initializeBackgroundFrame(shared, params);
