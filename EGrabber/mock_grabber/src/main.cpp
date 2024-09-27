@@ -48,6 +48,23 @@ struct SharedResources
     std::mutex backgroundFrameMutex;
 };
 
+struct ThreadLocalMats
+{
+    cv::Mat original;
+    cv::Mat blurred_target;
+    cv::Mat bg_sub;
+    cv::Mat binary;
+    cv::Mat dilate1;
+    cv::Mat erode1;
+    cv::Mat erode2;
+    cv::Mat kernel;
+    bool initialized = false;
+};
+
+// Declare two separate instances for processing and display threads
+thread_local ThreadLocalMats processingThreadMats;
+thread_local ThreadLocalMats displayThreadMats;
+
 ImageParams initializeImageParams(const std::string &directory)
 {
     ImageParams params;
@@ -110,44 +127,50 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
-cv::Mat processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height, SharedResources &shared)
+void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
+                  SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread)
 {
-    // Thread-local static variables
-    thread_local cv::Mat original;
-    thread_local cv::Mat blurred_target;
-    thread_local cv::Mat bg_sub;
-    thread_local cv::Mat binary;
-    thread_local cv::Mat dilate1, erode1, erode2, dilate2;
+    // Choose the appropriate set of thread-local variables
+    ThreadLocalMats &mats = isProcessingThread ? processingThreadMats : displayThreadMats;
+
+    // Initialize thread_local variables only once for each thread
+    if (!mats.initialized)
+    {
+        mats.original = cv::Mat(height, width, CV_8UC1);
+        mats.blurred_target = cv::Mat(height, width, CV_8UC1);
+        mats.bg_sub = cv::Mat(height, width, CV_8UC1);
+        mats.binary = cv::Mat(height, width, CV_8UC1);
+        mats.dilate1 = cv::Mat(height, width, CV_8UC1);
+        mats.erode1 = cv::Mat(height, width, CV_8UC1);
+        mats.erode2 = cv::Mat(height, width, CV_8UC1);
+        mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+        mats.initialized = true;
+    }
 
     // Create OpenCV Mat from the image data
-    original = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t *>(imageData.data()));
+    mats.original = cv::Mat(height, width, CV_8UC1, const_cast<uint8_t *>(imageData.data()));
 
     // Access the pre-blurred background
     cv::Mat blurred_bg;
     {
         std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-        blurred_bg = shared.blurredBackground.clone();
+        blurred_bg = shared.blurredBackground; // Avoid cloning if possible
     }
 
     // Blur only the target image
-    cv::GaussianBlur(original, blurred_target, cv::Size(3, 3), 0);
+    cv::GaussianBlur(mats.original, mats.blurred_target, cv::Size(3, 3), 0);
 
     // Background subtraction
-    cv::subtract(blurred_bg, blurred_target, bg_sub);
+    cv::subtract(blurred_bg, mats.blurred_target, mats.bg_sub);
 
     // Apply threshold
-    cv::threshold(bg_sub, binary, 10, 255, cv::THRESH_BINARY);
-
-    // Create kernel for morphological operations
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+    cv::threshold(mats.bg_sub, mats.binary, 10, 255, cv::THRESH_BINARY);
 
     // Erode and dilate to remove noise
-    cv::dilate(binary, dilate1, kernel, cv::Point(-1, -1), 2);
-    cv::erode(dilate1, erode1, kernel, cv::Point(-1, -1), 2);
-    cv::erode(erode1, erode2, kernel, cv::Point(-1, -1), 1);
-    cv::dilate(erode2, dilate2, kernel, cv::Point(-1, -1), 1);
-
-    return dilate2;
+    cv::dilate(mats.binary, mats.dilate1, mats.kernel, cv::Point(-1, -1), 2);
+    cv::erode(mats.dilate1, mats.erode1, mats.kernel, cv::Point(-1, -1), 2);
+    cv::erode(mats.erode1, mats.erode2, mats.kernel, cv::Point(-1, -1), 1);
+    cv::dilate(mats.erode2, outputImage, mats.kernel, cv::Point(-1, -1), 1);
 }
 
 struct ContourResult
@@ -194,7 +217,7 @@ void simulateCameraThread(
     size_t currentIndex = 0;
     size_t totalFrames = cameraBuffer.size();
     std::chrono::steady_clock::time_point lastFrameTime = std::chrono::steady_clock::now();
-    const std::chrono::duration<double, std::micro> frameInterval(100000); // 10 FPS
+    const std::chrono::duration<double, std::micro> frameInterval(1000); // 10 FPS
 
     while (!done)
     {
@@ -242,11 +265,15 @@ void processingThreadTask(
     double totalProcessingTime = 0.0;
     double totalFindTime = 0.0;
 
-    cv::namedWindow("debug-preprocess", cv::WINDOW_NORMAL);
-    cv::resizeWindow("debug-preprocess", width, height);
+    // cv::namedWindow("debug-preprocess", cv::WINDOW_NORMAL);
+    // cv::resizeWindow("debug-preprocess", width, height);
 
-    cv::namedWindow("debug-postprocess", cv::WINDOW_NORMAL);
-    cv::resizeWindow("debug-postprocess", width, height);
+    // cv::namedWindow("debug-postprocess", cv::WINDOW_NORMAL);
+    // cv::resizeWindow("debug-postprocess", width, height);
+
+    // Pre-allocate memory for images
+    cv::Mat image(height, width, CV_8UC1);
+    cv::Mat processedImage(height, width, CV_8UC1);
 
     while (!done)
     {
@@ -264,42 +291,36 @@ void processingThreadTask(
             lock.unlock();
 
             auto imageData = circularBuffer.get(0);
-            cv::Mat image(height, width, CV_8UC1, imageData.data());
-            cv::imshow("debug-preprocess", image);
-            cv::waitKey(1);
+            image = cv::Mat(height, width, CV_8UC1, imageData.data());
+            // cv::imshow("debug-preprocess", image);
+            // cv::waitKey(1);
 
             // Measure processing time
             auto startTime = std::chrono::high_resolution_clock::now();
-            // Preprocess Image
-            cv::Mat processedImage = processFrame(imageData, width, height, shared);
 
-            cv::imshow("debug-postprocess", processedImage);
-            cv::waitKey(1);
+            // Preprocess Image using the optimized processFrame function
+            processFrame(imageData, width, height, shared, processedImage, true); // true indicates it's the processing thread
+
+            // cv::imshow("debug-postprocess", processedImage);
+            // cv::waitKey(1);
 
             // Find contour
-            ContourResult contourResult = findContours(processedImage);
+            ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
             std::vector<std::vector<cv::Point>> contours = contourResult.contours;
-            // std::cout << "Number of contours found: " << contours.size() << std::endl;
             double contourFindTime = contourResult.findTime;
 
-            // Calculate deformability
-            // Calculate circularity for each contour
-
-            std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
-            for (const auto &contour : contours)
+            // Calculate deformability and circularity for each contour
             {
-                if (contour.size() >= 5)
-                { // Ensure there are enough points to calculate circularity
-                    auto [circularity, area] = calculateMetrics(contour);
-                    std::cout << "Contour metrics: Circularity = " << circularity << ", Area = " << area << std::endl;
-                    // std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
-                    shared.circularities.emplace_back(circularity, area);
-                    for (const auto &[circularity, area] : shared.circularities)
+                std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
+                for (const auto &contour : contours)
+                {
+                    if (contour.size() >= 10)
                     {
-                        std::cout << "Circularity: " << circularity << ", Area: " << area << std::endl;
+                        auto [circularity, area] = calculateMetrics(contour);
+                        shared.circularities.emplace_back(circularity, area);
+                        shared.newScatterDataAvailable = true;
+                        shared.scatterDataCondition.notify_one();
                     }
-                    shared.newScatterDataAvailable = true;
-                    shared.scatterDataCondition.notify_one();
                 }
             }
 
@@ -309,8 +330,6 @@ void processingThreadTask(
             double processingTime = duration.count(); // measure in microseconds
             totalProcessingTime += processingTime;
             totalFindTime += contourFindTime;
-
-            // std::cout << "Frame " << frameCount + 1 << " processed in " << processingTime << " ms" << std::endl;
 
             ++frameCount;
 
@@ -404,6 +423,10 @@ void displayThreadTask(
     const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
     auto nextFrameTime = std::chrono::steady_clock::now();
 
+    // Pre-allocate memory for images
+    cv::Mat image(height, width, CV_8UC1);
+    cv::Mat processedImage(height, width, CV_8UC1);
+
     cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
     cv::resizeWindow("Live Feed", width, height);
 
@@ -434,11 +457,12 @@ void displayThreadTask(
                     lock.unlock();
 
                     auto imageData = circularBuffer.get(0);
-                    cv::Mat image(height, width, CV_8UC1, imageData.data());
+                    image = cv::Mat(height, width, CV_8UC1, imageData.data());
                     cv::imshow("Live Feed", image);
 
-                    // Process and display the binary image using processFrame
-                    cv::Mat processedImage = processFrame(imageData, width, height, shared);
+                    // Preprocess Image using the optimized processFrame function
+                    processFrame(imageData, width, height, shared, processedImage, false); // false indicates it's the display thread
+
                     cv::imshow("Processed Feed", processedImage);
 
                     // Update scatter plot using the global circularities vector
@@ -449,7 +473,7 @@ void displayThreadTask(
 
                     if (shared.newScatterDataAvailable)
                     {
-                        std::cout << "Updating scatter plot with " << shared.circularities.size() << " points" << std::endl;
+                        // std::cout << "Updating scatter plot with " << shared.circularities.size() << " points" << std::endl;
                         updateScatterPlot(scatterPlot, shared.circularities);
                         cv::imshow("Scatter Plot", scatterPlot);
                         shared.newScatterDataAvailable = false;
@@ -485,16 +509,16 @@ void displayThreadTask(
 
                     if (!imageData.empty())
                     {
-                        cv::Mat image(height, width, CV_8UC1, imageData.data());
+                        image = cv::Mat(height, width, CV_8UC1, imageData.data());
                         cv::imshow("Live Feed", image);
 
                         // Process and display the binary image using processFrame
-                        cv::Mat processedImage = processFrame(imageData, width, height, shared);
+                        processFrame(imageData, width, height, shared, processedImage, false);
                         // Find contour during pause
                         ContourResult contourResult = findContours(processedImage);
                         std::vector<std::vector<cv::Point>> contours = contourResult.contours;
 
-                        for (const auto &contour : contours)
+                        for (const auto &contour : contours) // debug purpose
                         {
                             if (contour.size() >= 5)
                             { // Ensure there are enough points to calculate circularity
