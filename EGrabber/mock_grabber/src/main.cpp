@@ -46,6 +46,8 @@ struct SharedResources
     cv::Mat backgroundFrame;
     cv::Mat blurredBackground;
     std::mutex backgroundFrameMutex;
+    cv::Rect roi;
+    std::mutex roiMutex;
 };
 
 struct ThreadLocalMats
@@ -149,28 +151,41 @@ void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t he
 
     // Create OpenCV Mat from the image data
     mats.original = cv::Mat(height, width, CV_8UC1, const_cast<uint8_t *>(imageData.data()));
+    cv::Rect roi;
+    {
+        std::lock_guard<std::mutex> lock(shared.roiMutex);
+        roi = shared.roi;
+    }
+
+    // Ensure ROI is within image bounds
+    roi &= cv::Rect(0, 0, width, height);
 
     // Access the pre-blurred background
     cv::Mat blurred_bg;
     {
         std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-        blurred_bg = shared.blurredBackground; // Avoid cloning if possible
+        blurred_bg = shared.blurredBackground(roi); // Get only the ROI of the background
     }
 
-    // Blur only the target image
-    cv::GaussianBlur(mats.original, mats.blurred_target, cv::Size(3, 3), 0);
+    // Blur only the target image ROI
+    cv::GaussianBlur(mats.original(roi), mats.blurred_target(roi), cv::Size(3, 3), 0);
 
-    // Background subtraction
-    cv::subtract(blurred_bg, mats.blurred_target, mats.bg_sub);
+    // Background subtraction (only in ROI)
+    cv::subtract(blurred_bg, mats.blurred_target(roi), mats.bg_sub(roi));
 
-    // Apply threshold
-    cv::threshold(mats.bg_sub, mats.binary, 10, 255, cv::THRESH_BINARY);
+    // Apply threshold (only in ROI)
+    cv::threshold(mats.bg_sub(roi), mats.binary(roi), 10, 255, cv::THRESH_BINARY);
 
-    // Erode and dilate to remove noise
-    cv::dilate(mats.binary, mats.dilate1, mats.kernel, cv::Point(-1, -1), 2);
-    cv::erode(mats.dilate1, mats.erode1, mats.kernel, cv::Point(-1, -1), 2);
-    cv::erode(mats.erode1, mats.erode2, mats.kernel, cv::Point(-1, -1), 1);
-    cv::dilate(mats.erode2, outputImage, mats.kernel, cv::Point(-1, -1), 1);
+    // Erode and dilate to remove noise (only in ROI)
+    cv::dilate(mats.binary(roi), mats.dilate1(roi), mats.kernel, cv::Point(-1, -1), 2);
+    cv::erode(mats.dilate1(roi), mats.erode1(roi), mats.kernel, cv::Point(-1, -1), 2);
+    cv::erode(mats.erode1(roi), mats.erode2(roi), mats.kernel, cv::Point(-1, -1), 1);
+    cv::dilate(mats.erode2(roi), outputImage(roi), mats.kernel, cv::Point(-1, -1), 1);
+
+    // Clear areas outside ROI in the output image
+    cv::Mat mask = cv::Mat::zeros(height, width, CV_8UC1);
+    mask(roi).setTo(255);
+    outputImage.setTo(0, mask == 0);
 }
 
 struct ContourResult
@@ -281,12 +296,6 @@ void processingThreadTask(
     double totalProcessingTime = 0.0;
     double totalFindTime = 0.0;
 
-    // cv::namedWindow("debug-preprocess", cv::WINDOW_NORMAL);
-    // cv::resizeWindow("debug-preprocess", width, height);
-
-    // cv::namedWindow("debug-postprocess", cv::WINDOW_NORMAL);
-    // cv::resizeWindow("debug-postprocess", width, height);
-
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
@@ -308,23 +317,15 @@ void processingThreadTask(
 
             auto imageData = circularBuffer.get(0);
             image = cv::Mat(height, width, CV_8UC1, imageData.data());
-            // cv::imshow("debug-preprocess", image);
-            // cv::waitKey(1);
 
             // Measure processing time
             auto startTime = std::chrono::high_resolution_clock::now();
-
             // Preprocess Image using the optimized processFrame function
             processFrame(imageData, width, height, shared, processedImage, true); // true indicates it's the processing thread
-
-            // cv::imshow("debug-postprocess", processedImage);
-            // cv::waitKey(1);
-
             // Find contour
             ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
             std::vector<std::vector<cv::Point>> contours = contourResult.contours;
             double contourFindTime = contourResult.findTime;
-
             // Calculate deformability and circularity for each contour
             {
                 std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
@@ -442,6 +443,7 @@ void displayThreadTask(
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
+    cv::Mat displayImage(height, width, CV_8UC3);
 
     cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
     cv::resizeWindow("Live Feed", width, height);
@@ -457,6 +459,27 @@ void displayThreadTask(
 
     // Variable for scatter plot
     cv::Mat scatterPlot(400, 400, CV_8UC3, cv::Scalar(255, 255, 255));
+
+    // Function to handle mouse events for ROI selection
+    auto onMouse = [](int event, int x, int y, int flags, void *userdata)
+    {
+        static cv::Point startPoint;
+        auto *sharedResources = static_cast<SharedResources *>(userdata);
+
+        if (event == cv::EVENT_LBUTTONDOWN)
+        {
+            startPoint = cv::Point(x, y);
+        }
+        else if (event == cv::EVENT_LBUTTONUP)
+        {
+            cv::Rect newRoi(startPoint, cv::Point(x, y));
+            std::lock_guard<std::mutex> lock(sharedResources->roiMutex);
+            sharedResources->roi = newRoi;
+            sharedResources->displayNeedsUpdate = true;
+        }
+    };
+
+    cv::setMouseCallback("Live Feed", onMouse, &shared);
 
     while (!done)
     {
@@ -474,6 +497,12 @@ void displayThreadTask(
 
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(height, width, CV_8UC1, imageData.data());
+
+                    {
+                        std::lock_guard<std::mutex> roiLock(shared.roiMutex);
+                        cv::rectangle(image, shared.roi, cv::Scalar(0, 255, 0), 2);
+                    }
+
                     cv::imshow("Live Feed", image);
 
                     // Preprocess Image using the optimized processFrame function
@@ -761,6 +790,8 @@ int main()
 
         SharedResources shared;
         initializeBackgroundFrame(shared, params);
+        // Initialize ROI to the entire frame
+        shared.roi = cv::Rect(0, 0, params.width, params.height);
 
         sample(params, cameraBuffer, circularBuffer, shared);
     }
