@@ -214,14 +214,20 @@ void simulateCameraThread(
     SharedResources &shared,
     const ImageParams &params)
 {
+    /*Need a pacer to fix FPS*/
+    using clock = std::chrono::high_resolution_clock;
+
     size_t currentIndex = 0;
     size_t totalFrames = cameraBuffer.size();
-    std::chrono::steady_clock::time_point lastFrameTime = std::chrono::steady_clock::now();
-    const std::chrono::duration<double, std::micro> frameInterval(1000); // 10 FPS
+    auto lastFrameTime = clock::now();
+    auto fpsStartTime = clock::now();
+    size_t frameCount = 0;
+    const int targetFPS = 1000;                                           // Set your desired FPS here
+    const std::chrono::nanoseconds frameInterval(1000000000 / targetFPS); //
 
     while (!done)
     {
-        auto now = std::chrono::steady_clock::now();
+        auto now = clock::now();
         if (!paused && (now - lastFrameTime) >= frameInterval)
         {
             const uint8_t *imageData = cameraBuffer.getPointer(currentIndex);
@@ -234,10 +240,9 @@ void simulateCameraThread(
                 lastFrameTime = now;
 
                 // Optional: Print frame processing information
-                static size_t frameCount = 0;
-                if (++frameCount % 100 == 0) // Print every 100 frames
+                if (++frameCount % 5000 == 0) // Print every 100 frames
                 {
-                    std::cout << "Camera produced frame " << frameCount << " (Buffer index: " << currentIndex << ")" << std::endl;
+                    // std::cout << "Camera produced frame " << frameCount << " (Buffer index: " << currentIndex << ")" << std::endl;
                 }
             }
             else
@@ -245,7 +250,18 @@ void simulateCameraThread(
                 std::cout << "Invalid frame at index: " << currentIndex << std::endl;
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // Short sleep to prevent busy-waiting
+
+        // Calculate and print FPS every second
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - fpsStartTime).count() >= 5)
+        {
+            double fps = frameCount / std::chrono::duration<double>(now - fpsStartTime).count();
+            std::cout << "Current FPS: " << fps << std::endl;
+            frameCount = 0;
+            fpsStartTime = now;
+        }
+
+        // Reduce sleep duration to minimize delays
+        // std::this_thread::sleep_for(std::chrono::microseconds(1)); // Short sleep to prevent busy-waiting
     }
 }
 
@@ -286,7 +302,7 @@ void processingThreadTask(
 
         if (!framesToProcess.empty() && !paused)
         {
-            size_t frame = framesToProcess.front();
+            // size_t frame = framesToProcess.front(); //retrieve content of queue
             framesToProcess.pop();
             lock.unlock();
 
@@ -452,7 +468,7 @@ void displayThreadTask(
             {
                 if (!framesToDisplay.empty())
                 {
-                    size_t frame = framesToDisplay.front();
+                    // size_t frame = framesToDisplay.front(); //retrieve queue content
                     framesToDisplay.pop();
                     lock.unlock();
 
@@ -717,11 +733,10 @@ void sample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuf
                 static size_t frameCount = 0;
                 if (++frameCount % 100 == 0) // Print every 100 frames
                 {
-                    std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
+                    // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
                 }
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // Short sleep to prevent busy-waiting
     }
 
     processingThread.join();
