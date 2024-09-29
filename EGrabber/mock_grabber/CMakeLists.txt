@@ -4,37 +4,60 @@ project(MockGrabberProject)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Define the target name as a variable
-set(TARGET_NAME mock_grabber)
-
+# Find OpenCV package
 find_package(OpenCV REQUIRED)
 
 # Set the project root directory correctly
 get_filename_component(PROJECT_ROOT_DIR "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
 
-# Include the directory containing CircularBuffer.h
-include_directories(${PROJECT_ROOT_DIR}/lib/CircularBuffer)
-include_directories(${PROJECT_ROOT_DIR}/lib/image_processing)
-
-# Collect all source files in a variable
-set(SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
-    ${PROJECT_ROOT_DIR}/lib/CircularBuffer/CircularBuffer.cpp
-    ${PROJECT_ROOT_DIR}/lib/image_processing/image_processing_utils.cpp
-    ${PROJECT_ROOT_DIR}/lib/image_processing/image_processing_core.cpp
-    ${PROJECT_ROOT_DIR}/lib/image_processing/image_processing_threads.cpp
+# Include directories
+include_directories(
+    ${PROJECT_ROOT_DIR}/lib/CircularBuffer
+    ${PROJECT_ROOT_DIR}/lib/image_processing
+    ${OpenCV_INCLUDE_DIRS}
 )
 
-# Print the SOURCES variable for debugging
-message(STATUS "SOURCES: ${SOURCES}")
+# Collect all source files except main files and test files
+file(GLOB_RECURSE LIB_SOURCES 
+    "${PROJECT_ROOT_DIR}/lib/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+list(FILTER LIB_SOURCES EXCLUDE REGEX ".*main\.cpp$")
+list(FILTER LIB_SOURCES EXCLUDE REGEX ".*test.*\.cpp$")
 
+# Print the LIB_SOURCES variable for debugging
+message(STATUS "LIB_SOURCES: ${LIB_SOURCES}")
 
-# Add the executable target
-add_executable(${TARGET_NAME} ${SOURCES})
+# Function to create an executable with OpenCV
+function(create_opencv_executable name)
+    add_executable(${name} ${LIB_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/${name}.cpp)
+    target_link_libraries(${name} ${OpenCV_LIBS})
+    
+    if(WIN32)
+        # Copy OpenCV DLLs
+        foreach(lib ${OpenCV_LIBS})
+            if(CMAKE_BUILD_TYPE MATCHES Debug)
+                set(dll_name "${OpenCV_DIR}/bin/Debug/${lib}d.dll")
+            else()
+                set(dll_name "${OpenCV_DIR}/bin/Release/${lib}.dll")
+            endif()
+            if(EXISTS ${dll_name})
+                add_custom_command(TARGET ${name} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${dll_name}
+                    $<TARGET_FILE_DIR:${name}>
+                )
+            endif()
+        endforeach()
+    endif()
+endfunction()
 
-# Link libraries to the target
-target_link_libraries(${TARGET_NAME} ${OpenCV_LIBS})
+# Create executables for each test
+create_opencv_executable(main_test)
+create_opencv_executable(performance_test)
 
-# Include OpenCV directories
-target_include_directories(${TARGET_NAME} PRIVATE ${OpenCV_INCLUDE_DIRS})
+# You can add more executables here as needed
+# create_opencv_executable(another_test)
 
+message(STATUS "OpenCV_DIR is set to: ${OpenCV_DIR}")
+message(STATUS "OpenCV_LIBS: ${OpenCV_LIBS}")
