@@ -92,9 +92,6 @@ void initializeBackgroundFrame(SharedResources &shared, const GrabberParams &par
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
-// Create kernel for morphological operations
-cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
-
 cv::Mat processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height, SharedResources &shared)
 {
     // Thread-local static variables
@@ -122,6 +119,9 @@ cv::Mat processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t
 
     // Apply threshold
     cv::threshold(bg_sub, binary, 10, 255, cv::THRESH_BINARY);
+
+    // Create kernel for morphological operations
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
 
     // Erode and dilate to remove noise
     cv::dilate(binary, dilate1, kernel, cv::Point(-1, -1), 2);

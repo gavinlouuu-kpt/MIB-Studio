@@ -19,8 +19,8 @@ struct GrabberParams
 
 void configure(EGrabber<CallbackOnDemand> &grabber)
 {
-    grabber.setInteger<RemoteModule>("Width", 256);
-    grabber.setInteger<RemoteModule>("Height", 64);
+    grabber.setInteger<RemoteModule>("Width", 512);
+    grabber.setInteger<RemoteModule>("Height", 96);
     grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
     // Add other configuration settings as needed
 }
@@ -42,42 +42,41 @@ GrabberParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
     return params;
 }
 
-cv::Mat processFrame(const cv::Mat &original)
+static cv::Mat background, blurred_bg;
+static cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+
+void processFrame(const cv::Mat &original, cv::Mat &output)
 {
-    cv::Mat blurred, bg_sub, binary, dilate1, erode1, erode2, dilate2;
+    if (background.empty())
+    {
+        background = cv::Mat(original.size(), CV_8UC1, cv::Scalar(255));
+        cv::GaussianBlur(background, blurred_bg, cv::Size(3, 3), 0);
+    }
 
-    // Create a simple background (you may want to capture a real background frame)
-    cv::Mat background(original.size(), CV_8UC1, cv::Scalar(255));
-    cv::GaussianBlur(background, background, cv::Size(3, 3), 0);
+    cv::GaussianBlur(original, output, cv::Size(3, 3), 0);
+    cv::subtract(blurred_bg, output, output);
+    cv::threshold(output, output, 10, 255, cv::THRESH_BINARY);
 
-    // Blur the target image
-    cv::GaussianBlur(original, blurred, cv::Size(3, 3), 0);
+    // Perform closing operation (dilate then erode)
+    cv::morphologyEx(output, output, cv::MORPH_CLOSE, kernel, cv::Point(-1, -1), 2);
+    cv::morphologyEx(output, output, cv::MORPH_OPEN, kernel, cv::Point(-1, -1), 1);
 
-    // Background subtraction
-    cv::subtract(background, blurred, bg_sub);
-
-    // Apply threshold
-    cv::threshold(bg_sub, binary, 10, 255, cv::THRESH_BINARY);
-
-    // Create kernel for morphological operations
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
-
-    // Erode and dilate to remove noise
-    cv::dilate(binary, dilate1, kernel, cv::Point(-1, -1), 2);
-    cv::erode(dilate1, erode1, kernel, cv::Point(-1, -1), 2);
-    cv::erode(erode1, erode2, kernel, cv::Point(-1, -1), 1);
-    cv::dilate(erode2, dilate2, kernel, cv::Point(-1, -1), 1);
-
-    return dilate2;
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(output, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 }
 
 void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params)
 {
+    // cv::ocl::setUseOpenCL(true);
+
     grabber.start();
 
     const int numFrames = 5000;
     std::vector<long long> processingTimes;
     processingTimes.reserve(numFrames);
+
+    cv::Mat original(params.height, params.width, CV_8UC1);
+    cv::Mat processed(params.height, params.width, CV_8UC1);
 
     for (int i = 0; i < numFrames; ++i)
     {
@@ -86,12 +85,12 @@ void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params)
         uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
 
         // Create OpenCV Mat from the image data
-        cv::Mat original(params.height, params.width, CV_8UC1, imagePointer);
+        std::memcpy(original.data, imagePointer, params.width * params.height);
 
         // Measure processing time
         auto start = std::chrono::high_resolution_clock::now();
 
-        cv::Mat processed = processFrame(original);
+        processFrame(original, processed);
 
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -101,17 +100,40 @@ void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params)
 
     grabber.stop();
 
-    // Calculate statistics
-    auto minmax = std::minmax_element(processingTimes.begin(), processingTimes.end());
-    long long minTime = *minmax.first;
-    long long maxTime = *minmax.second;
-    long long totalTime = std::accumulate(processingTimes.begin(), processingTimes.end(), 0LL);
-    double meanTime = static_cast<double>(totalTime) / numFrames;
+    // Sort the processing times
+    std::sort(processingTimes.begin(), processingTimes.end());
 
-    std::cout << "Processing time statistics for " << numFrames << " frames:" << std::endl;
-    std::cout << "  Minimum: " << minTime << " microseconds" << std::endl;
-    std::cout << "  Maximum: " << maxTime << " microseconds" << std::endl;
-    std::cout << "  Mean: " << meanTime << " microseconds" << std::endl;
+    // Calculate the number of values to exclude (5% from each end)
+    int excludeCount = static_cast<int>(numFrames * 0.05);
+
+    // Calculate statistics excluding extreme values
+    double sum = 0;
+    long long min = processingTimes[excludeCount];
+    long long max = processingTimes[numFrames - excludeCount - 1];
+
+    for (int i = excludeCount; i < numFrames - excludeCount; ++i)
+    {
+        sum += processingTimes[i];
+    }
+
+    int validCount = numFrames - 2 * excludeCount;
+    double mean = sum / validCount;
+
+    double variance = 0;
+    for (int i = excludeCount; i < numFrames - excludeCount; ++i)
+    {
+        double diff = processingTimes[i] - mean;
+        variance += diff * diff;
+    }
+    variance /= validCount;
+    double stdDev = std::sqrt(variance);
+
+    // Print results
+    std::cout << "Processing time statistics (excluding extreme 10% values):" << std::endl;
+    std::cout << "Min: " << min << " us" << std::endl;
+    std::cout << "Max: " << max << " us" << std::endl;
+    std::cout << "Mean: " << mean << " us" << std::endl;
+    std::cout << "Standard Deviation: " << stdDev << " us" << std::endl;
 }
 
 int main()
