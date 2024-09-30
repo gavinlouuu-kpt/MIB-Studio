@@ -55,8 +55,8 @@ struct SharedResources
 
 void configure(EGrabber<CallbackOnDemand> &grabber)
 {
-    grabber.setInteger<RemoteModule>("Width", 256);
-    grabber.setInteger<RemoteModule>("Height", 64);
+    grabber.setInteger<RemoteModule>("Width", 512);
+    grabber.setInteger<RemoteModule>("Height", 96);
     grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
     // ... (other configuration settings)
 }
