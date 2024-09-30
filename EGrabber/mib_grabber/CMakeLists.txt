@@ -4,6 +4,12 @@ project(MockGrabberProject)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Ensure CMake is set to Release mode
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+
 # Find OpenCV package
 find_package(OpenCV REQUIRED)
 
@@ -38,11 +44,11 @@ function(create_opencv_executable name)
     if(WIN32)
         # Copy OpenCV DLLs
         foreach(lib ${OpenCV_LIBS})
-            if(CMAKE_BUILD_TYPE MATCHES Debug)
-                set(dll_name "${OpenCV_DIR}/bin/Debug/${lib}d.dll")
-            else()
+            # if(CMAKE_BUILD_TYPE MATCHES Debug)
+            #     set(dll_name "${OpenCV_DIR}/bin/Debug/${lib}d.dll")
+            # else()
                 set(dll_name "${OpenCV_DIR}/bin/Release/${lib}.dll")
-            endif()
+            # endif()
             if(EXISTS ${dll_name})
                 add_custom_command(TARGET ${name} POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -57,10 +63,15 @@ endfunction()
 # Create executables for each test
 create_opencv_executable(main_test)
 create_opencv_executable(process_speed_test)
-# create_opencv_executable(image)
-
+create_opencv_executable(process_load_test)
+create_opencv_executable(main_optimize_test)
+create_opencv_executable(cgy_test)
 # You can add more executables here as needed
 # create_opencv_executable(another_test)
 
 message(STATUS "OpenCV_DIR is set to: ${OpenCV_DIR}")
 message(STATUS "OpenCV_LIBS: ${OpenCV_LIBS}")
+
+
+# At the end of your file, add:
+message(STATUS "CMAKE_BUILD_TYPE is: ${CMAKE_BUILD_TYPE}")
