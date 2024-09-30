@@ -13,7 +13,7 @@ get_filename_component(PROJECT_ROOT_DIR "${CMAKE_SOURCE_DIR}/" ABSOLUTE)
 # Include directories
 include_directories(
     ${PROJECT_ROOT_DIR}/lib/CircularBuffer
-    ${PROJECT_ROOT_DIR}/lib/image_processing
+    # ${PROJECT_ROOT_DIR}/lib/image_processing
     ${OpenCV_INCLUDE_DIRS}
     "C:/Program Files/Euresys/eGrabber/include"
 )
@@ -25,6 +25,7 @@ file(GLOB_RECURSE LIB_SOURCES
 )
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*main\.cpp$")
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*test.*\.cpp$")
+list(FILTER LIB_SOURCES EXCLUDE REGEX ".*image_processing_.*\.cpp$")
 
 # Print the LIB_SOURCES variable for debugging
 message(STATUS "LIB_SOURCES: ${LIB_SOURCES}")
@@ -55,8 +56,8 @@ endfunction()
 
 # Create executables for each test
 create_opencv_executable(main_test)
-create_opencv_executable(performance_test)
-create_opencv_executable(image)
+create_opencv_executable(process_speed_test)
+# create_opencv_executable(image)
 
 # You can add more executables here as needed
 # create_opencv_executable(another_test)
