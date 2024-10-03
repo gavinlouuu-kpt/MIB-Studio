@@ -626,6 +626,7 @@ int main()
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
         SharedResources shared;
         initializeBackgroundFrame(shared, params);
+        shared.roi = cv::Rect(0, 0, params.width, params.height);
 
         sample(grabber, params, circularBuffer, shared);
     }

@@ -29,6 +29,7 @@ int main()
 
         SharedResources shared;
         initializeMockBackgroundFrame(shared, params);
+        shared.roi = cv::Rect(0, 0, params.width, params.height);
 
         mockSample(params, cameraBuffer, circularBuffer, shared);
     }
