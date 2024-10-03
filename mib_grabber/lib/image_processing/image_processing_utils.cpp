@@ -17,6 +17,7 @@ ImageParams initializeImageParams(const std::string &directory)
             {
                 params.width = image.cols;
                 params.height = image.rows;
+                params.pixelFormat = image.type();
                 params.imageSize = image.total() * image.elemSize();
                 return params;
             }
@@ -56,7 +57,7 @@ void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool
     std::cout << "Loaded " << cameraBuffer.size() << " images into camera buffer." << std::endl;
 }
 
-void initializeBackgroundFrame(SharedResources &shared, const ImageParams &params)
+void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params)
 {
     std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
     shared.backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, cv::Scalar(255));

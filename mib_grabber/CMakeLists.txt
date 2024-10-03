@@ -4,6 +4,12 @@ project(MockGrabberProject)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Ensure CMake is set to Release mode
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+
 # Find OpenCV package
 find_package(OpenCV REQUIRED)
 
@@ -25,6 +31,7 @@ file(GLOB_RECURSE LIB_SOURCES
 )
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*main\.cpp$")
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*test.*\.cpp$")
+# list(FILTER LIB_SOURCES EXCLUDE REGEX ".*image_processing_.*\.cpp$")
 
 # Print the LIB_SOURCES variable for debugging
 message(STATUS "LIB_SOURCES: ${LIB_SOURCES}")
@@ -55,11 +62,16 @@ endfunction()
 
 # Create executables for each test
 create_opencv_executable(main_test)
-# create_opencv_executable(performance_test)
-# create_opencv_executable(image)
-
+create_opencv_executable(mock_grabber)
+# create_opencv_executable(process_load_test)
+# create_opencv_executable(main_optimize_test)
+# create_opencv_executable(cgy_test)
 # You can add more executables here as needed
 # create_opencv_executable(another_test)
 
 message(STATUS "OpenCV_DIR is set to: ${OpenCV_DIR}")
 message(STATUS "OpenCV_LIBS: ${OpenCV_LIBS}")
+
+
+# At the end of your file, add:
+message(STATUS "CMAKE_BUILD_TYPE is: ${CMAKE_BUILD_TYPE}")

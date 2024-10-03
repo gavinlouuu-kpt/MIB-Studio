@@ -455,7 +455,7 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
     }
 }
 
-void sample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
+void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
 {
     std::thread processingThread(processingThreadTask,
                                  std::ref(shared.done), std::ref(shared.paused),

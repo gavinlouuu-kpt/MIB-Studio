@@ -8,7 +8,7 @@ int main()
     try
     {
         bool loadInReverse = true;
-        const std::string imageDirectory = "C:\\Users\\gavin\\code\\test_image";
+        const std::string imageDirectory = "D:\\test_image";
 
         ImageParams params = initializeImageParams(imageDirectory);
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
@@ -17,9 +17,9 @@ int main()
         loadImages(imageDirectory, cameraBuffer, loadInReverse);
 
         SharedResources shared;
-        initializeBackgroundFrame(shared, params);
+        initializeMockBackgroundFrame(shared, params);
 
-        sample(params, cameraBuffer, circularBuffer, shared);
+        mockSample(params, cameraBuffer, circularBuffer, shared);
     }
     catch (const std::exception &e)
     {

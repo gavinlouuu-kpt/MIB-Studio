@@ -16,6 +16,7 @@ struct ImageParams
 {
     size_t width;
     size_t height;
+    uint64_t pixelFormat;
     size_t imageSize;
     size_t bufferCount;
 };
@@ -52,7 +53,7 @@ struct ContourResult
 // Function declarations
 ImageParams initializeImageParams(const std::string &directory);
 void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder = false);
-void initializeBackgroundFrame(SharedResources &shared, const ImageParams &params);
+void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params);
 void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
 ContourResult findContours(const cv::Mat &processedImage);
@@ -82,5 +83,5 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
                             const CircularBuffer &circularBuffer,
                             size_t bufferCount, size_t width, size_t height,
                             SharedResources &shared);
-void sample(const ImageParams &params, CircularBuffer &cameraBuffer,
-            CircularBuffer &circularBuffer, SharedResources &shared);
+void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer,
+                CircularBuffer &circularBuffer, SharedResources &shared);
