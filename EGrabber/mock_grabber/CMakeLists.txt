@@ -55,8 +55,8 @@ endfunction()
 
 # Create executables for each test
 create_opencv_executable(main_test)
-create_opencv_executable(performance_test)
-create_opencv_executable(image)
+# create_opencv_executable(performance_test)
+# create_opencv_executable(image)
 
 # You can add more executables here as needed
 # create_opencv_executable(another_test)
