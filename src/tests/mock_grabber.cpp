@@ -2,13 +2,24 @@
 #include "CircularBuffer.h"
 #include <iostream>
 #include <string>
+#include <filesystem>
 
 int main()
 {
     try
     {
         bool loadInReverse = true;
-        const std::string imageDirectory = "D:\\test_image";
+        std::string imageDirectory;
+
+        // Prompt user for image directory
+        std::cout << "Enter the image directory path: ";
+        std::getline(std::cin, imageDirectory);
+
+        // Validate the directory
+        if (!std::filesystem::exists(imageDirectory) || !std::filesystem::is_directory(imageDirectory))
+        {
+            throw std::runtime_error("Invalid directory path");
+        }
 
         ImageParams params = initializeImageParams(imageDirectory);
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
