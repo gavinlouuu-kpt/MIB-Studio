@@ -42,6 +42,8 @@ struct SharedResources
     cv::Mat backgroundFrame;
     cv::Mat blurredBackground;
     std::mutex backgroundFrameMutex;
+    cv::Rect roi;
+    std::mutex roiMutex;
 };
 
 struct ContourResult

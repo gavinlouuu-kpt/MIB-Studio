@@ -17,8 +17,10 @@ thread_local struct ThreadLocalMats
 void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread)
 {
+    // Choose the appropriate set of thread-local variables
     ThreadLocalMats &mats = isProcessingThread ? processingThreadMats : displayThreadMats;
 
+    // Initialize thread_local variables only once for each thread
     if (!mats.initialized)
     {
         mats.original = cv::Mat(height, width, CV_8UC1);
@@ -32,21 +34,43 @@ void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t he
         mats.initialized = true;
     }
 
+    // Create OpenCV Mat from the image data
     mats.original = cv::Mat(height, width, CV_8UC1, const_cast<uint8_t *>(imageData.data()));
+    cv::Rect roi;
+    {
+        std::lock_guard<std::mutex> lock(shared.roiMutex);
+        roi = shared.roi;
+    }
 
+    // Ensure ROI is within image bounds
+    roi &= cv::Rect(0, 0, width, height);
+
+    // Access the pre-blurred background
     cv::Mat blurred_bg;
     {
         std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-        blurred_bg = shared.blurredBackground;
+        blurred_bg = shared.blurredBackground(roi); // Get only the ROI of the background
     }
 
-    cv::GaussianBlur(mats.original, mats.blurred_target, cv::Size(3, 3), 0);
-    cv::subtract(blurred_bg, mats.blurred_target, mats.bg_sub);
-    cv::threshold(mats.bg_sub, mats.binary, 10, 255, cv::THRESH_BINARY);
-    cv::dilate(mats.binary, mats.dilate1, mats.kernel, cv::Point(-1, -1), 2);
-    cv::erode(mats.dilate1, mats.erode1, mats.kernel, cv::Point(-1, -1), 2);
-    cv::erode(mats.erode1, mats.erode2, mats.kernel, cv::Point(-1, -1), 1);
-    cv::dilate(mats.erode2, outputImage, mats.kernel, cv::Point(-1, -1), 1);
+    // Blur only the target image ROI
+    cv::GaussianBlur(mats.original(roi), mats.blurred_target(roi), cv::Size(3, 3), 0);
+
+    // Background subtraction (only in ROI)
+    cv::subtract(blurred_bg, mats.blurred_target(roi), mats.bg_sub(roi));
+
+    // Apply threshold (only in ROI)
+    cv::threshold(mats.bg_sub(roi), mats.binary(roi), 10, 255, cv::THRESH_BINARY);
+
+    // Erode and dilate to remove noise (only in ROI)
+    cv::dilate(mats.binary(roi), mats.dilate1(roi), mats.kernel, cv::Point(-1, -1), 2);
+    cv::erode(mats.dilate1(roi), mats.erode1(roi), mats.kernel, cv::Point(-1, -1), 2);
+    cv::erode(mats.erode1(roi), mats.erode2(roi), mats.kernel, cv::Point(-1, -1), 1);
+    cv::dilate(mats.erode2(roi), outputImage(roi), mats.kernel, cv::Point(-1, -1), 1);
+
+    // Clear areas outside ROI in the output image
+    cv::Mat mask = cv::Mat::zeros(height, width, CV_8UC1);
+    mask(roi).setTo(255);
+    outputImage.setTo(0, mask == 0);
 }
 
 ContourResult findContours(const cv::Mat &processedImage)

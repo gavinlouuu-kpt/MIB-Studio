@@ -159,14 +159,18 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
     }
 }
 
-void displayThreadTask(const std::atomic<bool> &done, const std::atomic<bool> &paused,
-                       const std::atomic<int> &currentFrameIndex,
-                       std::atomic<bool> &displayNeedsUpdate,
-                       std::queue<size_t> &framesToDisplay,
-                       std::mutex &displayQueueMutex,
-                       const CircularBuffer &circularBuffer,
-                       size_t width, size_t height, size_t bufferCount,
-                       SharedResources &shared)
+void displayThreadTask(
+    const std::atomic<bool> &done,
+    const std::atomic<bool> &paused,
+    const std::atomic<int> &currentFrameIndex,
+    std::atomic<bool> &displayNeedsUpdate,
+    std::queue<size_t> &framesToDisplay,
+    std::mutex &displayQueueMutex,
+    const CircularBuffer &circularBuffer,
+    size_t width,
+    size_t height,
+    size_t bufferCount,
+    SharedResources &shared)
 {
     const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
     auto nextFrameTime = std::chrono::steady_clock::now();
@@ -174,6 +178,7 @@ void displayThreadTask(const std::atomic<bool> &done, const std::atomic<bool> &p
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
+    cv::Mat displayImage(height, width, CV_8UC3);
 
     cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
     cv::resizeWindow("Live Feed", width, height);
@@ -189,6 +194,27 @@ void displayThreadTask(const std::atomic<bool> &done, const std::atomic<bool> &p
 
     // Variable for scatter plot
     cv::Mat scatterPlot(400, 400, CV_8UC3, cv::Scalar(255, 255, 255));
+
+    // Function to handle mouse events for ROI selection
+    auto onMouse = [](int event, int x, int y, int flags, void *userdata)
+    {
+        static cv::Point startPoint;
+        auto *sharedResources = static_cast<SharedResources *>(userdata);
+
+        if (event == cv::EVENT_LBUTTONDOWN)
+        {
+            startPoint = cv::Point(x, y);
+        }
+        else if (event == cv::EVENT_LBUTTONUP)
+        {
+            cv::Rect newRoi(startPoint, cv::Point(x, y));
+            std::lock_guard<std::mutex> lock(sharedResources->roiMutex);
+            sharedResources->roi = newRoi;
+            sharedResources->displayNeedsUpdate = true;
+        }
+    };
+
+    cv::setMouseCallback("Live Feed", onMouse, &shared);
 
     while (!done)
     {
@@ -206,6 +232,12 @@ void displayThreadTask(const std::atomic<bool> &done, const std::atomic<bool> &p
 
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(height, width, CV_8UC1, imageData.data());
+
+                    {
+                        std::lock_guard<std::mutex> roiLock(shared.roiMutex);
+                        cv::rectangle(image, shared.roi, cv::Scalar(0, 255, 0), 2);
+                    }
+
                     cv::imshow("Live Feed", image);
 
                     // Preprocess Image using the optimized processFrame function
