@@ -2,6 +2,10 @@
 #include "CircularBuffer.h"
 #include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <opencv2/opencv.hpp>
+#include <future>
+#include <vector>
 
 ImageParams initializeImageParams(const std::string &directory)
 {
@@ -57,9 +61,98 @@ void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool
     std::cout << "Loaded " << cameraBuffer.size() << " images into camera buffer." << std::endl;
 }
 
-void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params)
+void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer)
 {
     std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-    shared.backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, cv::Scalar(255));
+
+    // Select an image from the middle of the buffer as the background
+    size_t selectedIndex = 0;
+    std::vector<uchar> imageData = cameraBuffer.get(selectedIndex);
+
+    // Create a cv::Mat from the image data
+    cv::Mat selectedImage(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, imageData.data());
+
+    // Clone the selected image to create the background frame
+    shared.backgroundFrame = selectedImage.clone();
+
+    // Apply Gaussian blur to the background frame
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
+
+    std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
+}
+
+void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory)
+{
+    static int batchNumber = 0;
+    std::string batchDir = directory + "/batch_" + std::to_string(batchNumber++);
+    std::filesystem::create_directories(batchDir);
+
+    std::ofstream batchFile(batchDir + "/batch_data.bin", std::ios::binary);
+    std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
+
+    for (size_t i = 0; i < results.size(); ++i)
+    {
+        const auto &result = results[i];
+
+        // Save contour and timestamp data
+        batchFile.write(reinterpret_cast<const char *>(&result.contourResult.findTime), sizeof(double));
+        size_t contourCount = result.contourResult.contours.size();
+        batchFile.write(reinterpret_cast<const char *>(&contourCount), sizeof(size_t));
+        for (const auto &contour : result.contourResult.contours)
+        {
+            size_t pointCount = contour.size();
+            batchFile.write(reinterpret_cast<const char *>(&pointCount), sizeof(size_t));
+            batchFile.write(reinterpret_cast<const char *>(contour.data()), pointCount * sizeof(cv::Point));
+        }
+        batchFile.write(reinterpret_cast<const char *>(&result.timestamp), sizeof(std::chrono::system_clock::time_point));
+
+        // Save image metadata
+        int rows = result.originalImage.rows;
+        int cols = result.originalImage.cols;
+        int type = result.originalImage.type();
+        imageFile.write(reinterpret_cast<const char *>(&rows), sizeof(int));
+        imageFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
+        imageFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
+
+        // Save raw image data
+        if (result.originalImage.isContinuous())
+        {
+            imageFile.write(reinterpret_cast<const char *>(result.originalImage.data), result.originalImage.total() * result.originalImage.elemSize());
+        }
+        else
+        {
+            for (int r = 0; r < rows; ++r)
+            {
+                imageFile.write(reinterpret_cast<const char *>(result.originalImage.ptr(r)), cols * result.originalImage.elemSize());
+            }
+        }
+    }
+
+    std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
+}
+
+void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
+{
+    std::ifstream imageFile(binaryImageFile, std::ios::binary);
+    std::filesystem::create_directories(outputDirectory);
+
+    int imageCount = 0;
+    while (imageFile.good())
+    {
+        int rows, cols, type;
+        imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+        imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+        imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+
+        if (imageFile.eof())
+            break;
+
+        cv::Mat image(rows, cols, type);
+        imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+
+        std::string outputPath = outputDirectory + "/image_" + std::to_string(imageCount++) + ".png";
+        cv::imwrite(outputPath, image);
+    }
+
+    std::cout << "Converted " << imageCount << " images to PNG format in " << outputDirectory << std::endl;
 }

@@ -17,13 +17,13 @@ void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
     auto lastFrameTime = clock::now();
     auto fpsStartTime = clock::now();
     size_t frameCount = 0;
-    const int targetFPS = 1000;
+    const int targetFPS = 5000;
     const std::chrono::nanoseconds frameInterval(1000000000 / targetFPS);
 
-    while (!done)
+    while (!shared.done)
     {
         auto now = clock::now();
-        if (!paused && (now - lastFrameTime) >= frameInterval)
+        if (!shared.paused && (now - lastFrameTime) >= frameInterval)
         {
             const uint8_t *imageData = cameraBuffer.getPointer(currentIndex);
             if (imageData != nullptr)
@@ -49,9 +49,28 @@ void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
             frameCount = 0;
             fpsStartTime = now;
         }
-
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
+    std::cout << "Camera thread interrupted." << std::endl;
+}
+
+size_t estimateQualifiedResultMemory(const QualifiedResult &result)
+{
+    size_t memory = 0;
+
+    // Estimate ContourResult memory
+    for (const auto &contour : result.contourResult.contours)
+    {
+        memory += sizeof(cv::Point) * contour.size();
+    }
+    memory += sizeof(double); // for findTime
+
+    // Estimate Mat memory
+    memory += result.originalImage.total() * result.originalImage.elemSize();
+
+    // Estimate timestamp memory
+    memory += sizeof(std::chrono::system_clock::time_point);
+
+    return memory;
 }
 
 void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
@@ -66,26 +85,25 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
     double totalProcessingTime = 0.0;
     double totalFindTime = 0.0;
 
-    // cv::namedWindow("debug-preprocess", cv::WINDOW_NORMAL);
-    // cv::resizeWindow("debug-preprocess", width, height);
-
-    // cv::namedWindow("debug-postprocess", cv::WINDOW_NORMAL);
-    // cv::resizeWindow("debug-postprocess", width, height);
-
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
 
-    while (!done)
+    const size_t SAVE_THRESHOLD = 1000; // Adjust as needed
+    const std::string SAVE_DIRECTORY = "qualified_results";
+
+    const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
+
+    while (!shared.done)
     {
         std::unique_lock<std::mutex> lock(processingQueueMutex);
         processingQueueCondition.wait(lock, [&]()
-                                      { return !framesToProcess.empty() || done || paused; });
+                                      { return !framesToProcess.empty() || shared.done || shared.paused; });
 
-        if (done)
+        if (shared.done)
             break;
 
-        if (!framesToProcess.empty() && !paused)
+        if (!framesToProcess.empty() && !shared.paused)
         {
             // size_t frame = framesToProcess.front(); //retrieve content of queue
             framesToProcess.pop();
@@ -93,17 +111,12 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
 
             auto imageData = circularBuffer.get(0);
             image = cv::Mat(height, width, CV_8UC1, imageData.data());
-            // cv::imshow("debug-preprocess", image);
-            // cv::waitKey(1);
 
             // Measure processing time
             auto startTime = std::chrono::high_resolution_clock::now();
 
             // Preprocess Image using the optimized processFrame function
             processFrame(imageData, width, height, shared, processedImage, true); // true indicates it's the processing thread
-
-            // cv::imshow("debug-postprocess", processedImage);
-            // cv::waitKey(1);
 
             // Find contour
             ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
@@ -113,6 +126,7 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
             // Calculate deformability and circularity for each contour
             {
                 std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
+                bool qualifiedContourFound = false;
                 for (const auto &contour : contours)
                 {
                     if (contour.size() >= 10)
@@ -121,6 +135,28 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
                         shared.circularities.emplace_back(circularity, area);
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
+                        qualifiedContourFound = true;
+                    }
+                }
+
+                // If a qualified contour is found, save the result
+                if (qualifiedContourFound)
+                {
+                    QualifiedResult qualifiedResult;
+                    qualifiedResult.contourResult = contourResult;
+                    qualifiedResult.originalImage = image.clone();
+                    qualifiedResult.timestamp = std::chrono::system_clock::now();
+
+                    std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                    auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
+                    currentBuffer.push_back(std::move(qualifiedResult));
+
+                    // Check if we need to switch buffers
+                    if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
+                    {
+                        shared.usingBuffer1 = !shared.usingBuffer1;
+                        shared.savingInProgress = true;
+                        shared.savingCondition.notify_one();
                     }
                 }
             }
@@ -145,11 +181,30 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
                           << averageProcessingTime << " us" << std::endl;
                 std::cout << "Average contour find time: " << averageFindTime << " us" << std::endl;
 
+                // // Debugging statement
+                std::cout << "Qualified result pushed. Buffer 1 size: "
+                          << shared.qualifiedResultsBuffer1.size()
+                          << ", Buffer 2 size: "
+                          << shared.qualifiedResultsBuffer2.size()
+                          << " / " << BUFFER_THRESHOLD << std::endl;
+
                 // Reset counters and update last print time
                 frameCount = 0;
                 totalProcessingTime = 0.0;
                 totalFindTime = 0.0;
                 lastPrintTime = currentTime;
+            }
+
+            // Check if we need to save and clear results
+            {
+                std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                if (shared.qualifiedResults.size() >= SAVE_THRESHOLD)
+                {
+                    std::cout << "Saving " << shared.qualifiedResults.size() << " results to disk..." << std::endl;
+                    saveQualifiedResultsToDisk(shared.qualifiedResults, SAVE_DIRECTORY);
+                    shared.qualifiedResults.clear();
+                    std::cout << "Results saved and cleared from memory." << std::endl;
+                }
             }
         }
         else
@@ -157,6 +212,7 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
             lock.unlock();
         }
     }
+    std::cout << "Processing thread interrupted." << std::endl;
 }
 
 void displayThreadTask(
@@ -216,9 +272,9 @@ void displayThreadTask(
 
     cv::setMouseCallback("Live Feed", onMouse, &shared);
 
-    while (!done)
+    while (!shared.done)
     {
-        if (!paused)
+        if (!shared.paused)
         {
             std::unique_lock<std::mutex> lock(displayQueueMutex);
             auto now = std::chrono::steady_clock::now();
@@ -325,6 +381,8 @@ void displayThreadTask(
             cv::waitKey(1); // Process GUI events
         }
     }
+    cv::destroyAllWindows();
+    std::cout << "Display thread interrupted." << std::endl;
 }
 
 void onTrackbar(int pos, void *userdata)
@@ -383,7 +441,7 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
                             size_t bufferCount, size_t width, size_t height,
                             SharedResources &shared)
 {
-    while (!done)
+    while (!shared.done)
     {
         if (_kbhit())
         {
@@ -391,12 +449,12 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
             if (ch == 27)
             { // ESC key
                 std::cout << "ESC pressed. Stopping capture..." << std::endl;
-                done = true;
+                shared.done = true;
             }
             else if (ch == 32)
             { // Space bar
-                paused = !paused;
-                if (paused)
+                shared.paused = !shared.paused;
+                if (shared.paused)
                 {
                     // uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
                     // uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
@@ -485,10 +543,17 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small sleep to reduce CPU usage
     }
+    std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
 
 void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
 {
+    shared.done = false;
+    shared.paused = false;
+    shared.currentFrameIndex = 0;
+    shared.displayNeedsUpdate = true;
+    shared.circularities.clear();
+
     std::thread processingThread(processingThreadTask,
                                  std::ref(shared.done), std::ref(shared.paused),
                                  std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
@@ -509,6 +574,8 @@ void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Circula
     std::thread cameraSimThread(simulateCameraThread,
                                 std::ref(shared.done), std::ref(shared.paused),
                                 std::ref(cameraBuffer), std::ref(shared), std::ref(params));
+
+    std::thread resultSavingThread(resultSavingThread, std::ref(shared), "qualified_results");
 
     size_t lastProcessedFrame = 0;
     while (!shared.done)
@@ -547,9 +614,64 @@ void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Circula
             }
         }
     }
-
+    // Signal all threads to stop
+    shared.displayQueueCondition.notify_all();
+    shared.processingQueueCondition.notify_all();
+    shared.savingCondition.notify_all();
+    std::cout << "Joining threads..." << std::endl;
     processingThread.join();
     displayThread.join();
     keyboardThread.join();
     cameraSimThread.join();
+    resultSavingThread.join();
+    std::cout << "Mock sampling completed or interrupted." << std::endl;
+}
+
+void resultSavingThread(SharedResources &shared, const std::string &saveDirectory)
+{
+    while (!shared.done)
+    {
+        std::vector<QualifiedResult> bufferToSave;
+        {
+            std::unique_lock<std::mutex> lock(shared.qualifiedResultsMutex);
+            shared.savingCondition.wait(lock, [&shared]()
+                                        { return shared.savingInProgress || shared.done; });
+
+            if (shared.done)
+                break;
+
+            // Swap the full buffer with our local vector
+            if (shared.usingBuffer1)
+            {
+                bufferToSave.swap(shared.qualifiedResultsBuffer2);
+            }
+            else
+            {
+                bufferToSave.swap(shared.qualifiedResultsBuffer1);
+            }
+        }
+
+        // Save the buffer to disk
+        if (!bufferToSave.empty())
+        {
+            auto start = std::chrono::steady_clock::now();
+            saveQualifiedResultsToDisk(bufferToSave, saveDirectory);
+            auto end = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+            shared.totalSavedResults += bufferToSave.size();
+            shared.lastSaveTime = end;
+
+            std::cout << "Saved " << bufferToSave.size() << " results to disk. "
+                      << "Total saved: " << shared.totalSavedResults
+                      << ". Time taken: " << duration.count() << " ms" << std::endl;
+        }
+
+        // Mark saving as complete
+        {
+            std::lock_guard<std::mutex> lock(shared.qualifiedResultsMutex);
+            shared.savingInProgress = false;
+        }
+    }
+    std::cout << "Result saving thread interrupted." << std::endl;
 }

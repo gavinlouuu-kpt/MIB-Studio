@@ -20,8 +20,9 @@ get_filename_component(PROJECT_ROOT_DIR "${CMAKE_SOURCE_DIR}/" ABSOLUTE)
 include_directories(
     ${PROJECT_ROOT_DIR}/lib/CircularBuffer
     ${PROJECT_ROOT_DIR}/lib/image_processing
+    ${PROJECT_ROOT_DIR}/lib/menu_system
     ${OpenCV_INCLUDE_DIRS}
-    "C:/Program Files/Euresys/eGrabber/include"
+    # "C:/Program Files/Euresys/eGrabber/include"
 )
 
 # Collect all source files except main files and test files
@@ -61,7 +62,7 @@ function(create_opencv_executable name)
 endfunction()
 
 # Create executables for each test
-create_opencv_executable(main_test)
+# create_opencv_executable(main_test)
 create_opencv_executable(mock_grabber)
 # create_opencv_executable(process_load_test)
 # create_opencv_executable(main_optimize_test)

@@ -1,3 +1,12 @@
+# Switch Docker to create Windows containers
+
+# Install Hyper-V
+Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
+
+# Install Containers
+Enable-WindowsOptionalFeature -Online -FeatureName Containers -All
+
+
 # MIB-Studio Project Setup Guide
 
 This guide will help you set up and run the MIB-Studio project, even if you have little programming experience. If you don't have a hardware camera, you'll be using the `mock_grabber` test.

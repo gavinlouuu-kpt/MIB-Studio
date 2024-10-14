@@ -7,6 +7,7 @@
 #include <vector>
 #include <tuple>
 #include <opencv2/opencv.hpp>
+#include <chrono>
 
 #define M_PI 3.14159265358979323846 // pi
 
@@ -19,6 +20,19 @@ struct ImageParams
     uint64_t pixelFormat;
     size_t imageSize;
     size_t bufferCount;
+};
+
+struct ContourResult
+{
+    std::vector<std::vector<cv::Point>> contours;
+    double findTime;
+};
+
+struct QualifiedResult
+{
+    ContourResult contourResult;
+    cv::Mat originalImage;
+    std::chrono::system_clock::time_point timestamp;
 };
 
 struct SharedResources
@@ -44,18 +58,21 @@ struct SharedResources
     std::mutex backgroundFrameMutex;
     cv::Rect roi;
     std::mutex roiMutex;
-};
-
-struct ContourResult
-{
-    std::vector<std::vector<cv::Point>> contours;
-    double findTime;
+    std::vector<QualifiedResult> qualifiedResults;
+    std::mutex qualifiedResultsMutex;
+    std::vector<QualifiedResult> qualifiedResultsBuffer1;
+    std::vector<QualifiedResult> qualifiedResultsBuffer2;
+    std::atomic<bool> usingBuffer1{true};
+    std::condition_variable savingCondition;
+    std::atomic<bool> savingInProgress{false};
+    std::atomic<size_t> totalSavedResults{0};
+    std::chrono::steady_clock::time_point lastSaveTime;
 };
 
 // Function declarations
 ImageParams initializeImageParams(const std::string &directory);
 void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder = false);
-void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params);
+void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
 void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
 ContourResult findContours(const cv::Mat &processedImage);
@@ -87,3 +104,7 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
                             SharedResources &shared);
 void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer,
                 CircularBuffer &circularBuffer, SharedResources &shared);
+void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory);
+void resultSavingThread(SharedResources &shared, const std::string &saveDirectory);
+void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
+int mock_grabber_main();
