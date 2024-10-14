@@ -4,6 +4,62 @@
 #include <iostream>
 #include <conio.h>
 #include <filesystem>
+#include <fstream>   // Add this for file operations
+#include <string>    // Add this for std::string
+#include <stdexcept> // Add this for std::runtime_error
+#include "json.hpp"
+
+using json = nlohmann::json;
+
+json readConfig(const std::string &filename)
+{
+    std::ifstream file(filename);
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Unable to open config file: " + filename);
+    }
+    json config;
+    file >> config;
+    return config;
+}
+
+bool updateConfig(const std::string &filename, const std::string &key, const json &value)
+{
+    try
+    {
+        // Read existing config
+        std::ifstream input_file(filename);
+        if (!input_file.is_open())
+        {
+            std::cerr << "Unable to open config file: " << filename << std::endl;
+            return false;
+        }
+        json config;
+        input_file >> config;
+        input_file.close();
+
+        // Update the value
+        config[key] = value;
+
+        // Write updated config back to file
+        std::ofstream output_file(filename);
+        if (!output_file.is_open())
+        {
+            std::cerr << "Unable to open config file for writing: " << filename << std::endl;
+            return false;
+        }
+        output_file << std::setw(4) << config << std::endl;
+        output_file.close();
+
+        std::cout << "Config updated successfully. Key: " << key << ", New value: " << value << std::endl;
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error updating config: " << e.what() << std::endl;
+        return false;
+    }
+}
 
 namespace fs = std::filesystem;
 void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
@@ -53,26 +109,6 @@ void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
-size_t estimateQualifiedResultMemory(const QualifiedResult &result)
-{
-    size_t memory = 0;
-
-    // Estimate ContourResult memory
-    for (const auto &contour : result.contourResult.contours)
-    {
-        memory += sizeof(cv::Point) * contour.size();
-    }
-    memory += sizeof(double); // for findTime
-
-    // Estimate Mat memory
-    memory += result.originalImage.total() * result.originalImage.elemSize();
-
-    // Estimate timestamp memory
-    memory += sizeof(std::chrono::system_clock::time_point);
-
-    return memory;
-}
-
 void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
                           std::mutex &processingQueueMutex,
                           std::condition_variable &processingQueueCondition,
@@ -89,9 +125,9 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
     cv::Mat image(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
 
-    const size_t SAVE_THRESHOLD = 1000; // Adjust as needed
-    const std::string SAVE_DIRECTORY = "qualified_results";
+    // const size_t BUFFER_THRESHOLD = config["buffer_threshold"];
 
+    const size_t SAVE_THRESHOLD = 1000;   // Adjust as needed
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
 
     while (!shared.done)
@@ -193,18 +229,6 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
                 totalProcessingTime = 0.0;
                 totalFindTime = 0.0;
                 lastPrintTime = currentTime;
-            }
-
-            // Check if we need to save and clear results
-            {
-                std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
-                if (shared.qualifiedResults.size() >= SAVE_THRESHOLD)
-                {
-                    std::cout << "Saving " << shared.qualifiedResults.size() << " results to disk..." << std::endl;
-                    saveQualifiedResultsToDisk(shared.qualifiedResults, SAVE_DIRECTORY);
-                    shared.qualifiedResults.clear();
-                    std::cout << "Results saved and cleared from memory." << std::endl;
-                }
             }
         }
         else
@@ -553,6 +577,41 @@ void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Circula
     shared.currentFrameIndex = 0;
     shared.displayNeedsUpdate = true;
     shared.circularities.clear();
+    shared.qualifiedResults.clear();
+    shared.totalSavedResults = 0;
+
+    // saving UI block
+    json config = readConfig("config.json");
+    std::string SAVE_DIRECTORY = config["save_directory"];
+
+    std::cout << "Current save directory: " << SAVE_DIRECTORY << std::endl;
+    std::cout << "Do you want to use this directory or enter a new one? (1: use current / 2: enter new): ";
+    int choice;
+    std::cin >> choice;
+
+    if (choice == 2)
+    {
+        std::cout << "Enter new save directory name: ";
+        std::cin >> SAVE_DIRECTORY;
+
+        // Update the config file with the new base directory
+        updateConfig("config.json", "save_directory", SAVE_DIRECTORY);
+    }
+
+    // Automatically increment the directory name if it already exists
+    std::string baseName = SAVE_DIRECTORY;
+    int suffix = 1;
+    while (std::filesystem::exists(SAVE_DIRECTORY))
+    {
+        SAVE_DIRECTORY = baseName + "_" + std::to_string(suffix);
+        suffix++;
+    }
+
+    // Ensure the directory exists
+    std::filesystem::create_directories(SAVE_DIRECTORY);
+
+    std::cout << "Using save directory: " << SAVE_DIRECTORY << std::endl;
+    //
 
     std::thread processingThread(processingThreadTask,
                                  std::ref(shared.done), std::ref(shared.paused),
@@ -575,7 +634,7 @@ void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Circula
                                 std::ref(shared.done), std::ref(shared.paused),
                                 std::ref(cameraBuffer), std::ref(shared), std::ref(params));
 
-    std::thread resultSavingThread(resultSavingThread, std::ref(shared), "qualified_results");
+    std::thread resultSavingThread(resultSavingThread, std::ref(shared), SAVE_DIRECTORY);
 
     size_t lastProcessedFrame = 0;
     while (!shared.done)

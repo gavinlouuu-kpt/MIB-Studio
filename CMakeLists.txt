@@ -21,8 +21,15 @@ include_directories(
     ${PROJECT_ROOT_DIR}/lib/CircularBuffer
     ${PROJECT_ROOT_DIR}/lib/image_processing
     ${PROJECT_ROOT_DIR}/lib/menu_system
+    ${PROJECT_ROOT_DIR}/lib/json
     ${OpenCV_INCLUDE_DIRS}
     # "C:/Program Files/Euresys/eGrabber/include"
+)
+
+# Collect all header files
+file(GLOB_RECURSE LIB_HEADERS 
+    "${PROJECT_ROOT_DIR}/lib/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp"
 )
 
 # Collect all source files except main files and test files

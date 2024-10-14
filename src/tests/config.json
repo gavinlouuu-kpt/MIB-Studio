@@ -1,0 +1,8 @@
+{
+    "save_directory": "updated_results",
+    "save_threshold": 1000,
+    "buffer_threshold": 1000,
+    "contour_size_threshold": 10,
+    "target_fps": 5000,
+    "display_fps": 25
+}
