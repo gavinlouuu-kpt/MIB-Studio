@@ -156,3 +156,53 @@ void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, cons
 
     std::cout << "Converted " << imageCount << " images to PNG format in " << outputDirectory << std::endl;
 }
+
+json readConfig(const std::string &filename)
+{
+    std::ifstream file(filename);
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Unable to open config file: " + filename);
+    }
+    json config;
+    file >> config;
+    return config;
+}
+
+bool updateConfig(const std::string &filename, const std::string &key, const json &value)
+{
+    try
+    {
+        // Read existing config
+        std::ifstream input_file(filename);
+        if (!input_file.is_open())
+        {
+            std::cerr << "Unable to open config file: " << filename << std::endl;
+            return false;
+        }
+        json config;
+        input_file >> config;
+        input_file.close();
+
+        // Update the value
+        config[key] = value;
+
+        // Write updated config back to file
+        std::ofstream output_file(filename);
+        if (!output_file.is_open())
+        {
+            std::cerr << "Unable to open config file for writing: " << filename << std::endl;
+            return false;
+        }
+        output_file << std::setw(4) << config << std::endl;
+        output_file.close();
+
+        std::cout << "Config updated successfully. Key: " << key << ", New value: " << value << std::endl;
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error updating config: " << e.what() << std::endl;
+        return false;
+    }
+}

@@ -11,56 +11,6 @@
 
 using json = nlohmann::json;
 
-json readConfig(const std::string &filename)
-{
-    std::ifstream file(filename);
-    if (!file.is_open())
-    {
-        throw std::runtime_error("Unable to open config file: " + filename);
-    }
-    json config;
-    file >> config;
-    return config;
-}
-
-bool updateConfig(const std::string &filename, const std::string &key, const json &value)
-{
-    try
-    {
-        // Read existing config
-        std::ifstream input_file(filename);
-        if (!input_file.is_open())
-        {
-            std::cerr << "Unable to open config file: " << filename << std::endl;
-            return false;
-        }
-        json config;
-        input_file >> config;
-        input_file.close();
-
-        // Update the value
-        config[key] = value;
-
-        // Write updated config back to file
-        std::ofstream output_file(filename);
-        if (!output_file.is_open())
-        {
-            std::cerr << "Unable to open config file for writing: " << filename << std::endl;
-            return false;
-        }
-        output_file << std::setw(4) << config << std::endl;
-        output_file.close();
-
-        std::cout << "Config updated successfully. Key: " << key << ", New value: " << value << std::endl;
-        return true;
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "Error updating config: " << e.what() << std::endl;
-        return false;
-    }
-}
-
 namespace fs = std::filesystem;
 void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
                           CircularBuffer &cameraBuffer, SharedResources &shared,
@@ -258,19 +208,16 @@ void displayThreadTask(
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
-    cv::Mat displayImage(height, width, CV_8UC3);
+    cv::Mat displayImage(height * 2, width, CV_8UC3);
 
-    cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Live Feed", width, height);
-
-    cv::namedWindow("Processed Feed", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Processed Feed", width, height);
+    cv::namedWindow("Combined Feed", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Combined Feed", width, height * 2);
 
     cv::namedWindow("Scatter Plot", cv::WINDOW_NORMAL);
     cv::resizeWindow("Scatter Plot", 400, 400);
 
     int trackbarPos = 0;
-    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+    cv::createTrackbar("Frame", "Combined Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
 
     // Variable for scatter plot
     cv::Mat scatterPlot(400, 400, CV_8UC3, cv::Scalar(255, 255, 255));
@@ -287,14 +234,22 @@ void displayThreadTask(
         }
         else if (event == cv::EVENT_LBUTTONUP)
         {
-            cv::Rect newRoi(startPoint, cv::Point(x, y));
-            std::lock_guard<std::mutex> lock(sharedResources->roiMutex);
-            sharedResources->roi = newRoi;
-            sharedResources->displayNeedsUpdate = true;
+            cv::Point endPoint(x, y);
+            // Calculate the distance between start and end points
+            double distance = cv::norm(startPoint - endPoint);
+
+            // Only update ROI if the distance is greater than a threshold (e.g., 5 pixels)
+            if (distance > 5)
+            {
+                cv::Rect newRoi(startPoint, endPoint);
+                std::lock_guard<std::mutex> lock(sharedResources->roiMutex);
+                sharedResources->roi = newRoi;
+                sharedResources->displayNeedsUpdate = true;
+            }
         }
     };
 
-    cv::setMouseCallback("Live Feed", onMouse, &shared);
+    cv::setMouseCallback("Combined Feed", onMouse, &shared);
 
     while (!shared.done)
     {
@@ -306,7 +261,6 @@ void displayThreadTask(
             {
                 if (!framesToDisplay.empty())
                 {
-                    // size_t frame = framesToDisplay.front(); //retrieve queue content
                     framesToDisplay.pop();
                     lock.unlock();
 
@@ -318,12 +272,17 @@ void displayThreadTask(
                         cv::rectangle(image, shared.roi, cv::Scalar(0, 255, 0), 2);
                     }
 
-                    cv::imshow("Live Feed", image);
-
                     // Preprocess Image using the optimized processFrame function
                     processFrame(imageData, width, height, shared, processedImage, false); // false indicates it's the display thread
 
-                    cv::imshow("Processed Feed", processedImage);
+                    // Concatenate live feed and processed feed
+                    cv::Mat topHalf, bottomHalf;
+                    cv::cvtColor(image, topHalf, cv::COLOR_GRAY2BGR);
+                    cv::cvtColor(processedImage, bottomHalf, cv::COLOR_GRAY2BGR);
+                    topHalf.copyTo(displayImage(cv::Rect(0, 0, width, height)));
+                    bottomHalf.copyTo(displayImage(cv::Rect(0, height, width, height)));
+
+                    cv::imshow("Combined Feed", displayImage);
 
                     // Update scatter plot using the global circularities vector
                     std::unique_lock<std::mutex> lock(shared.circularitiesMutex);
@@ -333,7 +292,6 @@ void displayThreadTask(
 
                     if (shared.newScatterDataAvailable)
                     {
-                        // std::cout << "Updating scatter plot with " << shared.circularities.size() << " points" << std::endl;
                         updateScatterPlot(scatterPlot, shared.circularities);
                         cv::imshow("Scatter Plot", scatterPlot);
                         shared.newScatterDataAvailable = false;
@@ -370,25 +328,20 @@ void displayThreadTask(
                     if (!imageData.empty())
                     {
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
-                        cv::imshow("Live Feed", image);
 
                         // Process and display the binary image using processFrame
                         processFrame(imageData, width, height, shared, processedImage, false);
-                        // Find contour during pause
-                        ContourResult contourResult = findContours(processedImage);
-                        std::vector<std::vector<cv::Point>> contours = contourResult.contours;
 
-                        for (const auto &contour : contours) // debug purpose
-                        {
-                            if (contour.size() >= 5)
-                            { // Ensure there are enough points to calculate circularity
-                                auto [circularity, area] = calculateMetrics(contour);
-                                std::cout << "Contour metrics: Circularity = " << circularity << ", Area = " << area << std::endl;
-                            }
-                        }
-                        cv::imshow("Processed Feed", processedImage);
+                        // Concatenate live feed and processed feed
+                        cv::Mat topHalf, bottomHalf;
+                        cv::cvtColor(image, topHalf, cv::COLOR_GRAY2BGR);
+                        cv::cvtColor(processedImage, bottomHalf, cv::COLOR_GRAY2BGR);
+                        topHalf.copyTo(displayImage(cv::Rect(0, 0, width, height)));
+                        bottomHalf.copyTo(displayImage(cv::Rect(0, height, width, height)));
 
-                        cv::setTrackbarPos("Frame", "Live Feed", index);
+                        cv::imshow("Combined Feed", displayImage);
+
+                        cv::setTrackbarPos("Frame", "Combined Feed", index);
                         std::cout << "Displaying frame: " << index << std::endl;
                     }
                     else
@@ -474,6 +427,9 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
             { // ESC key
                 std::cout << "ESC pressed. Stopping capture..." << std::endl;
                 shared.done = true;
+                shared.displayQueueCondition.notify_all();
+                shared.processingQueueCondition.notify_all();
+                shared.savingCondition.notify_all();
             }
             else if (ch == 32)
             { // Space bar
@@ -570,121 +526,121 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
     std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
 
-void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
-{
-    shared.done = false;
-    shared.paused = false;
-    shared.currentFrameIndex = 0;
-    shared.displayNeedsUpdate = true;
-    shared.circularities.clear();
-    shared.qualifiedResults.clear();
-    shared.totalSavedResults = 0;
+// void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
+// {
+//     shared.done = false;
+//     shared.paused = false;
+//     shared.currentFrameIndex = 0;
+//     shared.displayNeedsUpdate = true;
+//     shared.circularities.clear();
+//     shared.qualifiedResults.clear();
+//     shared.totalSavedResults = 0;
 
-    // saving UI block
-    json config = readConfig("config.json");
-    std::string SAVE_DIRECTORY = config["save_directory"];
+//     // saving UI block
+//     json config = readConfig("config.json");
+//     std::string SAVE_DIRECTORY = config["save_directory"];
 
-    std::cout << "Current save directory: " << SAVE_DIRECTORY << std::endl;
-    std::cout << "Do you want to use this directory or enter a new one? (1: use current / 2: enter new): ";
-    int choice;
-    std::cin >> choice;
+//     std::cout << "Current save directory: " << SAVE_DIRECTORY << std::endl;
+//     std::cout << "Do you want to use this directory or enter a new one? (1: use current / 2: enter new): ";
+//     int choice;
+//     std::cin >> choice;
 
-    if (choice == 2)
-    {
-        std::cout << "Enter new save directory name: ";
-        std::cin >> SAVE_DIRECTORY;
+//     if (choice == 2)
+//     {
+//         std::cout << "Enter new save directory name: ";
+//         std::cin >> SAVE_DIRECTORY;
 
-        // Update the config file with the new base directory
-        updateConfig("config.json", "save_directory", SAVE_DIRECTORY);
-    }
+//         // Update the config file with the new base directory
+//         updateConfig("config.json", "save_directory", SAVE_DIRECTORY);
+//     }
 
-    // Automatically increment the directory name if it already exists
-    std::string baseName = SAVE_DIRECTORY;
-    int suffix = 1;
-    while (std::filesystem::exists(SAVE_DIRECTORY))
-    {
-        SAVE_DIRECTORY = baseName + "_" + std::to_string(suffix);
-        suffix++;
-    }
+//     // Automatically increment the directory name if it already exists
+//     std::string baseName = SAVE_DIRECTORY;
+//     int suffix = 1;
+//     while (std::filesystem::exists(SAVE_DIRECTORY))
+//     {
+//         SAVE_DIRECTORY = baseName + "_" + std::to_string(suffix);
+//         suffix++;
+//     }
 
-    // Ensure the directory exists
-    std::filesystem::create_directories(SAVE_DIRECTORY);
+//     // Ensure the directory exists
+//     std::filesystem::create_directories(SAVE_DIRECTORY);
 
-    std::cout << "Using save directory: " << SAVE_DIRECTORY << std::endl;
-    //
+//     std::cout << "Using save directory: " << SAVE_DIRECTORY << std::endl;
+//     //
 
-    std::thread processingThread(processingThreadTask,
-                                 std::ref(shared.done), std::ref(shared.paused),
-                                 std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
-                                 std::ref(shared.framesToProcess), std::ref(circularBuffer),
-                                 params.width, params.height, std::ref(shared));
+//     std::thread processingThread(processingThreadTask,
+//                                  std::ref(shared.done), std::ref(shared.paused),
+//                                  std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
+//                                  std::ref(shared.framesToProcess), std::ref(circularBuffer),
+//                                  params.width, params.height, std::ref(shared));
 
-    std::thread displayThread(displayThreadTask,
-                              std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-                              std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
-                              std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
-                              params.width, params.height, params.bufferCount, std::ref(shared));
+//     std::thread displayThread(displayThreadTask,
+//                               std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
+//                               std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
+//                               std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
+//                               params.width, params.height, params.bufferCount, std::ref(shared));
 
-    std::thread keyboardThread(keyboardHandlingThread,
-                               std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-                               std::ref(shared.displayNeedsUpdate),
-                               std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
+//     std::thread keyboardThread(keyboardHandlingThread,
+//                                std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
+//                                std::ref(shared.displayNeedsUpdate),
+//                                std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
-    std::thread cameraSimThread(simulateCameraThread,
-                                std::ref(shared.done), std::ref(shared.paused),
-                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
+//     std::thread cameraSimThread(simulateCameraThread,
+//                                 std::ref(shared.done), std::ref(shared.paused),
+//                                 std::ref(cameraBuffer), std::ref(shared), std::ref(params));
 
-    std::thread resultSavingThread(resultSavingThread, std::ref(shared), SAVE_DIRECTORY);
+//     std::thread resultSavingThread(resultSavingThread, std::ref(shared), SAVE_DIRECTORY);
 
-    size_t lastProcessedFrame = 0;
-    while (!shared.done)
-    {
-        if (shared.paused)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
+//     size_t lastProcessedFrame = 0;
+//     while (!shared.done)
+//     {
+//         if (shared.paused)
+//         {
+//             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+//             continue;
+//         }
 
-        size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
-        if (latestFrame != lastProcessedFrame)
-        {
-            const uint8_t *imageData = cameraBuffer.getPointer(latestFrame);
-            if (imageData != nullptr)
-            {
-                circularBuffer.push(imageData);
+//         size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
+//         if (latestFrame != lastProcessedFrame)
+//         {
+//             const uint8_t *imageData = cameraBuffer.getPointer(latestFrame);
+//             if (imageData != nullptr)
+//             {
+//                 circularBuffer.push(imageData);
 
-                {
-                    std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
-                    std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
-                    shared.framesToProcess.push(latestFrame);
-                    shared.framesToDisplay.push(latestFrame);
-                }
-                shared.displayQueueCondition.notify_one();
-                shared.processingQueueCondition.notify_one();
+//                 {
+//                     std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+//                     std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+//                     shared.framesToProcess.push(latestFrame);
+//                     shared.framesToDisplay.push(latestFrame);
+//                 }
+//                 shared.displayQueueCondition.notify_one();
+//                 shared.processingQueueCondition.notify_one();
 
-                lastProcessedFrame = latestFrame;
+//                 lastProcessedFrame = latestFrame;
 
-                // Optional: Print frame grabbing information
-                static size_t frameCount = 0;
-                if (++frameCount % 100 == 0) // Print every 100 frames
-                {
-                    // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
-                }
-            }
-        }
-    }
-    // Signal all threads to stop
-    shared.displayQueueCondition.notify_all();
-    shared.processingQueueCondition.notify_all();
-    shared.savingCondition.notify_all();
-    std::cout << "Joining threads..." << std::endl;
-    processingThread.join();
-    displayThread.join();
-    keyboardThread.join();
-    cameraSimThread.join();
-    resultSavingThread.join();
-    std::cout << "Mock sampling completed or interrupted." << std::endl;
-}
+//                 // Optional: Print frame grabbing information
+//                 static size_t frameCount = 0;
+//                 if (++frameCount % 100 == 0) // Print every 100 frames
+//                 {
+//                     // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
+//                 }
+//             }
+//         }
+//     }
+//     // Signal all threads to stop
+//     shared.displayQueueCondition.notify_all();
+//     shared.processingQueueCondition.notify_all();
+//     shared.savingCondition.notify_all();
+//     std::cout << "Joining threads..." << std::endl;
+//     processingThread.join();
+//     displayThread.join();
+//     keyboardThread.join();
+//     cameraSimThread.join();
+//     resultSavingThread.join();
+//     std::cout << "Mock sampling completed or interrupted." << std::endl;
+// }
 
 void resultSavingThread(SharedResources &shared, const std::string &saveDirectory)
 {
@@ -733,4 +689,136 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
         }
     }
     std::cout << "Result saving thread interrupted." << std::endl;
+}
+
+void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
+                       std::function<void(SharedResources &, const std::string &)> setupThreads)
+{
+    shared.done = false;
+    shared.paused = false;
+    shared.currentFrameIndex = 0;
+    shared.displayNeedsUpdate = true;
+    shared.circularities.clear();
+    shared.qualifiedResults.clear();
+    shared.totalSavedResults = 0;
+
+    // saving UI block
+    json config = readConfig("config.json");
+    std::string saveDir = config["save_directory"];
+
+    std::cout << "Current save directory: " << saveDir << std::endl;
+    std::cout << "Do you want to use this directory or enter a new one? (1: use current / 2: enter new): ";
+    int choice;
+    std::cin >> choice;
+
+    if (choice == 2)
+    {
+        std::cout << "Enter new save directory name: ";
+        std::cin >> saveDir;
+
+        // Update the config file with the new base directory
+        updateConfig("config.json", "save_directory", saveDir);
+    }
+
+    // Automatically increment the directory name if it already exists
+    std::string baseName = saveDir;
+    int suffix = 1;
+    while (std::filesystem::exists(saveDir))
+    {
+        saveDir = baseName + "_" + std::to_string(suffix);
+        suffix++;
+    }
+
+    // Ensure the directory exists
+    std::filesystem::create_directories(saveDir);
+
+    std::cout << "Using save directory: " << saveDir << std::endl;
+
+    // Call the setup function passed as parameter
+    setupThreads(shared, saveDir);
+
+    // Wait for completion
+    shared.displayQueueCondition.notify_all();
+    shared.processingQueueCondition.notify_all();
+    shared.savingCondition.notify_all();
+    std::cout << "Joining threads..." << std::endl;
+}
+
+void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
+                        const CircularBuffer &circularBuffer, const ImageParams &params,
+                        std::vector<std::thread> &threads)
+{
+    threads.emplace_back(processingThreadTask,
+                         std::ref(shared.done), std::ref(shared.paused),
+                         std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
+                         std::ref(shared.framesToProcess), std::ref(circularBuffer),
+                         params.width, params.height, std::ref(shared));
+
+    threads.emplace_back(displayThreadTask,
+                         std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
+                         std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
+                         std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
+                         params.width, params.height, params.bufferCount, std::ref(shared));
+
+    threads.emplace_back(keyboardHandlingThread,
+                         std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
+                         std::ref(shared.displayNeedsUpdate),
+                         std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
+
+    threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
+}
+
+void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
+{
+    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
+                      {
+                          std::vector<std::thread> threads;
+                          setupCommonThreads(shared, saveDir, circularBuffer, params, threads);
+
+                          threads.emplace_back(simulateCameraThread,
+                                               std::ref(shared.done), std::ref(shared.paused),
+                                               std::ref(cameraBuffer), std::ref(shared), std::ref(params));
+
+                          size_t lastProcessedFrame = 0;
+                          while (!shared.done)
+                          {
+                              if (shared.paused)
+                              {
+                                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                  continue;
+                              }
+                              size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
+                              if (latestFrame != lastProcessedFrame)
+                              {
+                                  const uint8_t *imageData = cameraBuffer.getPointer(latestFrame);
+                                  if (imageData != nullptr)
+                                  {
+                                      circularBuffer.push(imageData);
+
+                                      {
+                                          std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+                                          std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+                                          shared.framesToProcess.push(latestFrame);
+                                          shared.framesToDisplay.push(latestFrame);
+                                      }
+                                      shared.displayQueueCondition.notify_one();
+                                      shared.processingQueueCondition.notify_one();
+                                      lastProcessedFrame = latestFrame;
+
+                                      // Optional: Print frame grabbing information
+                                      static size_t frameCount = 0;
+                                      if (++frameCount % 100 == 0) // Print every 100 frames
+                                      {
+                                          // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
+                                      }
+                                  }
+                              }
+                          }
+                          // Signal all threads to stop
+
+                          std::cout << "Joining threads..." << std::endl;
+                          for (auto &thread : threads)
+                          {
+                              thread.join();
+                          } });
 }

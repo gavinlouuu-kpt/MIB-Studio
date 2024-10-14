@@ -8,8 +8,11 @@
 #include <tuple>
 #include <opencv2/opencv.hpp>
 #include <chrono>
+#include <json.hpp>
 
 #define M_PI 3.14159265358979323846 // pi
+
+using json = nlohmann::json;
 
 class CircularBuffer;
 
@@ -108,3 +111,6 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 void resultSavingThread(SharedResources &shared, const std::string &saveDirectory);
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
 int mock_grabber_main();
+json readConfig(const std::string &filename);
+bool updateConfig(const std::string &filename, const std::string &key, const json &value);
+void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared);

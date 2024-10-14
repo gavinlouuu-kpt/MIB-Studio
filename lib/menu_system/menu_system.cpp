@@ -40,9 +40,9 @@ namespace MenuSystem
 
             SharedResources shared;
             initializeMockBackgroundFrame(shared, params, cameraBuffer);
-            shared.roi = cv::Rect(0, 0, params.width, params.height);
+            shared.roi = cv::Rect(0, 0, static_cast<int>(params.width), static_cast<int>(params.height));
 
-            mockSample(params, cameraBuffer, circularBuffer, shared);
+            temp_mockSample(params, cameraBuffer, circularBuffer, shared);
 
             std::cout << "Mock sampling completed.\n";
         }
@@ -55,6 +55,7 @@ namespace MenuSystem
     void runLiveSample()
     {
         // Placeholder for live sampling implementation
+
         std::cout << "Live sampling not implemented yet.\n";
     }
 

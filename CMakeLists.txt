@@ -22,8 +22,8 @@ include_directories(
     ${PROJECT_ROOT_DIR}/lib/image_processing
     ${PROJECT_ROOT_DIR}/lib/menu_system
     ${PROJECT_ROOT_DIR}/lib/json
+    ${PROJECT_ROOT_DIR}/lib/egrabber
     ${OpenCV_INCLUDE_DIRS}
-    # "C:/Program Files/Euresys/eGrabber/include"
 )
 
 # Collect all header files
@@ -69,13 +69,8 @@ function(create_opencv_executable name)
 endfunction()
 
 # Create executables for each test
-# create_opencv_executable(main_test)
+create_opencv_executable(main_test)
 create_opencv_executable(mock_grabber)
-# create_opencv_executable(process_load_test)
-# create_opencv_executable(main_optimize_test)
-# create_opencv_executable(cgy_test)
-# You can add more executables here as needed
-# create_opencv_executable(another_test)
 
 message(STATUS "OpenCV_DIR is set to: ${OpenCV_DIR}")
 message(STATUS "OpenCV_LIBS: ${OpenCV_LIBS}")
