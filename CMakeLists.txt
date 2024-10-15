@@ -20,6 +20,7 @@ set(SOURCES
     src/image_processing/image_processing_threads.cpp
     src/menu_system/menu_system.cpp
     src/CircularBuffer/CircularBuffer.cpp
+    src/mib_grabber/mib_grabber.cpp
     # Add other source files here
 )
 
@@ -55,6 +56,7 @@ foreach(test_source ${TEST_SOURCES})
         src/image_processing/image_processing_threads.cpp
         src/menu_system/menu_system.cpp
         src/CircularBuffer/CircularBuffer.cpp
+        src/mib_grabber/mib_grabber.cpp
 
     )
     target_include_directories(${test_name} PRIVATE 
