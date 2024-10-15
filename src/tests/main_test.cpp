@@ -12,13 +12,13 @@
 #include <conio.h>
 #include <chrono>
 #include <iomanip>
-#include <CircularBuffer.h>
+#include <CircularBuffer/CircularBuffer.h>
 #include <tuple>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
-#include <image_processing.h>
-#include <menu_system.h>
-#include <json.hpp>
+#include <image_processing/image_processing.h>
+#include <menu_system/menu_system.h>
+#include <nlohmann/json.hpp>
 // #include <../egrabber_config.h>
 
 #define M_PI 3.14159265358979323846 // pi

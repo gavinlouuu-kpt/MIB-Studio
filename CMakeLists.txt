@@ -23,7 +23,7 @@ set(SOURCES
     # Add other source files here
 )
 
-# Add executable
+# Add main executable
 add_executable(${PROJECT_NAME} ${SOURCES})
 
 # Include directories
@@ -45,3 +45,30 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${OpenCV_LIBS}
 )
 
+# Build test executables
+file(GLOB TEST_SOURCES "src/tests/*.cpp")
+foreach(test_source ${TEST_SOURCES})
+    get_filename_component(test_name ${test_source} NAME_WE)
+    add_executable(${test_name} ${test_source}
+        src/image_processing/image_processing_core.cpp
+        src/image_processing/image_processing_utils.cpp
+        src/image_processing/image_processing_threads.cpp
+        src/menu_system/menu_system.cpp
+        src/CircularBuffer/CircularBuffer.cpp
+
+    )
+    target_include_directories(${test_name} PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/EGrabber
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(${test_name} PRIVATE 
+        Matplot++::matplot
+        ftxui::screen
+        ftxui::dom
+        ftxui::component
+        nlohmann_json::nlohmann_json
+        ${OpenCV_LIBS}
+    )
+endforeach()

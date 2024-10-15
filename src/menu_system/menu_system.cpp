@@ -4,7 +4,7 @@
 #include "image_processing/image_processing.h"
 #include "CircularBuffer/CircularBuffer.h"
 #include "menu_system/menu_system.h"
-#include <EGrabber/EGrabber.h>
+#include <EGrabber.h>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/component/component.hpp>
