@@ -32,6 +32,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${OpenCV_INCLUDE_DIRS}
 )
+# Separately include the EGrabber folder for the nested files
+include_directories(${PROJECT_SOURCE_DIR}/include/EGrabber)
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE 
