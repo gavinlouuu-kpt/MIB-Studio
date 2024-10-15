@@ -5,6 +5,10 @@
 #include "CircularBuffer/CircularBuffer.h"
 #include "menu_system/menu_system.h"
 #include <EGrabber/EGrabber.h>
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/screen_interactive.hpp>
 
 namespace MenuSystem
 {
@@ -82,31 +86,59 @@ namespace MenuSystem
 
     int runMenu()
     {
-        int choice;
-        do
-        {
-            displayMenu();
-            std::cin >> choice;
-            clearInputBuffer();
+        using namespace ftxui;
 
-            switch (choice)
+        int selected = 0;
+        std::vector<std::string> entries = {
+            "Run Mock Sample",
+            "Run Live Sample",
+            "Convert Saved Images",
+            "Exit"};
+
+        auto menu = Menu(&entries, &selected);
+
+        auto screen = ScreenInteractive::TerminalOutput();
+
+        bool quit = false;
+
+        auto renderer = Renderer(menu, [&]
+                                 { return vbox({
+                                       text("=== Cell Analysis Menu ===") | bold | color(Color::Blue),
+                                       separator(),
+                                       menu->Render() | frame | border,
+                                   }); });
+
+        auto event_handler = CatchEvent(renderer, [&](Event event)
+                                        {
+            if (event == Event::Return) {
+                quit = true;
+                screen.ExitLoopClosure()();
+                return true;
+            }
+            return false; });
+
+        screen.Loop(event_handler);
+
+        if (quit)
+        {
+            switch (selected)
             {
-            case 1:
+            case 0:
                 runMockSample();
                 break;
-            case 2:
+            case 1:
                 runLiveSample();
                 break;
-            case 3:
+            case 2:
                 convertSavedImages();
                 break;
-            case 4:
+            case 3:
                 std::cout << "Exiting program.\n";
                 return 0;
-            default:
-                std::cout << "Invalid choice. Please try again.\n";
             }
-        } while (true);
+        }
+
+        return runMenu(); // Recursive call to show menu again after action
     }
 
 } // namespace MenuSystem
