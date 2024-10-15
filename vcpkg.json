@@ -1,0 +1,8 @@
+{
+  "dependencies": [
+    "ftxui",
+    "matplotplusplus",
+    "opencv4",
+    "nlohmann-json"
+  ]
+}

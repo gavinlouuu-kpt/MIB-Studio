@@ -1,87 +1,101 @@
-# Switch Docker to create Windows containers
+# Cell Analysis Project
 
-# Install Hyper-V
-Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All
+## Getting Started
 
-# Install Containers
-Enable-WindowsOptionalFeature -Online -FeatureName Containers -All
+To start the project, follow these steps:
 
+1. Navigate to the root of the project where CMakeLists.txt and README.md are located.
 
-# MIB-Studio Project Setup Guide
+2. Run the following command to set up vcpkg and install the relevant libraries:
 
-This guide will help you set up and run the MIB-Studio project, even if you have little programming experience. If you don't have a hardware camera, you'll be using the `mock_grabber` test.
-
-## Prerequisites
-
-1. Windows 10 or later
-2. Visual Studio 2022 Community Edition (or later)
-3. CMake (version 3.20 or later)
-4. OpenCV (version 4.5 or later)
-
-## Installation Steps
-
-### 1. Install Visual Studio 2022 Community Edition
-
-- Download from: https://visualstudio.microsoft.com/vs/community/
-- During installation, make sure to select "Desktop development with C++"
-
-### 2. Install CMake
-
-- Download from: https://cmake.org/download/
-- Choose the Windows x64 Installer
-- During installation, select the option to add CMake to the system PATH
-
-### 3. Install OpenCV
-
-- Download from: https://opencv.org/releases/
-- Choose the Windows version
-- Extract the downloaded file to a location of your choice (e.g., `C:\opencv`)
-
-### 4. Set up Environment Variables
-
-1. Search for "Environment Variables" in the Windows start menu
-2. Click on "Edit the system environment variables"
-3. Click the "Environment Variables" button
-4. Under "System variables", find "Path" and click "Edit"
-5. Click "New" and add the path to OpenCV's bin directory (e.g., `C:\opencv\build\x64\vc16\bin`)
-
-### 5. Clone or Download the MIB-Studio Project
-
-- If you're familiar with Git, clone the repository
-- Otherwise, download the project as a ZIP file and extract it
-
-### 6. Configure the Project
-
-1. Open a command prompt in the project directory
-2. Create a build directory:
    ```
-   mkdir build
+   cmake --preset=default
+   ```
+
+   This will start vcpkg to install the required libraries into the build folder.
+
+3. Enter the build folder:
+
+   ```
    cd build
    ```
-3. Run CMake:
+
+4. Generate the build files:
+
    ```
-   cmake .. -DOpenCV_DIR=C:/opencv/build
+   cmake ..
    ```
-   Replace `C:/opencv/build` with the actual path to your OpenCV build directory
 
-### 7. Build the Project
+5. Build the project in Release configuration:
 
-1. Open the generated `MockGrabberProject.sln` file in Visual Studio 2022
-2. In the Solution Explorer, right-click on the `mock_grabber` project
-3. Select "Set as Startup Project"
-4. Click on "Build" in the top menu, then "Build Solution"
+   ```
+   cmake --build . --config Release
+   ```
+## Project Structure
 
-## Running the Tests
+The project is organized into several key components:
 
-To run the `mock_grabber` test:
+1. **Main Application** (`src/main.cpp`): The entry point of the application, which sets up and runs the menu system.
 
-1. In Visual Studio, make sure `mock_grabber` is set as the startup project
-2. Click on "Debug" in the top menu, then "Start Without Debugging" (or press Ctrl+F5)
-3. When prompted, enter the path to a directory containing test images
+2. **Menu System** (`src/menu_system/menu_system.cpp`): Handles user interaction and directs the program flow based on user choices.
 
-## Troubleshooting
+3. **Image Processing** (`src/image_processing/`):
+   - `image_processing_core.cpp`: Contains core image processing functions.
+   - `image_processing_threads.cpp`: Implements multi-threaded image processing tasks.
 
-- If you encounter any "file not found" errors, double-check your OpenCV installation path and environment variables
-- Make sure all required DLLs are in the same directory as the executable or in your system PATH
+4. **Circular Buffer** (`src/CircularBuffer/`): A custom circular buffer implementation for efficient image data management.
 
-For more detailed information or if you encounter any issues, please refer to the project documentation or seek assistance from the project maintainers.
+## Features
+
+1. **Mock Sample**: Allows processing of pre-recorded images for testing and development purposes.
+2. **Live Sample**: (Placeholder) For future implementation of real-time image capture and processing.
+3. **Convert Saved Images**: Converts binary image files to a standard format for further analysis.
+
+## Usage
+
+1. Run the application.
+2. Choose from the following options in the menu:
+   - Run Mock Sample
+   - Run Live Sample (not yet implemented)
+   - Convert Saved Images
+   - Exit
+
+### Running a Mock Sample
+
+1. Select "Run Mock Sample" from the menu.
+2. Enter the path to the directory containing the sample images when prompted.
+3. The program will process the images, displaying results in real-time.
+4. Use keyboard controls during processing:
+   - ESC: Stop capture
+   - Space: Pause/Resume
+   - 'a': Move to older frame
+   - 'd': Move to newer frame
+   - 'q': Clear circularities vector
+   - 's': Save current frames
+
+### Converting Saved Images
+
+1. Select "Convert Saved Images" from the menu.
+2. Enter the path to the binary image file when prompted.
+3. Enter the output directory for converted images.
+4. The program will convert the binary images to a standard format.
+
+## Dependencies
+
+- vcpkg (for managing most libraries)
+- EGrabber (embedded)
+- Matplotplusplus (requires gnuplot)
+- OpenCV
+- nlohmann/json
+
+## Building
+
+1. Ensure vcpkg is installed and properly configured in CMakeUserPresets.json.
+2. Run `cmake --preset=default` in the project root directory.
+3. Build the project using your preferred method (e.g., Visual Studio, command-line tools).
+
+## Notes
+
+- The live sampling feature is not yet implemented.
+- Ensure all dependencies are properly installed before building the project.
+- For any issues or questions, please refer to the project documentation or contact the development team.

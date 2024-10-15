@@ -4,23 +4,26 @@
 #include <cstdint>
 #include <stdexcept>
 
-class CircularBuffer {
+class CircularBuffer
+{
 public:
     CircularBuffer(size_t size, size_t imageSize);
-    void push(const uint8_t* data);
+    void push(const uint8_t *data);
     std::vector<uint8_t> get(size_t index) const;
-    const uint8_t* getPointer(size_t index) const;
+    const uint8_t *getPointer(size_t index) const;
     size_t size() const;
     bool isFull() const;
 
-    class Iterator {
+    class Iterator
+    {
     public:
-        Iterator(const CircularBuffer& buffer, size_t index);
+        Iterator(const CircularBuffer &buffer, size_t index);
         std::vector<uint8_t> operator*() const;
-        Iterator& operator++();
-        bool operator!=(const Iterator& other) const;
+        Iterator &operator++();
+        bool operator!=(const Iterator &other) const;
+
     private:
-        const CircularBuffer& buffer_;
+        const CircularBuffer &buffer_;
         size_t index_;
     };
 

@@ -1,9 +1,10 @@
 #include <iostream>
 #include <string>
 #include <limits>
-#include "image_processing.h"
-#include "CircularBuffer.h"
-#include "menu_system.h"
+#include "image_processing/image_processing.h"
+#include "CircularBuffer/CircularBuffer.h"
+#include "menu_system/menu_system.h"
+#include <EGrabber/EGrabber.h>
 
 namespace MenuSystem
 {

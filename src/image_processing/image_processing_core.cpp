@@ -1,5 +1,5 @@
-#include "image_processing.h"
-#include "CircularBuffer.h"
+#include "image_processing/image_processing.h"
+#include "CircularBuffer/CircularBuffer.h"
 
 thread_local struct ThreadLocalMats
 {

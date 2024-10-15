@@ -1,5 +1,5 @@
-#include "image_processing.h"
-#include "CircularBuffer.h"
+#include "image_processing/image_processing.h"
+#include "CircularBuffer/CircularBuffer.h"
 #include <chrono>
 #include <iostream>
 #include <conio.h>
@@ -7,7 +7,7 @@
 #include <fstream>   // Add this for file operations
 #include <string>    // Add this for std::string
 #include <stdexcept> // Add this for std::runtime_error
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
