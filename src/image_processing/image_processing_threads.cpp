@@ -42,7 +42,6 @@ void simulateCameraThread(
                 lastFrameTime = now;
                 if (++frameCount % 5000 == 0)
                 {
-                    // Optional: Print frame processing information
                 }
             }
             else
@@ -54,10 +53,11 @@ void simulateCameraThread(
         if (std::chrono::duration_cast<std::chrono::seconds>(now - fpsStartTime).count() >= 5)
         {
             double fps = frameCount / std::chrono::duration<double>(now - fpsStartTime).count();
-            // std::cout << "Current FPS: " << fps << std::endl;
+            shared.currentFPS.store(fps, std::memory_order_release);
             frameCount = 0;
             fpsStartTime = now;
         }
+        shared.updated = true;
     }
     std::cout << "Camera thread interrupted." << std::endl;
 }
@@ -65,16 +65,23 @@ void simulateCameraThread(
 void metricDisplayThread(SharedResources &shared)
 {
     using namespace ftxui;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // sleep for 1ms to allow other things to be printed first
 
     auto render_processing_metrics = [&]()
     {
         return window(text("Processing Metrics"), vbox({
-                                                      hbox({text("Avg Processing Time: "),
+                                                      hbox({text("Instant Processing Time: "),
+                                                            text(std::to_string(shared.instantProcessingTime.load()) + " us")}),
+                                                      hbox({text("Avg Processing Time (5 sec): "),
                                                             text(std::to_string(shared.averageProcessingTime.load()) + " us")}),
                                                       hbox({text("Max Processing Time: "),
                                                             text(std::to_string(shared.maxProcessingTime.load()) + " us")}),
                                                       hbox({text("Min Processing Time: "),
                                                             text(std::to_string(shared.minProcessingTime.load()) + " us")}),
+                                                      hbox({text("Processing Queue Size: "),
+                                                            text(std::to_string(shared.framesToProcess.size()) + " frames")}),
+                                                      hbox({text("Circularities Size: "),
+                                                            text(std::to_string(shared.circularities.size()) + " sets")}),
                                                   }));
     };
 
@@ -88,6 +95,20 @@ void metricDisplayThread(SharedResources &shared)
                                               }));
     };
 
+    auto render_roi = [&]()
+    {
+        return window(text("ROI"), vbox({
+                                       hbox({text("X: "),
+                                             text(std::to_string(shared.roi.x))}),
+                                       hbox({text("Y: "),
+                                             text(std::to_string(shared.roi.y))}),
+                                       hbox({text("Width: "),
+                                             text(std::to_string(shared.roi.width))}),
+                                       hbox({text("Height: "),
+                                             text(std::to_string(shared.roi.height))}),
+                                   }));
+    };
+
     auto render_status = [&]()
     {
         return window(text("Status"), vbox({
@@ -95,6 +116,9 @@ void metricDisplayThread(SharedResources &shared)
                                                 text(shared.paused.load() ? "Yes" : "No")}),
                                           hbox({text("Current Frame Index: "),
                                                 text(std::to_string(shared.currentFrameIndex.load()))}),
+                                          hbox({text("Saving Speed: "),
+                                                text(std::to_string(shared.diskSaveTime.load()) + " ms")}),
+
                                       }));
     };
 
@@ -119,6 +143,7 @@ void metricDisplayThread(SharedResources &shared)
             auto document = hbox({
                 render_processing_metrics(),
                 render_camera_metrics(),
+                render_roi(),
                 render_status(),
                 render_keyboard_instructions(),
             });
@@ -187,37 +212,50 @@ void processingThreadTask(
             // Calculate deformability and circularity for each contour
             {
                 std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
-                bool qualifiedContourFound = false;
+                // bool qualifiedContourFound = false;
                 for (const auto &contour : contours)
                 {
                     if (contour.size() >= 10)
                     {
+                        // Check if contour touches the edge of ROI
+                        bool touchesBorder = false;
+                        for (const auto &point : contour)
+                        {
+                            if (point.x == shared.roi.x || point.x == shared.roi.x + shared.roi.width - 1 ||
+                                point.y == shared.roi.y || point.y == shared.roi.y + shared.roi.height - 1)
+                            {
+                                touchesBorder = true;
+                                break;
+                            }
+                        }
+                        // Skip if it touches the border
+                        if (touchesBorder)
+                        {
+                            continue;
+                        }
                         auto [circularity, area] = calculateMetrics(contour);
                         shared.circularities.emplace_back(circularity, area);
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
-                        qualifiedContourFound = true;
-                    }
-                }
+                        // qualifiedContourFound = true;
+                        QualifiedResult qualifiedResult;
+                        qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                        qualifiedResult.circularity = circularity;
+                        qualifiedResult.area = area;
+                        // qualifiedResult.contourResult = contourResult;
+                        qualifiedResult.originalImage = image.clone();
 
-                // If a qualified contour is found, save the result
-                if (qualifiedContourFound)
-                {
-                    QualifiedResult qualifiedResult;
-                    qualifiedResult.contourResult = contourResult;
-                    qualifiedResult.originalImage = image.clone();
-                    qualifiedResult.timestamp = std::chrono::system_clock::now();
+                        std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                        auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
+                        currentBuffer.push_back(std::move(qualifiedResult));
 
-                    std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
-                    auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
-                    currentBuffer.push_back(std::move(qualifiedResult));
-
-                    // Check if we need to switch buffers
-                    if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
-                    {
-                        shared.usingBuffer1 = !shared.usingBuffer1;
-                        shared.savingInProgress = true;
-                        shared.savingCondition.notify_one();
+                        // Check if we need to switch buffers
+                        if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
+                        {
+                            shared.usingBuffer1 = !shared.usingBuffer1;
+                            shared.savingInProgress = true;
+                            shared.savingCondition.notify_one();
+                        }
                     }
                 }
             }
@@ -226,6 +264,7 @@ void processingThreadTask(
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
 
             double processingTime = duration.count(); // measure in microseconds
+            shared.instantProcessingTime = processingTime;
             totalProcessingTime += processingTime;
             totalFindTime += contourFindTime;
 
@@ -603,122 +642,6 @@ void keyboardHandlingThread(
     std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
 
-// void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
-// {
-//     shared.done = false;
-//     shared.paused = false;
-//     shared.currentFrameIndex = 0;
-//     shared.displayNeedsUpdate = true;
-//     shared.circularities.clear();
-//     shared.qualifiedResults.clear();
-//     shared.totalSavedResults = 0;
-
-//     // saving UI block
-//     json config = readConfig("config.json");
-//     std::string SAVE_DIRECTORY = config["save_directory"];
-
-//     std::cout << "Current save directory: " << SAVE_DIRECTORY << std::endl;
-//     std::cout << "Do you want to use this directory or enter a new one? (1: use current / 2: enter new): ";
-//     int choice;
-//     std::cin >> choice;
-
-//     if (choice == 2)
-//     {
-//         std::cout << "Enter new save directory name: ";
-//         std::cin >> SAVE_DIRECTORY;
-
-//         // Update the config file with the new base directory
-//         updateConfig("config.json", "save_directory", SAVE_DIRECTORY);
-//     }
-
-//     // Automatically increment the directory name if it already exists
-//     std::string baseName = SAVE_DIRECTORY;
-//     int suffix = 1;
-//     while (std::filesystem::exists(SAVE_DIRECTORY))
-//     {
-//         SAVE_DIRECTORY = baseName + "_" + std::to_string(suffix);
-//         suffix++;
-//     }
-
-//     // Ensure the directory exists
-//     std::filesystem::create_directories(SAVE_DIRECTORY);
-
-//     std::cout << "Using save directory: " << SAVE_DIRECTORY << std::endl;
-//     //
-
-//     std::thread processingThread(processingThreadTask,
-//                                  std::ref(shared.done), std::ref(shared.paused),
-//                                  std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
-//                                  std::ref(shared.framesToProcess), std::ref(circularBuffer),
-//                                  params.width, params.height, std::ref(shared));
-
-//     std::thread displayThread(displayThreadTask,
-//                               std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-//                               std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
-//                               std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
-//                               params.width, params.height, params.bufferCount, std::ref(shared));
-
-//     std::thread keyboardThread(keyboardHandlingThread,
-//                                std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-//                                std::ref(shared.displayNeedsUpdate),
-//                                std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
-
-//     std::thread cameraSimThread(simulateCameraThread,
-//                                 std::ref(shared.done), std::ref(shared.paused),
-//                                 std::ref(cameraBuffer), std::ref(shared), std::ref(params));
-
-//     std::thread resultSavingThread(resultSavingThread, std::ref(shared), SAVE_DIRECTORY);
-
-//     size_t lastProcessedFrame = 0;
-//     while (!shared.done)
-//     {
-//         if (shared.paused)
-//         {
-//             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-//             continue;
-//         }
-
-//         size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
-//         if (latestFrame != lastProcessedFrame)
-//         {
-//             const uint8_t *imageData = cameraBuffer.getPointer(latestFrame);
-//             if (imageData != nullptr)
-//             {
-//                 circularBuffer.push(imageData);
-
-//                 {
-//                     std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
-//                     std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
-//                     shared.framesToProcess.push(latestFrame);
-//                     shared.framesToDisplay.push(latestFrame);
-//                 }
-//                 shared.displayQueueCondition.notify_one();
-//                 shared.processingQueueCondition.notify_one();
-
-//                 lastProcessedFrame = latestFrame;
-
-//                 // Optional: Print frame grabbing information
-//                 static size_t frameCount = 0;
-//                 if (++frameCount % 100 == 0) // Print every 100 frames
-//                 {
-//                     // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
-//                 }
-//             }
-//         }
-//     }
-//     // Signal all threads to stop
-//     shared.displayQueueCondition.notify_all();
-//     shared.processingQueueCondition.notify_all();
-//     shared.savingCondition.notify_all();
-//     std::cout << "Joining threads..." << std::endl;
-//     processingThread.join();
-//     displayThread.join();
-//     keyboardThread.join();
-//     cameraSimThread.join();
-//     resultSavingThread.join();
-//     std::cout << "Mock sampling completed or interrupted." << std::endl;
-// }
-
 void resultSavingThread(SharedResources &shared, const std::string &saveDirectory)
 {
     while (!shared.done)
@@ -747,9 +670,10 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
         if (!bufferToSave.empty())
         {
             auto start = std::chrono::steady_clock::now();
-            saveQualifiedResultsToDisk(bufferToSave, saveDirectory);
+            saveQualifiedResultsToDisk(bufferToSave, saveDirectory, shared);
             auto end = std::chrono::steady_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            shared.diskSaveTime = duration.count();
 
             shared.totalSavedResults += bufferToSave.size();
             shared.lastSaveTime = end;

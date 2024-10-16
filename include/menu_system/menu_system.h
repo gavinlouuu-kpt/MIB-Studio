@@ -11,5 +11,6 @@ namespace MenuSystem
     void runLiveSample();
     void convertSavedImages();
     int runMenu();
+    void processAllBatches(const std::string &saveDirectory);
 
 } // namespace MenuSystem

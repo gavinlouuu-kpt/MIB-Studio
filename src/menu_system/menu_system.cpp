@@ -9,6 +9,7 @@
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
+#include <filesystem>
 
 namespace MenuSystem
 {
@@ -66,22 +67,52 @@ namespace MenuSystem
 
     void convertSavedImages()
     {
-        std::string binaryImageFile, outputDirectory;
+        std::string saveDirectory;
 
-        std::cout << "Enter the path to the binary image file: ";
-        std::getline(std::cin, binaryImageFile);
-
-        std::cout << "Enter the output directory for converted images: ";
-        std::getline(std::cin, outputDirectory);
+        std::cout << "Enter the path to the save directory containing batch folders: ";
+        std::getline(std::cin, saveDirectory);
 
         try
         {
-            convertSavedImagesToStandardFormat(binaryImageFile, outputDirectory);
+            processAllBatches(saveDirectory);
         }
         catch (const std::exception &e)
         {
             std::cerr << "Error: " << e.what() << std::endl;
         }
+    }
+
+    void processAllBatches(const std::string &saveDirectory)
+    {
+        namespace fs = std::filesystem;
+
+        for (const auto &entry : fs::directory_iterator(saveDirectory))
+        {
+            if (entry.is_directory() && entry.path().filename().string().find("batch_") == 0)
+            {
+                std::string batchPath = entry.path().string();
+                std::string imagesBinPath = batchPath + "/images.bin";
+
+                if (fs::exists(imagesBinPath))
+                {
+                    std::cout << "Processing: " << imagesBinPath << std::endl;
+                    try
+                    {
+                        convertSavedImagesToStandardFormat(imagesBinPath, batchPath);
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::cerr << "Error processing " << imagesBinPath << ": " << e.what() << std::endl;
+                    }
+                }
+                else
+                {
+                    std::cout << "Skipping " << batchPath << ": images.bin not found" << std::endl;
+                }
+            }
+        }
+
+        std::cout << "Finished processing all batches." << std::endl;
     }
 
     int runMenu()

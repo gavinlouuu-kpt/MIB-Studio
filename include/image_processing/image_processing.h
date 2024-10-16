@@ -33,9 +33,11 @@ struct ContourResult
 
 struct QualifiedResult
 {
-    ContourResult contourResult;
+    // ContourResult contourResult;
+    int64_t timestamp;
+    double circularity;
+    double area;
     cv::Mat originalImage;
-    std::chrono::system_clock::time_point timestamp;
 };
 
 // struct ProcessingMetrics
@@ -69,6 +71,7 @@ struct SharedResources
     std::mutex backgroundFrameMutex;
     cv::Rect roi;
     std::mutex roiMutex;
+
     std::vector<QualifiedResult> qualifiedResults;
     std::mutex qualifiedResultsMutex;
     std::vector<QualifiedResult> qualifiedResultsBuffer1;
@@ -78,7 +81,9 @@ struct SharedResources
     std::atomic<bool> savingInProgress{false};
     std::atomic<size_t> totalSavedResults{0};
     std::chrono::steady_clock::time_point lastSaveTime;
+    std::atomic<double> diskSaveTime;
 
+    std::atomic<double> instantProcessingTime;
     std::atomic<double> averageProcessingTime;
     std::atomic<double> maxProcessingTime;
     std::atomic<double> minProcessingTime;
@@ -118,12 +123,10 @@ void keyboardHandlingThread(
     const CircularBuffer &circularBuffer,
     size_t bufferCount, size_t width, size_t height,
     SharedResources &shared);
-void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer,
-                CircularBuffer &circularBuffer, SharedResources &shared);
-void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory);
+// void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory);
+void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared);
 void resultSavingThread(SharedResources &shared, const std::string &saveDirectory);
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
-int mock_grabber_main();
 json readConfig(const std::string &filename);
 bool updateConfig(const std::string &filename, const std::string &key, const json &value);
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared);

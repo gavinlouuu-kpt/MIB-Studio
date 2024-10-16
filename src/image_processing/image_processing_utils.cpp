@@ -81,32 +81,36 @@ void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &p
     std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
 }
 
-void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory)
+void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared)
 {
     static int batchNumber = 0;
     std::string batchDir = directory + "/batch_" + std::to_string(batchNumber++);
     std::filesystem::create_directories(batchDir);
 
-    std::ofstream batchFile(batchDir + "/batch_data.bin", std::ios::binary);
+    std::string csvFilePath = batchDir + "/batch_data.csv";
+    std::ofstream csvFile(csvFilePath);
+
     std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
 
-    for (size_t i = 0; i < results.size(); ++i)
+    // Write CSV header
+    csvFile << "Timestamp_us,Circularity,Area\n";
+
+    // Add this block to handle the ROI image
+    if (!results.empty())
     {
-        const auto &result = results[i];
+        cv::Mat roiImage = results[0].originalImage.clone();
+        cv::rectangle(roiImage, shared.roi, cv::Scalar(255, 255, 255), 2); // Draw white rectangle
+        cv::imwrite(batchDir + "/roi_image.png", roiImage);
+    }
 
-        // Save contour and timestamp data
-        batchFile.write(reinterpret_cast<const char *>(&result.contourResult.findTime), sizeof(double));
-        size_t contourCount = result.contourResult.contours.size();
-        batchFile.write(reinterpret_cast<const char *>(&contourCount), sizeof(size_t));
-        for (const auto &contour : result.contourResult.contours)
-        {
-            size_t pointCount = contour.size();
-            batchFile.write(reinterpret_cast<const char *>(&pointCount), sizeof(size_t));
-            batchFile.write(reinterpret_cast<const char *>(contour.data()), pointCount * sizeof(cv::Point));
-        }
-        batchFile.write(reinterpret_cast<const char *>(&result.timestamp), sizeof(std::chrono::system_clock::time_point));
+    for (const auto &result : results)
+    {
+        // Write data to CSV
+        csvFile << result.timestamp << ","
+                << result.circularity << ","
+                << result.area << "\n";
 
-        // Save image metadata
+        // Save image metadata and data (unchanged)
         int rows = result.originalImage.rows;
         int cols = result.originalImage.cols;
         int type = result.originalImage.type();
@@ -114,7 +118,6 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
         imageFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
         imageFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
 
-        // Save raw image data
         if (result.originalImage.isContinuous())
         {
             imageFile.write(reinterpret_cast<const char *>(result.originalImage.data), result.originalImage.total() * result.originalImage.elemSize());
@@ -127,6 +130,8 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
             }
         }
     }
+    csvFile.close();
+    imageFile.close();
 
     // std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
 }
