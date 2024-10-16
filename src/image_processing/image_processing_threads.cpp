@@ -8,13 +8,16 @@
 #include <string>    // Add this for std::string
 #include <stdexcept> // Add this for std::runtime_error
 #include <nlohmann/json.hpp>
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/string.hpp>
 
 using json = nlohmann::json;
 
 namespace fs = std::filesystem;
-void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
-                          CircularBuffer &cameraBuffer, SharedResources &shared,
-                          const ImageParams &params)
+void simulateCameraThread(
+    CircularBuffer &cameraBuffer, SharedResources &shared,
+    const ImageParams &params)
 {
     using clock = std::chrono::high_resolution_clock;
 
@@ -51,7 +54,7 @@ void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
         if (std::chrono::duration_cast<std::chrono::seconds>(now - fpsStartTime).count() >= 5)
         {
             double fps = frameCount / std::chrono::duration<double>(now - fpsStartTime).count();
-            std::cout << "Current FPS: " << fps << std::endl;
+            // std::cout << "Current FPS: " << fps << std::endl;
             frameCount = 0;
             fpsStartTime = now;
         }
@@ -59,12 +62,84 @@ void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
-void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
-                          std::mutex &processingQueueMutex,
-                          std::condition_variable &processingQueueCondition,
-                          std::queue<size_t> &framesToProcess,
-                          const CircularBuffer &circularBuffer,
-                          size_t width, size_t height, SharedResources &shared)
+void metricDisplayThread(SharedResources &shared)
+{
+    using namespace ftxui;
+
+    auto render_processing_metrics = [&]()
+    {
+        return window(text("Processing Metrics"), vbox({
+                                                      hbox({text("Avg Processing Time: "),
+                                                            text(std::to_string(shared.averageProcessingTime.load()) + " us")}),
+                                                      hbox({text("Max Processing Time: "),
+                                                            text(std::to_string(shared.maxProcessingTime.load()) + " us")}),
+                                                      hbox({text("Min Processing Time: "),
+                                                            text(std::to_string(shared.minProcessingTime.load()) + " us")}),
+                                                  }));
+    };
+
+    auto render_camera_metrics = [&]()
+    {
+        return window(text("Camera Metrics"), vbox({
+                                                  hbox({text("Current FPS: "),
+                                                        text(std::to_string(shared.currentFPS.load()))}),
+                                                  hbox({text("Images in Queue: "),
+                                                        text(std::to_string(shared.imagesInQueue.load()))}),
+                                              }));
+    };
+
+    auto render_status = [&]()
+    {
+        return window(text("Status"), vbox({
+                                          hbox({text("Paused: "),
+                                                text(shared.paused.load() ? "Yes" : "No")}),
+                                          hbox({text("Current Frame Index: "),
+                                                text(std::to_string(shared.currentFrameIndex.load()))}),
+                                      }));
+    };
+
+    auto render_keyboard_instructions = [&]()
+    {
+        return window(text("Keyboard Instructions"), vbox({
+                                                         text("ESC: Exit"),
+                                                         text("Space: Pause/Resume"),
+                                                         text("Space: Background frame"),
+                                                         text("A: Move to older frame"),
+                                                         text("D: Move to newer frame"),
+                                                         text("Q: Clear circularities"),
+                                                         text("S: Save current frame"),
+                                                     }));
+    };
+
+    std::string reset_position;
+    while (!shared.done)
+    {
+        if (shared.updated)
+        {
+            auto document = hbox({
+                render_processing_metrics(),
+                render_camera_metrics(),
+                render_status(),
+                render_keyboard_instructions(),
+            });
+
+            auto screen = Screen::Create(Dimension::Full(), Dimension::Fit(document));
+            Render(screen, document);
+            std::cout << reset_position;
+            screen.Print();
+            reset_position = screen.ResetPosition();
+            shared.updated = false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+void processingThreadTask(
+    std::mutex &processingQueueMutex,
+    std::condition_variable &processingQueueCondition,
+    std::queue<size_t> &framesToProcess,
+    const CircularBuffer &circularBuffer,
+    size_t width, size_t height, SharedResources &shared)
 {
     auto lastPrintTime = std::chrono::steady_clock::now();
     int frameCount = 0;
@@ -163,16 +238,16 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
             {
                 double averageProcessingTime = totalProcessingTime / frameCount;
                 double averageFindTime = totalFindTime / frameCount;
-                std::cout << "Average processing time over last " << frameCount << " frames: "
-                          << averageProcessingTime << " us" << std::endl;
-                std::cout << "Average contour find time: " << averageFindTime << " us" << std::endl;
+                // std::cout << "Average processing time over last " << frameCount << " frames: "
+                //           << averageProcessingTime << " us" << std::endl;
+                // std::cout << "Average contour find time: " << averageFindTime << " us" << std::endl;
 
-                // // Debugging statement
-                std::cout << "Qualified result pushed. Buffer 1 size: "
-                          << shared.qualifiedResultsBuffer1.size()
-                          << ", Buffer 2 size: "
-                          << shared.qualifiedResultsBuffer2.size()
-                          << " / " << BUFFER_THRESHOLD << std::endl;
+                // // // Debugging statement
+                // std::cout << "Qualified result pushed. Buffer 1 size: "
+                //           << shared.qualifiedResultsBuffer1.size()
+                //           << ", Buffer 2 size: "
+                //           << shared.qualifiedResultsBuffer2.size()
+                //           << " / " << BUFFER_THRESHOLD << std::endl;
 
                 // Reset counters and update last print time
                 frameCount = 0;
@@ -180,6 +255,13 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
                 totalFindTime = 0.0;
                 lastPrintTime = currentTime;
             }
+
+            // Update metrics
+            shared.totalFramesProcessed++;
+            shared.averageProcessingTime = (shared.averageProcessingTime * (shared.totalFramesProcessed - 1) + processingTime) / shared.totalFramesProcessed;
+            // shared.averageFindTime = (shared.averageFindTime * (shared.totalFramesProcessed - 1) + contourFindTime) / shared.totalFramesProcessed;
+            shared.qualifiedResultCount = shared.qualifiedResultCount.load();
+            shared.updated = true;
         }
         else
         {
@@ -190,10 +272,6 @@ void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
 }
 
 void displayThreadTask(
-    const std::atomic<bool> &done,
-    const std::atomic<bool> &paused,
-    const std::atomic<int> &currentFrameIndex,
-    std::atomic<bool> &displayNeedsUpdate,
     std::queue<size_t> &framesToDisplay,
     std::mutex &displayQueueMutex,
     const CircularBuffer &circularBuffer,
@@ -318,9 +396,9 @@ void displayThreadTask(
         }
         else
         {
-            if (displayNeedsUpdate)
+            if (shared.displayNeedsUpdate)
             {
-                int index = currentFrameIndex;
+                int index = shared.currentFrameIndex;
                 if (index >= 0 && index < circularBuffer.size())
                 {
                     auto imageData = circularBuffer.get(index);
@@ -342,7 +420,7 @@ void displayThreadTask(
                         cv::imshow("Combined Feed", displayImage);
 
                         cv::setTrackbarPos("Frame", "Combined Feed", index);
-                        std::cout << "Displaying frame: " << index << std::endl;
+                        // std::cout << "Displaying frame: " << index << std::endl;
                     }
                     else
                     {
@@ -353,7 +431,7 @@ void displayThreadTask(
                 {
                     std::cout << "Invalid frame index: " << index << std::endl;
                 }
-                displayNeedsUpdate = false;
+                shared.displayNeedsUpdate = false;
             }
             cv::waitKey(1); // Process GUI events
         }
@@ -411,12 +489,10 @@ void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, doubl
     cv::putText(plot, "Area", cv::Point(10, 200), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1, cv::LINE_AA, true);
 }
 
-void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
-                            std::atomic<int> &currentFrameIndex,
-                            std::atomic<bool> &displayNeedsUpdate,
-                            const CircularBuffer &circularBuffer,
-                            size_t bufferCount, size_t width, size_t height,
-                            SharedResources &shared)
+void keyboardHandlingThread(
+    const CircularBuffer &circularBuffer,
+    size_t bufferCount, size_t width, size_t height,
+    SharedResources &shared)
 {
     while (!shared.done)
     {
@@ -425,7 +501,7 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
             int ch = _getch();
             if (ch == 27)
             { // ESC key
-                std::cout << "ESC pressed. Stopping capture..." << std::endl;
+                // std::cout << "ESC pressed. Stopping capture..." << std::endl;
                 shared.done = true;
                 shared.displayQueueCondition.notify_all();
                 shared.processingQueueCondition.notify_all();
@@ -441,56 +517,56 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
                     // std::cout << "EGrabber Frame Rate: " << fr << " FPS" << std::endl;
                     // std::cout << "EGrabber Data Rate: " << dr << " MB/s" << std::endl;
                     // grabber.stop();
-                    currentFrameIndex = 0;
-                    auto BackgroundImageData = circularBuffer.get(currentFrameIndex);
+                    shared.currentFrameIndex = 0;
+                    auto BackgroundImageData = circularBuffer.get(shared.currentFrameIndex);
                     {
                         std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
                         shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, BackgroundImageData.data()).clone();
                         cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
                     }
 
-                    std::cout << "Background frame captured and blurred." << std::endl;
+                    // std::cout << "Background frame captured and blurred." << std::endl;
 
-                    std::cout << "Paused" << std::endl;
-                    displayNeedsUpdate = true;
+                    // std::cout << "Paused" << std::endl;
+                    shared.displayNeedsUpdate = true;
                 }
                 else
                 {
                     // grabber.start();
-                    std::cout << "Resumed" << std::endl;
+                    // std::cout << "Resumed" << std::endl;
                 }
             }
             else if (ch == 97)
             { // 'a' key - move to older frame
-                if (currentFrameIndex < circularBuffer.size() - 1)
+                if (shared.currentFrameIndex < circularBuffer.size() - 1)
                 {
-                    currentFrameIndex++;
-                    std::cout << "a key pressed\nMoved to older frame. Current Frame Index: " << currentFrameIndex << std::endl;
-                    displayNeedsUpdate = true;
+                    shared.currentFrameIndex++;
+                    // std::cout << "a key pressed\nMoved to older frame. Current Frame Index: " << shared.currentFrameIndex << std::endl;
+                    shared.displayNeedsUpdate = true;
                 }
                 else
                 {
-                    std::cout << "Already at oldest frame." << std::endl;
+                    // std::cout << "Already at oldest frame." << std::endl;
                 }
             }
             else if (ch == 100)
             { // 'd' key - move to newer frame
-                if (currentFrameIndex > 0)
+                if (shared.currentFrameIndex > 0)
                 {
-                    currentFrameIndex--;
-                    std::cout << "d key pressed\nMoved to newer frame. Current Frame Index: " << currentFrameIndex << std::endl;
-                    displayNeedsUpdate = true;
+                    shared.currentFrameIndex--;
+                    // std::cout << "d key pressed\nMoved to newer frame. Current Frame Index: " << shared.currentFrameIndex << std::endl;
+                    shared.displayNeedsUpdate = true;
                 }
                 else
                 {
-                    std::cout << "Already at newest frame." << std::endl;
+                    // std::cout << "Already at newest frame." << std::endl;
                 }
             }
             else if (ch == 113)
             { // 'q' key
                 std::lock_guard<std::mutex> lock(shared.circularitiesMutex);
                 shared.circularities.clear();
-                std::cout << "Circularities vector cleared." << std::endl;
+                // std::cout << "Circularities vector cleared." << std::endl;
             }
             else if (ch == 115)
             { // 's' key - save the current frame
@@ -501,7 +577,7 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
                 }
 
                 size_t frameCount = circularBuffer.size();
-                std::cout << "Saving " << frameCount << " frames..." << std::endl;
+                // std::cout << "Saving " << frameCount << " frames..." << std::endl;
 
                 for (size_t i = 0; i < frameCount; ++i)
                 {
@@ -515,12 +591,13 @@ void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
                     std::filesystem::path fullPath = outputDir / filename;
 
                     cv::imwrite(fullPath.string(), image);
-                    std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
+                    // std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
                 }
 
                 std::cout << "\nAll frames saved in the 'output' directory." << std::endl;
             }
         }
+        shared.updated = true;
         std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small sleep to reduce CPU usage
     }
     std::cout << "Keyboard handling thread interrupted." << std::endl;
@@ -677,9 +754,9 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
             shared.totalSavedResults += bufferToSave.size();
             shared.lastSaveTime = end;
 
-            std::cout << "Saved " << bufferToSave.size() << " results to disk. "
-                      << "Total saved: " << shared.totalSavedResults
-                      << ". Time taken: " << duration.count() << " ms" << std::endl;
+            // std::cout << "Saved " << bufferToSave.size() << " results to disk. "
+            //           << "Total saved: " << shared.totalSavedResults
+            //           << ". Time taken: " << duration.count() << " ms" << std::endl;
         }
 
         // Mark saving as complete
@@ -687,6 +764,7 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
             std::lock_guard<std::mutex> lock(shared.qualifiedResultsMutex);
             shared.savingInProgress = false;
         }
+        shared.updated = true;
     }
     std::cout << "Result saving thread interrupted." << std::endl;
 }
@@ -696,7 +774,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 {
     shared.done = false;
     shared.paused = false;
-    shared.currentFrameIndex = 0;
+    shared.currentFrameIndex = -1;
     shared.displayNeedsUpdate = true;
     shared.circularities.clear();
     shared.qualifiedResults.clear();
@@ -749,20 +827,15 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         std::vector<std::thread> &threads)
 {
     threads.emplace_back(processingThreadTask,
-                         std::ref(shared.done), std::ref(shared.paused),
                          std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
                          std::ref(shared.framesToProcess), std::ref(circularBuffer),
                          params.width, params.height, std::ref(shared));
 
-    threads.emplace_back(displayThreadTask,
-                         std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-                         std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
+    threads.emplace_back(displayThreadTask, std::ref(shared.framesToDisplay),
                          std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
                          params.width, params.height, params.bufferCount, std::ref(shared));
 
     threads.emplace_back(keyboardHandlingThread,
-                         std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-                         std::ref(shared.displayNeedsUpdate),
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
@@ -776,9 +849,9 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                           setupCommonThreads(shared, saveDir, circularBuffer, params, threads);
 
                           threads.emplace_back(simulateCameraThread,
-                                               std::ref(shared.done), std::ref(shared.paused),
                                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
 
+                           threads.emplace_back(metricDisplayThread, std::ref(shared));
                           size_t lastProcessedFrame = 0;
                           while (!shared.done)
                           {

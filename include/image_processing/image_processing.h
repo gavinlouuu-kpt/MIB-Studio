@@ -38,6 +38,14 @@ struct QualifiedResult
     std::chrono::system_clock::time_point timestamp;
 };
 
+// struct ProcessingMetrics
+// {
+//     std::atomic<double> averageProcessingTime{0.0};
+//     std::atomic<double> averageFindTime{0.0};
+//     std::atomic<int> qualifiedResultCount{0};
+//     std::atomic<bool> updated{false};
+// };
+
 struct SharedResources
 {
     std::atomic<bool> done{false};
@@ -70,6 +78,15 @@ struct SharedResources
     std::atomic<bool> savingInProgress{false};
     std::atomic<size_t> totalSavedResults{0};
     std::chrono::steady_clock::time_point lastSaveTime;
+
+    std::atomic<double> averageProcessingTime;
+    std::atomic<double> maxProcessingTime;
+    std::atomic<double> minProcessingTime;
+    std::atomic<double> currentFPS;
+    std::atomic<size_t> imagesInQueue;
+    std::atomic<size_t> qualifiedResultCount;
+    std::atomic<size_t> totalFramesProcessed;
+    std::atomic<bool> updated;
 };
 
 // Function declarations
@@ -80,31 +97,27 @@ void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t he
                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
 ContourResult findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
-void simulateCameraThread(std::atomic<bool> &done, std::atomic<bool> &paused,
-                          CircularBuffer &cameraBuffer, SharedResources &shared,
-                          const ImageParams &params);
-void processingThreadTask(std::atomic<bool> &done, std::atomic<bool> &paused,
-                          std::mutex &processingQueueMutex,
-                          std::condition_variable &processingQueueCondition,
-                          std::queue<size_t> &framesToProcess,
-                          const CircularBuffer &circularBuffer,
-                          size_t width, size_t height, SharedResources &shared);
+void simulateCameraThread(
+    CircularBuffer &cameraBuffer, SharedResources &shared,
+    const ImageParams &params);
+void processingThreadTask(
+    std::mutex &processingQueueMutex,
+    std::condition_variable &processingQueueCondition,
+    std::queue<size_t> &framesToProcess,
+    const CircularBuffer &circularBuffer,
+    size_t width, size_t height, SharedResources &shared);
 void onTrackbar(int pos, void *userdata);
 void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities);
-void displayThreadTask(const std::atomic<bool> &done, const std::atomic<bool> &paused,
-                       const std::atomic<int> &currentFrameIndex,
-                       std::atomic<bool> &displayNeedsUpdate,
-                       std::queue<size_t> &framesToDisplay,
-                       std::mutex &displayQueueMutex,
-                       const CircularBuffer &circularBuffer,
-                       size_t width, size_t height, size_t bufferCount,
-                       SharedResources &shared);
-void keyboardHandlingThread(std::atomic<bool> &done, std::atomic<bool> &paused,
-                            std::atomic<int> &currentFrameIndex,
-                            std::atomic<bool> &displayNeedsUpdate,
-                            const CircularBuffer &circularBuffer,
-                            size_t bufferCount, size_t width, size_t height,
-                            SharedResources &shared);
+void displayThreadTask(
+    std::queue<size_t> &framesToDisplay,
+    std::mutex &displayQueueMutex,
+    const CircularBuffer &circularBuffer,
+    size_t width, size_t height, size_t bufferCount,
+    SharedResources &shared);
+void keyboardHandlingThread(
+    const CircularBuffer &circularBuffer,
+    size_t bufferCount, size_t width, size_t height,
+    SharedResources &shared);
 void mockSample(const ImageParams &params, CircularBuffer &cameraBuffer,
                 CircularBuffer &circularBuffer, SharedResources &shared);
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory);
@@ -114,3 +127,6 @@ int mock_grabber_main();
 json readConfig(const std::string &filename);
 bool updateConfig(const std::string &filename, const std::string &key, const json &value);
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared);
+
+// Add this new function declaration
+void metricDisplayThread(SharedResources &shared);

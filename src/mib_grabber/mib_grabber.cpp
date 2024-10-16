@@ -105,18 +105,13 @@ void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params, Ci
     std::cout << "Using save directory: " << SAVE_DIRECTORY << std::endl;
 
     std::thread processingThread(processingThreadTask,
-                                 std::ref(shared.done), std::ref(shared.paused),
                                  std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
                                  std::ref(shared.framesToProcess), std::ref(circularBuffer),
                                  params.width, params.height, std::ref(shared));
-    std::thread displayThread(displayThreadTask,
-                              std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-                              std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
+    std::thread displayThread(displayThreadTask, std::ref(shared.framesToDisplay),
                               std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
                               params.width, params.height, params.bufferCount, std::ref(shared));
-    std::thread keyboardThread(keyboardHandlingThread,
-                               std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-                               std::ref(shared.displayNeedsUpdate), std::ref(circularBuffer),
+    std::thread keyboardThread(keyboardHandlingThread, std::ref(circularBuffer),
                                params.bufferCount, params.width, params.height, std::ref(shared));
     std::thread resultSavingThread(resultSavingThread, std::ref(shared), SAVE_DIRECTORY);
 

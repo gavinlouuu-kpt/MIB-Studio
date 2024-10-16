@@ -128,7 +128,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
         }
     }
 
-    std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
+    // std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
 }
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
