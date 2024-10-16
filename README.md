@@ -4,7 +4,9 @@
 
 To start the project, follow these steps:
 
-1. Navigate to the root of the project where CMakeLists.txt and README.md are located.
+Before starting the project, you will need to install Visual Studio 2022 community edition with C++ development tools. A package manager called vcpkg is included in the installation; add the tool's path to PATH and create a system variable "VCPKG_ROOT" that corresponds to the path to vcpkg. Then, modify the CMakeUserPreset to point the vcpkg path to the path on your system.
+
+1. Navigate to the project's root, where CMakeLists.txt and README.md are located.
 
 2. Run the following command to set up vcpkg and install the relevant libraries:
 
