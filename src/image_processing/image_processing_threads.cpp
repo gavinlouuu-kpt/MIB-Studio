@@ -694,7 +694,7 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
 }
 
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
-                       std::function<void(SharedResources &, const std::string &)> setupThreads)
+                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads)
 {
     shared.done = false;
     shared.paused = false;
@@ -737,13 +737,17 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     std::cout << "Using save directory: " << saveDir << std::endl;
 
     // Call the setup function passed as parameter
-    setupThreads(shared, saveDir);
+    std::vector<std::thread> threads = setupThreads(shared, saveDir);
 
     // Wait for completion
     shared.displayQueueCondition.notify_all();
     shared.processingQueueCondition.notify_all();
     shared.savingCondition.notify_all();
     std::cout << "Joining threads..." << std::endl;
+    for (auto &thread : threads)
+    {
+        thread.join();
+    }
 }
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
@@ -803,19 +807,13 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                                       lastProcessedFrame = latestFrame;
 
                                       // Optional: Print frame grabbing information
-                                      static size_t frameCount = 0;
-                                      if (++frameCount % 100 == 0) // Print every 100 frames
-                                      {
-                                          // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
-                                      }
+                                    //   static size_t frameCount = 0;
+                                    //   if (++frameCount % 100 == 0) // Print every 100 frames
+                                    //   {
+                                    //       // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
+                                    //   }
                                   }
                               }
                           }
-                          // Signal all threads to stop
-
-                          std::cout << "Joining threads..." << std::endl;
-                          for (auto &thread : threads)
-                          {
-                              thread.join();
-                          } });
+                          return threads; });
 }

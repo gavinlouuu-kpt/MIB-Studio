@@ -31,11 +31,179 @@ namespace MenuSystem
         std::cout << "Enter your choice: ";
     }
 
+    std::string navigateAndSelectFolder()
+    {
+        namespace fs = std::filesystem;
+        fs::path currentPath = fs::current_path();
+
+        auto screen = ftxui::ScreenInteractive::TerminalOutput();
+        std::string selectedPath;
+
+        auto updateEntries = [&]()
+        {
+            std::vector<std::string> entries;
+            for (const auto &entry : fs::directory_iterator(currentPath))
+            {
+                if (entry.is_directory())
+                {
+                    entries.push_back(entry.path().filename().string());
+                }
+            }
+            return entries;
+        };
+
+        std::vector<std::string> entries = updateEntries();
+        int selected = 0;
+
+        auto menu = ftxui::Menu(&entries, &selected);
+
+        auto renderer = ftxui::Renderer(menu, [&]
+                                        {
+        std::string parentDir = currentPath.parent_path().string();
+        std::string currentDir = currentPath.string();
+        
+        return ftxui::vbox({
+            ftxui::hbox({
+                ftxui::vbox({
+                    ftxui::text("Parent:"),
+                    ftxui::text(parentDir) | ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, 30)
+                }) | ftxui::border,
+                ftxui::vbox({
+                    ftxui::text("Current:"),
+                    ftxui::text(currentDir),
+                    ftxui::separator(),
+                    menu->Render()
+                }) | ftxui::flex | ftxui::border,
+            }),
+            ftxui::text("Press ESC to return to main menu") | ftxui::color(ftxui::Color::GrayDark),
+        }); });
+
+        auto component = ftxui::CatchEvent(renderer, [&](ftxui::Event event)
+                                           {
+        if (event == ftxui::Event::Escape) {
+            selectedPath = "";
+            screen.ExitLoopClosure()();
+            return true;
+        }
+        if (event == ftxui::Event::Return) {
+            selectedPath = (currentPath / entries[selected]).string();
+            screen.ExitLoopClosure()();
+            return true;
+        }
+        if (event == ftxui::Event::ArrowLeft) {
+            currentPath = currentPath.parent_path();
+            entries = updateEntries();
+            selected = 0;
+            return true;
+        }
+        if (event == ftxui::Event::ArrowRight && !entries.empty()) {
+            currentPath /= entries[selected];
+            entries = updateEntries();
+            selected = 0;
+            return true;
+        }
+        return false; });
+
+        screen.Loop(component);
+
+        return selectedPath;
+    }
+
+    std::string navigateAndSelectFile()
+    {
+        namespace fs = std::filesystem;
+        fs::path currentPath = fs::current_path();
+
+        auto screen = ftxui::ScreenInteractive::TerminalOutput();
+        std::string selectedFile;
+
+        auto updateEntries = [&]()
+        {
+            std::vector<std::string> entries;
+            entries.push_back(".."); // Add option to go up a directory
+            for (const auto &entry : fs::directory_iterator(currentPath))
+            {
+                if (entry.is_directory())
+                {
+                    entries.push_back(entry.path().filename().string() + "/");
+                }
+                else
+                {
+                    entries.push_back(entry.path().filename().string());
+                }
+            }
+            return entries;
+        };
+
+        std::vector<std::string> entries = updateEntries();
+        int selected = 0;
+
+        auto menu = ftxui::Menu(&entries, &selected);
+
+        auto renderer = ftxui::Renderer(menu, [&]
+                                        {
+        std::string parentDir = currentPath.parent_path().string();
+        std::string currentDir = currentPath.string();
+        
+        return ftxui::vbox({
+            ftxui::hbox({
+                ftxui::vbox({
+                    ftxui::text("Parent:"),
+                    ftxui::text(parentDir) | ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, 30)
+                }) | ftxui::border,
+                ftxui::vbox({
+                    ftxui::text("Current:"),
+                    ftxui::text(currentDir),
+                    ftxui::separator(),
+                    menu->Render()
+                }) | ftxui::flex | ftxui::border,
+            }),
+            ftxui::text("Press ESC to return to main menu") | ftxui::color(ftxui::Color::GrayDark),
+        }); });
+
+        auto component = ftxui::CatchEvent(renderer, [&](ftxui::Event event)
+                                           {
+        if (event == ftxui::Event::Escape) {
+            selectedFile = "";
+            screen.ExitLoopClosure()();
+            return true;
+        }
+        if (event == ftxui::Event::Return) {
+            if (selected == 0) {  // ".." option
+                currentPath = currentPath.parent_path();
+                entries = updateEntries();
+                selected = 0;
+            } else {
+                fs::path selectedPath = currentPath / entries[selected];
+                if (fs::is_directory(selectedPath)) {
+                    currentPath = selectedPath;
+                    entries = updateEntries();
+                    selected = 0;
+                } else {
+                    selectedFile = selectedPath.string();
+                    screen.ExitLoopClosure()();
+                }
+            }
+            return true;
+        }
+        return false; });
+
+        screen.Loop(component);
+
+        return selectedFile;
+    }
+
+    void egrabberConfig()
+    {
+        std::string configPath = navigateAndSelectFile();
+        configure_js(configPath);
+    }
+
     void runMockSample()
     {
-        std::string imageDirectory;
-        std::cout << "Enter the image directory path: ";
-        std::getline(std::cin, imageDirectory);
+
+        std::cout << "Select the image directory:\n";
+        std::string imageDirectory = navigateAndSelectFolder();
 
         try
         {
@@ -74,10 +242,10 @@ namespace MenuSystem
 
     void convertSavedImages()
     {
-        std::string saveDirectory;
+        std::string saveDirectory = navigateAndSelectFolder();
 
-        std::cout << "Enter the path to the save directory containing batch folders: ";
-        std::getline(std::cin, saveDirectory);
+        // std::cout << "Enter the path to the save directory containing batch folders: ";
+        // std::getline(std::cin, saveDirectory);
 
         try
         {
@@ -130,8 +298,8 @@ namespace MenuSystem
         std::vector<std::string> entries = {
             "Run Mock Sample",
             "Run Live Sample",
-            // "EGrabber Test",
             "Convert Saved Images",
+            "EGrabber Config",
             "Exit"};
 
         auto menu = Menu(&entries, &selected);
@@ -168,13 +336,13 @@ namespace MenuSystem
             case 1:
                 runLiveSample();
                 break;
-                // case 2:
-                //     runEGrabberTest();
-                // break;
             case 2:
                 convertSavedImages();
                 break;
             case 3:
+                egrabberConfig();
+                break;
+            case 4:
                 std::cout << "Exiting program.\n";
                 return 0;
             }

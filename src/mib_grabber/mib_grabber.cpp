@@ -45,20 +45,25 @@ void configure(EGrabber<CallbackOnDemand> &grabber)
     // ... (other configuration settings)
 }
 
-void configure_js()
+void configure_js(std::string config_path)
 {
     Euresys::EGenTL gentl;
     Euresys::EGrabber<> grabber(gentl);
-    grabber.runScript("config.js");
+    if (config_path.substr(config_path.size() - 3) != ".js")
+    {
+        throw std::runtime_error("Config path must end with .js");
+    }
+    grabber.runScript(config_path);
+    std::cout << "Config script executed successfully" << std::endl;
 }
 
-GrabberParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
+ImageParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
 {
     grabber.reallocBuffers(3);
     grabber.start(1);
     ScopedBuffer firstBuffer(grabber);
 
-    GrabberParams params;
+    ImageParams params;
     params.width = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_WIDTH);
     params.height = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_HEIGHT);
     params.pixelFormat = firstBuffer.getInfo<uint64_t>(gc::BUFFER_INFO_PIXELFORMAT);
@@ -69,126 +74,70 @@ GrabberParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
     return params;
 }
 
-void initializeBackgroundFrame(SharedResources &shared, const GrabberParams &params)
+void initializeBackgroundFrame(SharedResources &shared, const ImageParams &params)
 {
     std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
     shared.backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, cv::Scalar(255));
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
-void temp_sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params, CircularBuffer &circularBuffer, SharedResources &shared)
+void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, SharedResources &shared)
 {
-}
-void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params, CircularBuffer &circularBuffer, SharedResources &shared)
-{
-    shared.done = false;
-    shared.paused = false;
-    shared.currentFrameIndex = 0;
-    shared.displayNeedsUpdate = true;
-    shared.circularities.clear();
-    shared.qualifiedResults.clear();
-    shared.totalSavedResults = 0;
+    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
+                      {
+                          std::vector<std::thread> threads;
+                          setupCommonThreads(shared, saveDir, circularBuffer, params, threads);
+                          grabber.start();
+                          size_t frameCount = 0;
+                          uint64_t lastFrameId = 0;
+                          uint64_t duplicateCount = 0;
+                          while (!shared.done)
+                          {
+                              if (shared.paused)
+                              {
+                                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                  cv::waitKey(1);
+                                  continue;
+                              }
 
-    // saving UI block
-    json config = readConfig("config.json");
-    std::string SAVE_DIRECTORY = config["save_directory"];
+                              ScopedBuffer buffer(grabber);
+                              uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
+                              uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);
+                              uint64_t timestamp = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_TIMESTAMP);
+                              bool isIncomplete = buffer.getInfo<bool>(gc::BUFFER_INFO_IS_INCOMPLETE);
+                              size_t sizeFilled = buffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE_FILLED);
 
-    std::cout << "Current save directory: " << SAVE_DIRECTORY << std::endl;
-    std::cout << "Do you want to use this directory or enter a new one? (1: use current / 2: enter new): ";
-    int choice;
-    std::cin >> choice;
+                              if (!isIncomplete)
+                              {
+                                  if (frameId <= lastFrameId)
+                                  {
+                                      ++duplicateCount;
+                                      //   std::cout << "Duplicate frame detected: FrameID=" << frameId << ", Timestamp=" << timestamp << std::endl;
+                                  }
+                                  else
+                                  {
+                                      circularBuffer.push(imagePointer);
+                                      {
+                                          std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+                                          std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+                                          shared.framesToProcess.push(frameCount);
+                                          shared.framesToDisplay.push(frameCount);
+                                      }
+                                      shared.displayQueueCondition.notify_one();
+                                      shared.processingQueueCondition.notify_one();
+                                      frameCount++;
+                                  }
+                                  lastFrameId = frameId;
+                              }
+                              else
+                              {
+                                  //   std::cout << "Incomplete frame received: FrameID=" << frameId << std::endl;
+                              }
+                          }
 
-    if (choice == 2)
-    {
-        std::cout << "Enter new save directory name: ";
-        std::cin >> SAVE_DIRECTORY;
+                          grabber.stop();
 
-        // Update the config file with the new base directory
-        updateConfig("config.json", "save_directory", SAVE_DIRECTORY);
-    }
-
-    // Automatically increment the directory name if it already exists
-    std::string baseName = SAVE_DIRECTORY;
-    int suffix = 1;
-    while (std::filesystem::exists(SAVE_DIRECTORY))
-    {
-        SAVE_DIRECTORY = baseName + "_" + std::to_string(suffix);
-        suffix++;
-    }
-
-    // Ensure the directory exists
-    std::filesystem::create_directories(SAVE_DIRECTORY);
-
-    std::cout << "Using save directory: " << SAVE_DIRECTORY << std::endl;
-
-    std::thread processingThread(processingThreadTask,
-                                 std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
-                                 std::ref(shared.framesToProcess), std::ref(circularBuffer),
-                                 params.width, params.height, std::ref(shared));
-    std::thread displayThread(displayThreadTask, std::ref(shared.framesToDisplay),
-                              std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
-                              params.width, params.height, params.bufferCount, std::ref(shared));
-    std::thread keyboardThread(keyboardHandlingThread, std::ref(circularBuffer),
-                               params.bufferCount, params.width, params.height, std::ref(shared));
-    std::thread resultSavingThread(resultSavingThread, std::ref(shared), SAVE_DIRECTORY);
-
-    grabber.start();
-    size_t frameCount = 0;
-    uint64_t lastFrameId = 0;
-    uint64_t duplicateCount = 0;
-    while (!shared.done)
-    {
-        if (shared.paused)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            cv::waitKey(1);
-            continue;
-        }
-
-        ScopedBuffer buffer(grabber);
-        uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
-        uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);
-        uint64_t timestamp = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_TIMESTAMP);
-        bool isIncomplete = buffer.getInfo<bool>(gc::BUFFER_INFO_IS_INCOMPLETE);
-        size_t sizeFilled = buffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE_FILLED);
-
-        if (!isIncomplete)
-        {
-            if (frameId <= lastFrameId)
-            {
-                ++duplicateCount;
-                std::cout << "Duplicate frame detected: FrameID=" << frameId << ", Timestamp=" << timestamp << std::endl;
-            }
-            else
-            {
-                circularBuffer.push(imagePointer);
-                {
-                    std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
-                    std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
-                    shared.framesToProcess.push(frameCount);
-                    shared.framesToDisplay.push(frameCount);
-                }
-                shared.displayQueueCondition.notify_one();
-                shared.processingQueueCondition.notify_one();
-                frameCount++;
-            }
-            lastFrameId = frameId;
-        }
-        else
-        {
-            std::cout << "Incomplete frame received: FrameID=" << frameId << std::endl;
-        }
-    }
-
-    grabber.stop();
-    shared.displayQueueCondition.notify_all();
-    shared.processingQueueCondition.notify_all();
-    shared.savingCondition.notify_all();
-    std::cout << "Joining threads..." << std::endl;
-
-    processingThread.join();
-    displayThread.join();
-    keyboardThread.join();
+                          return threads; });
 }
 
 int mib_grabber_main()
@@ -197,20 +146,20 @@ int mib_grabber_main()
     {
 
         EGenTL genTL;
-        EGrabberDiscovery egrabberDiscovery(genTL);
-        egrabberDiscovery.discover();
-        EGrabber<CallbackOnDemand> grabber(egrabberDiscovery.cameras(0));
-        // grabber.runScript("config.js");
+        // EGrabberDiscovery egrabberDiscovery(genTL);
+        // egrabberDiscovery.discover();
+        EGrabber<CallbackOnDemand> grabber(genTL);
+        // grabber.runScript("check-config.js"); // figureout how to load config script
 
-        configure(grabber);
-        GrabberParams params = initializeGrabber(grabber);
+        // configure(grabber);
+        ImageParams params = initializeGrabber(grabber);
 
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
         SharedResources shared;
         initializeBackgroundFrame(shared, params);
         shared.roi = cv::Rect(0, 0, params.width, params.height);
 
-        sample(grabber, params, circularBuffer, shared);
+        temp_sample(grabber, params, circularBuffer, shared);
     }
     catch (const std::exception &e)
     {
