@@ -1,26 +1,26 @@
-#include <iostream>
-#include <filesystem>
-#include <EGrabber.h>
-#include <opencv2/opencv.hpp>
-#include <FormatConverter.h>
-#include <vector>
-#include <atomic>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <queue>
-#include <conio.h>
-#include <chrono>
-#include <iomanip>
-#include <CircularBuffer/CircularBuffer.h>
-#include <tuple>
-#include <opencv2/highgui.hpp>
-#include <opencv2/imgproc.hpp>
-#include <image_processing/image_processing.h>
-#include <menu_system/menu_system.h>
-#include <nlohmann/json.hpp>
-#include <mib_grabber/mib_grabber.h>
-// #include <../egrabber_config.h>
+// #include <iostream>
+// #include <filesystem>
+// #include <EGrabber.h>
+// #include <opencv2/opencv.hpp>
+// #include <FormatConverter.h>
+// #include <vector>
+// #include <atomic>
+// #include <thread>
+// #include <mutex>
+// #include <condition_variable>
+// #include <queue>
+// #include <conio.h>
+// #include <chrono>
+// #include <iomanip>
+// #include <CircularBuffer/CircularBuffer.h>
+// #include <tuple>
+// #include <opencv2/highgui.hpp>
+// #include <opencv2/imgproc.hpp>
+// #include <image_processing/image_processing.h>
+// #include <menu_system/menu_system.h>
+// #include <nlohmann/json.hpp>
+// // #include <mib_grabber/mib_grabber.h>
+// // #include <../egrabber_config.h>
 
 // #define M_PI 3.14159265358979323846 // pi
 
@@ -119,18 +119,13 @@
 //     std::cout << "Using save directory: " << SAVE_DIRECTORY << std::endl;
 
 //     std::thread processingThread(processingThreadTask,
-//                                  std::ref(shared.done), std::ref(shared.paused),
 //                                  std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
 //                                  std::ref(shared.framesToProcess), std::ref(circularBuffer),
 //                                  params.width, params.height, std::ref(shared));
-//     std::thread displayThread(displayThreadTask,
-//                               std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-//                               std::ref(shared.displayNeedsUpdate), std::ref(shared.framesToDisplay),
+//     std::thread displayThread(displayThreadTask, std::ref(shared.framesToDisplay),
 //                               std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
 //                               params.width, params.height, params.bufferCount, std::ref(shared));
-//     std::thread keyboardThread(keyboardHandlingThread,
-//                                std::ref(shared.done), std::ref(shared.paused), std::ref(shared.currentFrameIndex),
-//                                std::ref(shared.displayNeedsUpdate), std::ref(circularBuffer),
+//     std::thread keyboardThread(keyboardHandlingThread, std::ref(circularBuffer),
 //                                params.bufferCount, params.width, params.height, std::ref(shared));
 //     std::thread resultSavingThread(resultSavingThread, std::ref(shared), SAVE_DIRECTORY);
 
@@ -193,30 +188,35 @@
 //     keyboardThread.join();
 // }
 
+// int main()
+// {
+//     try
+//     {
+
+//         EGenTL genTL;
+//         EGrabberDiscovery egrabberDiscovery(genTL);
+//         egrabberDiscovery.discover();
+//         EGrabber<CallbackOnDemand> grabber(egrabberDiscovery.cameras(0));
+//         // grabber.runScript("config.js");
+
+//         configure(grabber);
+//         GrabberParams params = initializeGrabber(grabber);
+
+//         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
+//         SharedResources shared;
+//         initializeBackgroundFrame(shared, params);
+//         shared.roi = cv::Rect(0, 0, params.width, params.height);
+
+//         sample(grabber, params, circularBuffer, shared);
+//     }
+//     catch (const std::exception &e)
+//     {
+//         std::cout << "error: " << e.what() << std::endl;
+//     }
+//     return 0;
+// }
+
 int main()
 {
-    try
-    {
-
-        EGenTL genTL;
-        EGrabberDiscovery egrabberDiscovery(genTL);
-        egrabberDiscovery.discover();
-        EGrabber<CallbackOnDemand> grabber(egrabberDiscovery.cameras(0));
-        // grabber.runScript("config.js");
-
-        configure(grabber);
-        GrabberParams params = initializeGrabber(grabber);
-
-        CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
-        SharedResources shared;
-        initializeBackgroundFrame(shared, params);
-        shared.roi = cv::Rect(0, 0, params.width, params.height);
-
-        sample(grabber, params, circularBuffer, shared);
-    }
-    catch (const std::exception &e)
-    {
-        std::cout << "error: " << e.what() << std::endl;
-    }
     return 0;
 }

@@ -10,6 +10,7 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <filesystem>
+#include "mib_grabber/mib_grabber.h"
 
 namespace MenuSystem
 {
@@ -61,8 +62,14 @@ namespace MenuSystem
     void runLiveSample()
     {
         // Placeholder for live sampling implementation
-
-        std::cout << "Live sampling not implemented yet.\n";
+        try
+        {
+            mib_grabber_main();
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << e.what() << '\n';
+        }
     }
 
     void convertSavedImages()
@@ -123,6 +130,7 @@ namespace MenuSystem
         std::vector<std::string> entries = {
             "Run Mock Sample",
             "Run Live Sample",
+            // "EGrabber Test",
             "Convert Saved Images",
             "Exit"};
 
@@ -160,6 +168,9 @@ namespace MenuSystem
             case 1:
                 runLiveSample();
                 break;
+                // case 2:
+                //     runEGrabberTest();
+                // break;
             case 2:
                 convertSavedImages();
                 break;

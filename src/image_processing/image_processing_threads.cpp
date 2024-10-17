@@ -763,6 +763,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
+    threads.emplace_back(metricDisplayThread, std::ref(shared));
 }
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
@@ -775,7 +776,6 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                           threads.emplace_back(simulateCameraThread,
                                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
 
-                           threads.emplace_back(metricDisplayThread, std::ref(shared));
                           size_t lastProcessedFrame = 0;
                           while (!shared.done)
                           {

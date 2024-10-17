@@ -1,4 +1,3 @@
-#include <mib_grabber/mib_grabber.h>
 #include <iostream>
 #include <filesystem>
 #include <EGrabber.h>
@@ -20,8 +19,23 @@
 #include <image_processing/image_processing.h>
 #include <menu_system/menu_system.h>
 #include <nlohmann/json.hpp>
+// #include <mib_grabber/mib_grabber.h>
+// #include <../egrabber_config.h>
+
+#define M_PI 3.14159265358979323846 // pi
+
+cv::Mat backgroundFrame;
 
 using namespace Euresys;
+
+struct GrabberParams
+{
+    size_t width;
+    size_t height;
+    uint64_t pixelFormat;
+    size_t imageSize;
+    size_t bufferCount;
+};
 
 void configure(EGrabber<CallbackOnDemand> &grabber)
 {
@@ -62,6 +76,9 @@ void initializeBackgroundFrame(SharedResources &shared, const GrabberParams &par
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
+void temp_sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params, CircularBuffer &circularBuffer, SharedResources &shared)
+{
+}
 void sample(EGrabber<CallbackOnDemand> &grabber, const GrabberParams &params, CircularBuffer &circularBuffer, SharedResources &shared)
 {
     shared.done = false;
