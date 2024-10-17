@@ -34,7 +34,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${OpenCV_INCLUDE_DIRS}
 )
 # Separately include the EGrabber folder for the nested files
-include_directories(${PROJECT_SOURCE_DIR}/include/EGrabber)
+include_directories(${PROJECT_SOURCE_DIR}/include/EGrabber) // Use embedded EGrabber for software development but link the actual installation when using camera
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE 
