@@ -10,6 +10,7 @@ namespace MenuSystem
     void runMockSample();
     void runLiveSample();
     void convertSavedImages();
+    void egrabberConfig();
     int runMenu();
     void processAllBatches(const std::string &saveDirectory);
 

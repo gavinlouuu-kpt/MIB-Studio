@@ -102,34 +102,20 @@ void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t he
                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
 ContourResult findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
-void simulateCameraThread(
-    CircularBuffer &cameraBuffer, SharedResources &shared,
-    const ImageParams &params);
-void processingThreadTask(
-    std::mutex &processingQueueMutex,
-    std::condition_variable &processingQueueCondition,
-    std::queue<size_t> &framesToProcess,
-    const CircularBuffer &circularBuffer,
-    size_t width, size_t height, SharedResources &shared);
+
 void onTrackbar(int pos, void *userdata);
 void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities);
-void displayThreadTask(
-    std::queue<size_t> &framesToDisplay,
-    std::mutex &displayQueueMutex,
-    const CircularBuffer &circularBuffer,
-    size_t width, size_t height, size_t bufferCount,
-    SharedResources &shared);
-void keyboardHandlingThread(
-    const CircularBuffer &circularBuffer,
-    size_t bufferCount, size_t width, size_t height,
-    SharedResources &shared);
+
 // void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory);
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared);
-void resultSavingThread(SharedResources &shared, const std::string &saveDirectory);
+
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
 json readConfig(const std::string &filename);
 bool updateConfig(const std::string &filename, const std::string &key, const json &value);
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared);
 
-// Add this new function declaration
-void metricDisplayThread(SharedResources &shared);
+void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
+                        const CircularBuffer &circularBuffer, const ImageParams &params,
+                        std::vector<std::thread> &threads);
+void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
+                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
