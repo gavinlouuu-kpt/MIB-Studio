@@ -4,6 +4,8 @@
 
 To start the project, follow these steps:
 
+In CMakeLists.txt select the EGrabber that is for testing if you don't have a camera to work with.
+
 Before starting the project, you will need to install Visual Studio 2022 community edition with C++ development tools. A package manager called vcpkg is included in the installation; add the tool's path to PATH and create a system variable "VCPKG_ROOT" that corresponds to the path to vcpkg. Then, modify the CMakeUserPreset to point the vcpkg path to the path on your system.
 
 1. Navigate to the project's root, where CMakeLists.txt and README.md are located.
