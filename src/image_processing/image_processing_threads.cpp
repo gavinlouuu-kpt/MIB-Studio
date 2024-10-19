@@ -11,6 +11,9 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
+#include <matplot/matplot.h>
+#include <thread>
+#include <atomic>
 
 using json = nlohmann::json;
 
@@ -330,14 +333,14 @@ void displayThreadTask(
     cv::namedWindow("Combined Feed", cv::WINDOW_NORMAL);
     cv::resizeWindow("Combined Feed", width, height * 2);
 
-    cv::namedWindow("Scatter Plot", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Scatter Plot", 400, 400);
+    // cv::namedWindow("Scatter Plot", cv::WINDOW_NORMAL);
+    // cv::resizeWindow("Scatter Plot", 400, 400);
 
     int trackbarPos = 0;
     cv::createTrackbar("Frame", "Combined Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
 
     // Variable for scatter plot
-    cv::Mat scatterPlot(400, 400, CV_8UC3, cv::Scalar(255, 255, 255));
+    // cv::Mat scatterPlot(400, 400, CV_8UC3, cv::Scalar(255, 255, 255));
 
     // Function to handle mouse events for ROI selection
     auto onMouse = [](int event, int x, int y, int flags, void *userdata)
@@ -402,17 +405,17 @@ void displayThreadTask(
                     cv::imshow("Combined Feed", displayImage);
 
                     // Update scatter plot using the global circularities vector
-                    std::unique_lock<std::mutex> lock(shared.circularitiesMutex);
-                    shared.scatterDataCondition.wait_for(lock, std::chrono::milliseconds(1),
-                                                         [&shared]
-                                                         { return shared.newScatterDataAvailable.load(); });
+                    // std::unique_lock<std::mutex> lock(shared.circularitiesMutex);
+                    // shared.scatterDataCondition.wait_for(lock, std::chrono::milliseconds(1),
+                    //                                      [&shared]
+                    //                                      { return shared.newScatterDataAvailable.load(); });
 
-                    if (shared.newScatterDataAvailable)
-                    {
-                        updateScatterPlot(scatterPlot, shared.circularities);
-                        cv::imshow("Scatter Plot", scatterPlot);
-                        shared.newScatterDataAvailable = false;
-                    }
+                    // if (shared.newScatterDataAvailable)
+                    // {
+                    //     updateScatterPlot(scatterPlot, shared.circularities);
+                    //     cv::imshow("Scatter Plot", scatterPlot);
+                    //     shared.newScatterDataAvailable = false;
+                    // }
 
                     cv::waitKey(1); // Process GUI events
 
@@ -486,46 +489,36 @@ void onTrackbar(int pos, void *userdata)
     shared->displayNeedsUpdate = true;
 }
 
-void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities)
+void updateScatterPlot(SharedResources &shared)
 {
-    // std::lock_guard<std::mutex> lock(mutex);
+    using namespace matplot;
 
-    plot = cv::Scalar(255, 255, 255); // Clear the plot
+    auto f = figure(true);
+    auto ax = f->current_axes();
+    std::vector<double> x, y;
+    auto sc = ax->scatter(x, y);
+    ax->xlabel("Circularity");
+    ax->ylabel("Area");
+    ax->title("Circularity vs Area");
 
-    if (circularities.empty())
+    while (!shared.done)
     {
-        return;
+        if (shared.newScatterDataAvailable.exchange(false))
+        {
+            std::lock_guard<std::mutex> lock(shared.circularitiesMutex);
+            x.clear();
+            y.clear();
+            for (const auto &[circularity, area] : shared.circularities)
+            {
+                x.push_back(circularity);
+                y.push_back(area);
+            }
+            sc->x_data(x);
+            sc->y_data(y);
+            f->draw();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     }
-
-    // Find the range of values
-    double minCirc = std::numeric_limits<double>::max();
-    double maxCirc = std::numeric_limits<double>::lowest();
-    double minArea = std::numeric_limits<double>::max();
-    double maxArea = std::numeric_limits<double>::lowest();
-
-    for (const auto &[circ, area] : circularities)
-    {
-        minCirc = std::min(minCirc, circ);
-        maxCirc = std::max(maxCirc, circ);
-        minArea = std::min(minArea, area);
-        maxArea = std::max(maxArea, area);
-    }
-
-    // Draw axes
-    cv::line(plot, cv::Point(50, 350), cv::Point(350, 350), cv::Scalar(0, 0, 0), 2);
-    cv::line(plot, cv::Point(50, 350), cv::Point(50, 50), cv::Scalar(0, 0, 0), 2);
-
-    // Draw points
-    for (const auto &[circ, area] : circularities)
-    {
-        int x = 50 + static_cast<int>((circ - minCirc) / (maxCirc - minCirc) * 300);
-        int y = 350 - static_cast<int>((area - minArea) / (maxArea - minArea) * 300);
-        cv::circle(plot, cv::Point(x, y), 3, cv::Scalar(0, 0, 255), -1);
-    }
-
-    // Add labels
-    cv::putText(plot, "Circularity", cv::Point(160, 390), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
-    cv::putText(plot, "Area", cv::Point(10, 200), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1, cv::LINE_AA, true);
 }
 
 void keyboardHandlingThread(
@@ -768,6 +761,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
     threads.emplace_back(metricDisplayThread, std::ref(shared));
+    threads.emplace_back(updateScatterPlot, std::ref(shared));
 }
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)

@@ -92,6 +92,8 @@ The project is organized into several key components:
 - OpenCV
 - nlohmann/json
 
+**Note:** Gnuplot needs to be installed separately and added to your system's PATH. After installation, restart your computer to ensure the plotting function works correctly.
+
 ## Building
 
 1. Ensure vcpkg is installed and properly configured in CMakeUserPresets.json.

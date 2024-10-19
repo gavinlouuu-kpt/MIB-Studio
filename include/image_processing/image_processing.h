@@ -104,7 +104,7 @@ ContourResult findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 
 void onTrackbar(int pos, void *userdata);
-void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities);
+// void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities);
 
 // void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory);
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared);
