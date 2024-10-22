@@ -93,7 +93,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
 
     // Write CSV header
-    csvFile << "Timestamp_us,Circularity,Area\n";
+    csvFile << "Timestamp_us,Deformability,Area\n";
 
     // Add this block to handle the ROI image
     if (!results.empty())
@@ -107,7 +107,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     {
         // Write data to CSV
         csvFile << result.timestamp << ","
-                << result.circularity << ","
+                << result.deformability << ","
                 << result.area << "\n";
 
         // Save image metadata and data (unchanged)

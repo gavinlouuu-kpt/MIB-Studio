@@ -35,7 +35,7 @@ struct QualifiedResult
 {
     // ContourResult contourResult;
     int64_t timestamp;
-    double circularity;
+    double deformability;
     double area;
     cv::Mat originalImage;
 };

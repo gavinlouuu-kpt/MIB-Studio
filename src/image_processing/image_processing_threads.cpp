@@ -236,14 +236,14 @@ void processingThreadTask(
                         {
                             continue;
                         }
-                        auto [circularity, area] = calculateMetrics(contour);
-                        shared.circularities.emplace_back(circularity, area);
+                        auto [deformability, area] = calculateMetrics(contour);
+                        shared.circularities.emplace_back(deformability, area);
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
                         // qualifiedContourFound = true;
                         QualifiedResult qualifiedResult;
                         qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                        qualifiedResult.circularity = circularity;
+                        qualifiedResult.deformability = deformability;
                         qualifiedResult.area = area;
                         // qualifiedResult.contourResult = contourResult;
                         qualifiedResult.originalImage = image.clone();
@@ -497,9 +497,9 @@ void updateScatterPlot(SharedResources &shared)
     auto ax = f->current_axes();
     std::vector<double> x, y;
     auto sc = ax->scatter(x, y);
-    ax->xlabel("Circularity");
-    ax->ylabel("Area");
-    ax->title("Circularity vs Area");
+    ax->xlabel("Area");
+    ax->ylabel("Deformability");
+    ax->title("Deformability vs Area");
 
     while (!shared.done)
     {
@@ -508,10 +508,10 @@ void updateScatterPlot(SharedResources &shared)
             std::lock_guard<std::mutex> lock(shared.circularitiesMutex);
             x.clear();
             y.clear();
-            for (const auto &[circularity, area] : shared.circularities)
+            for (const auto &[deformability, area] : shared.circularities)
             {
-                x.push_back(circularity);
-                y.push_back(area);
+                x.push_back(area);
+                y.push_back(deformability);
             }
             sc->x_data(x);
             sc->y_data(y);
