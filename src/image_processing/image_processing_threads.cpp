@@ -83,8 +83,10 @@ void metricDisplayThread(SharedResources &shared)
                                                             text(std::to_string(shared.minProcessingTime.load()) + " us")}),
                                                       hbox({text("Processing Queue Size: "),
                                                             text(std::to_string(shared.framesToProcess.size()) + " frames")}),
-                                                      hbox({text("Circularities Size: "),
-                                                            text(std::to_string(shared.circularities.size()) + " sets")}),
+                                                      hbox({text("Deformability Size: "),
+                                                            text(std::to_string(shared.deformabilities.size()) + " sets")}),
+                                                      hbox({text("Linear Processing Time: "),
+                                                            text(std::to_string(shared.linearProcessingTime.load()) + " us")}),
                                                   }));
     };
 
@@ -214,7 +216,7 @@ void processingThreadTask(
 
             // Calculate deformability and circularity for each contour
             {
-                std::lock_guard<std::mutex> circularitiesLock(shared.circularitiesMutex);
+                std::lock_guard<std::mutex> circularitiesLock(shared.deformabilitiesMutex);
                 // bool qualifiedContourFound = false;
                 for (const auto &contour : contours)
                 {
@@ -237,7 +239,7 @@ void processingThreadTask(
                             continue;
                         }
                         auto [deformability, area] = calculateMetrics(contour);
-                        shared.circularities.emplace_back(deformability, area);
+                        shared.deformabilities.emplace_back(deformability, area);
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
                         // qualifiedContourFound = true;
@@ -505,10 +507,10 @@ void updateScatterPlot(SharedResources &shared)
     {
         if (shared.newScatterDataAvailable.exchange(false))
         {
-            std::lock_guard<std::mutex> lock(shared.circularitiesMutex);
+            std::lock_guard<std::mutex> lock(shared.deformabilitiesMutex);
             x.clear();
             y.clear();
-            for (const auto &[deformability, area] : shared.circularities)
+            for (const auto &[deformability, area] : shared.deformabilities)
             {
                 x.push_back(area);
                 y.push_back(deformability);
@@ -596,8 +598,8 @@ void keyboardHandlingThread(
             }
             else if (ch == 113)
             { // 'q' key
-                std::lock_guard<std::mutex> lock(shared.circularitiesMutex);
-                shared.circularities.clear();
+                std::lock_guard<std::mutex> lock(shared.deformabilitiesMutex);
+                shared.deformabilities.clear();
                 // std::cout << "Circularities vector cleared." << std::endl;
             }
             else if (ch == 115)
@@ -693,7 +695,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.paused = false;
     shared.currentFrameIndex = -1;
     shared.displayNeedsUpdate = true;
-    shared.circularities.clear();
+    shared.deformabilities.clear();
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
 
@@ -789,6 +791,20 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                                   if (imageData != nullptr)
                                   {
                                       circularBuffer.push(imageData);
+                                    //   //linear processing for speed
+                                    //   {
+                                    //     int height = static_cast<int>(params.height);
+                                    //     int width = static_cast<int>(params.width);
+                                    //     cv::Mat image(height, width, CV_8UC1, const_cast<uint8_t*>(imageData));
+                                    //     cv::Mat processedImage(height, width, CV_8UC1);
+                                    //     auto startTime = std::chrono::high_resolution_clock::now();
+                                    //     processFrame(image, width, height, shared, processedImage, false);
+                                    //     auto endTime = std::chrono::high_resolution_clock::now();
+                                    //     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
+                                    //     shared.linearProcessingTime = duration.count();
+                                    //     shared.updated = true;
+                                    //   }                                  
+
 
                                       {
                                           std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);

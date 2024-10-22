@@ -98,5 +98,6 @@ std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contou
     double area = m.m00;
     double perimeter = cv::arcLength(contour, true);
     double circularity = (perimeter > 0) ? 4 * M_PI * area / (perimeter * perimeter) : 0.0;
-    return std::make_tuple(circularity, area);
+    double deformability = 1.0 - circularity;
+    return std::make_tuple(deformability, area);
 }

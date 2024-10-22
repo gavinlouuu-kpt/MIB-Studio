@@ -62,8 +62,8 @@ struct SharedResources
     std::mutex processingQueueMutex;
     std::condition_variable displayQueueCondition;
     std::condition_variable processingQueueCondition;
-    std::vector<std::tuple<double, double>> circularities;
-    std::mutex circularitiesMutex;
+    std::vector<std::tuple<double, double>> deformabilities;
+    std::mutex deformabilitiesMutex;
     std::atomic<bool> newScatterDataAvailable{false};
     std::condition_variable scatterDataCondition;
     cv::Mat backgroundFrame;
@@ -92,6 +92,7 @@ struct SharedResources
     std::atomic<size_t> qualifiedResultCount;
     std::atomic<size_t> totalFramesProcessed;
     std::atomic<bool> updated;
+    std::atomic<double> linearProcessingTime;
 };
 
 // Function declarations
