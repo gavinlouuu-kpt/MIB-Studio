@@ -208,7 +208,7 @@ void processingThreadTask(
 
     // const size_t BUFFER_THRESHOLD = config["buffer_threshold"];
 
-    const size_t SAVE_THRESHOLD = 1000;   // Adjust as needed
+    // const size_t SAVE_THRESHOLD = 1000;   // Adjust as needed
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
 
     while (!shared.done)
