@@ -9,6 +9,7 @@
 #include <opencv2/opencv.hpp>
 #include <chrono>
 #include <nlohmann/json.hpp>
+#include "CircularBuffer/CircularBuffer.h"
 
 #define M_PI 3.14159265358979323846 // pi
 
@@ -82,17 +83,18 @@ struct SharedResources
     std::atomic<size_t> totalSavedResults{0};
     std::chrono::steady_clock::time_point lastSaveTime;
     std::atomic<double> diskSaveTime;
-
-    std::atomic<double> instantProcessingTime;
-    std::atomic<double> averageProcessingTime;
-    std::atomic<double> maxProcessingTime;
-    std::atomic<double> minProcessingTime;
+    // metrics
+    CircularBuffer processingTimes{1000, sizeof(double)}; // Buffer to store last 1000 processing times
+    // std::atomic<double> instantProcessingTime;
+    // std::atomic<double> averageProcessingTime;
+    // std::atomic<double> maxProcessingTime;
+    // std::atomic<double> minProcessingTime;
     std::atomic<double> currentFPS;
     std::atomic<size_t> imagesInQueue;
     std::atomic<size_t> qualifiedResultCount;
-    std::atomic<size_t> totalFramesProcessed;
+    // std::atomic<size_t> totalFramesProcessed;
     std::atomic<bool> updated;
-    std::atomic<double> linearProcessingTime;
+    // std::atomic<double> linearProcessingTime;
 };
 
 // Function declarations

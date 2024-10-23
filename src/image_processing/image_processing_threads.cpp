@@ -70,24 +70,48 @@ void metricDisplayThread(SharedResources &shared)
     using namespace ftxui;
     std::this_thread::sleep_for(std::chrono::milliseconds(100)); // sleep for 1ms to allow other things to be printed first
 
+    auto calculateProcessingMetrics = [](const CircularBuffer &processingTimes)
+    {
+        double avgTime = 0.0, maxTime = 0.0, minTime = std::numeric_limits<double>::max();
+        double instantTime = 0.0;
+
+        size_t count = processingTimes.size();
+        if (count > 0)
+        {
+            // Get latest value for instant time
+            instantTime = *reinterpret_cast<const double *>(processingTimes.getPointer(0));
+
+            // Calculate statistics
+            for (size_t i = 0; i < count; i++)
+            {
+                const double *timePtr = reinterpret_cast<const double *>(processingTimes.getPointer(i));
+                double time = *timePtr;
+                avgTime += time;
+                maxTime = std::max(maxTime, time);
+                minTime = std::min(minTime, time);
+            }
+            avgTime /= count;
+        }
+
+        return std::make_tuple(instantTime, avgTime, maxTime, minTime);
+    };
+
     auto render_processing_metrics = [&]()
     {
-        return window(text("Processing Metrics"), vbox({
-                                                      hbox({text("Instant Processing Time: "),
-                                                            text(std::to_string(shared.instantProcessingTime.load()) + " us")}),
-                                                      hbox({text("Avg Processing Time (5 sec): "),
-                                                            text(std::to_string(shared.averageProcessingTime.load()) + " us")}),
-                                                      hbox({text("Max Processing Time: "),
-                                                            text(std::to_string(shared.maxProcessingTime.load()) + " us")}),
-                                                      hbox({text("Min Processing Time: "),
-                                                            text(std::to_string(shared.minProcessingTime.load()) + " us")}),
-                                                      hbox({text("Processing Queue Size: "),
-                                                            text(std::to_string(shared.framesToProcess.size()) + " frames")}),
-                                                      hbox({text("Deformability Size: "),
-                                                            text(std::to_string(shared.deformabilities.size()) + " sets")}),
-                                                      hbox({text("Linear Processing Time: "),
-                                                            text(std::to_string(shared.linearProcessingTime.load()) + " us")}),
-                                                  }));
+        auto [instantTime, avgTime, maxTime, minTime] = calculateProcessingMetrics(shared.processingTimes);
+
+        return window(text("Processing Metrics"), vbox({hbox({text("Instant Processing Time: "),
+                                                              text(std::to_string(instantTime) + " us")}),
+                                                        hbox({text("Avg Processing Time (1000 samples): "),
+                                                              text(std::to_string(avgTime) + " us")}),
+                                                        hbox({text("Max Processing Time: "),
+                                                              text(std::to_string(maxTime) + " us")}),
+                                                        hbox({text("Min Processing Time: "),
+                                                              text(std::to_string(minTime) + " us")}),
+                                                        hbox({text("Processing Queue Size: "),
+                                                              text(std::to_string(shared.framesToProcess.size()) + " frames")}),
+                                                        hbox({text("Deformability Size: "),
+                                                              text(std::to_string(shared.deformabilities.size()) + " sets")})}));
     };
 
     auto render_camera_metrics = [&]()
@@ -172,8 +196,8 @@ void processingThreadTask(
     size_t width, size_t height, SharedResources &shared)
 {
     auto lastPrintTime = std::chrono::steady_clock::now();
-    int frameCount = 0;
-    double totalProcessingTime = 0.0;
+    // int frameCount = 0;
+    // double totalProcessingTime = 0.0;
     double totalFindTime = 0.0;
 
     // Pre-allocate memory for images
@@ -200,11 +224,11 @@ void processingThreadTask(
             framesToProcess.pop();
             lock.unlock();
 
+            auto startTime = std::chrono::high_resolution_clock::now();
+
             auto imageData = circularBuffer.get(0);
             image = cv::Mat(height, width, CV_8UC1, imageData.data());
-
             // Measure processing time
-            auto startTime = std::chrono::high_resolution_clock::now();
 
             // Preprocess Image using the optimized processFrame function
             processFrame(imageData, width, height, shared, processedImage, true); // true indicates it's the processing thread
@@ -267,44 +291,10 @@ void processingThreadTask(
 
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
+            double processingTime = duration.count();
 
-            double processingTime = duration.count(); // measure in microseconds
-            shared.instantProcessingTime = processingTime;
-            totalProcessingTime += processingTime;
-            totalFindTime += contourFindTime;
-
-            ++frameCount;
-
-            // Check if 5 seconds have passed
-            auto currentTime = std::chrono::steady_clock::now();
-            auto elapsedTime = std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPrintTime).count();
-            if (elapsedTime >= 5)
-            {
-                double averageProcessingTime = totalProcessingTime / frameCount;
-                double averageFindTime = totalFindTime / frameCount;
-                // std::cout << "Average processing time over last " << frameCount << " frames: "
-                //           << averageProcessingTime << " us" << std::endl;
-                // std::cout << "Average contour find time: " << averageFindTime << " us" << std::endl;
-
-                // // // Debugging statement
-                // std::cout << "Qualified result pushed. Buffer 1 size: "
-                //           << shared.qualifiedResultsBuffer1.size()
-                //           << ", Buffer 2 size: "
-                //           << shared.qualifiedResultsBuffer2.size()
-                //           << " / " << BUFFER_THRESHOLD << std::endl;
-
-                // Reset counters and update last print time
-                frameCount = 0;
-                totalProcessingTime = 0.0;
-                totalFindTime = 0.0;
-                lastPrintTime = currentTime;
-            }
-
-            // Update metrics
-            shared.totalFramesProcessed++;
-            shared.averageProcessingTime = (shared.averageProcessingTime * (shared.totalFramesProcessed - 1) + processingTime) / shared.totalFramesProcessed;
-            // shared.averageFindTime = (shared.averageFindTime * (shared.totalFramesProcessed - 1) + contourFindTime) / shared.totalFramesProcessed;
-            shared.qualifiedResultCount = shared.qualifiedResultCount.load();
+            // Just store the processing time
+            shared.processingTimes.push(reinterpret_cast<const uint8_t *>(&processingTime));
             shared.updated = true;
         }
         else
