@@ -844,7 +844,15 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
     threads.emplace_back(metricDisplayThread, std::ref(shared));
-    // threads.emplace_back(updateScatterPlot, std::ref(shared));
+
+    // Read from json to check if scatterplot is enabled
+    json config = readConfig("config.json");
+    bool scatterPlotEnabled = config.value("scatter_plot_enabled", false);
+
+    if (scatterPlotEnabled)
+    {
+        threads.emplace_back(updateScatterPlot, std::ref(shared));
+    }
 }
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
