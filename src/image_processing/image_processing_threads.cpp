@@ -676,9 +676,15 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
 
+    // Create output directory if it doesn't exist
+    std::filesystem::path outputDir("output");
+    if (!std::filesystem::exists(outputDir))
+    {
+        std::filesystem::create_directory(outputDir);
+    }
+
     // saving UI block
     json config = readConfig("config.json");
-    // create a default config.json if it doesn't exist
     std::string saveDir = config["save_directory"];
 
     std::cout << "Current save directory: " << saveDir << std::endl;
@@ -695,22 +701,25 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
         updateConfig("config.json", "save_directory", saveDir);
     }
 
+    // Create full path within output directory
+    std::filesystem::path fullPath = outputDir / saveDir;
+    std::string basePath = fullPath.string();
+
     // Automatically increment the directory name if it already exists
-    std::string baseName = saveDir;
     int suffix = 1;
-    while (std::filesystem::exists(saveDir))
+    while (std::filesystem::exists(fullPath))
     {
-        saveDir = baseName + "_" + std::to_string(suffix);
+        fullPath = outputDir / (saveDir + "_" + std::to_string(suffix));
         suffix++;
     }
 
-    // Ensure the directory exists
-    std::filesystem::create_directories(saveDir);
+    // Create the subdirectory
+    std::filesystem::create_directories(fullPath);
 
-    std::cout << "Using save directory: " << saveDir << std::endl;
+    std::cout << "Using save directory: " << fullPath.string() << std::endl;
 
     // Call the setup function passed as parameter
-    std::vector<std::thread> threads = setupThreads(shared, saveDir);
+    std::vector<std::thread> threads = setupThreads(shared, fullPath.string());
 
     // Wait for completion
     shared.displayQueueCondition.notify_all();
