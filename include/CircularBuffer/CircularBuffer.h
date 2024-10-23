@@ -13,6 +13,7 @@ public:
     const uint8_t *getPointer(size_t index) const;
     size_t size() const;
     bool isFull() const;
+    void clear();
 
     class Iterator
     {

@@ -14,6 +14,12 @@
 #include <matplot/matplot.h>
 #include <thread>
 #include <atomic>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -102,10 +108,30 @@ void metricDisplayThread(SharedResources &shared)
         double highLatencyPercentage = count > 0 ? (highLatencyCount * 100.0) / count : 0.0;
         return std::make_tuple(instantTime, avgTime, maxTime, minTime, highLatencyPercentage);
     };
+    auto calculateDeformabilityBufferRate = [](const SharedResources &shared)
+    {
+        // Calculate the rate of new sets added to the deformability buffer
+        static auto lastCheckTime = std::chrono::steady_clock::now();
+        static size_t lastBufferCount = 0;
+
+        auto now = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - lastCheckTime).count();
+
+        size_t currentBufferCount = shared.deformabilityBuffer.size();
+        size_t addedCount = currentBufferCount - lastBufferCount;
+
+        double rate = duration > 0 ? static_cast<double>(addedCount) / duration : 0.0;
+
+        lastCheckTime = now;
+        lastBufferCount = currentBufferCount;
+
+        return rate;
+    };
 
     auto render_processing_metrics = [&]()
     {
         auto [instantTime, avgTime, maxTime, minTime, highLatencyPct] = calculateProcessingMetrics(shared.processingTimes);
+        double rate = calculateDeformabilityBufferRate(shared);
 
         return window(text("Processing Metrics"), vbox({hbox({text("Instant Processing Time: "), text(std::to_string(instantTime) + " us")}),
                                                         hbox({text("Avg Processing Time (1000 samples): "), text(std::to_string(avgTime) + " us")}),
@@ -113,7 +139,8 @@ void metricDisplayThread(SharedResources &shared)
                                                         hbox({text("Min Processing Time: "), text(std::to_string(minTime) + " us")}),
                                                         hbox({text("High Latency (>200us): "), text(std::to_string(highLatencyPct) + "%")}),
                                                         hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
-                                                        hbox({text("Deformability Size: "), text(std::to_string(shared.deformabilities.size()) + " sets")})}));
+                                                        hbox({text("Deformability Buffer Size: "), text(std::to_string(shared.deformabilityBuffer.size()) + " sets")}),
+                                                        hbox({text("Deformability Buffer Rate: "), text(std::to_string(rate) + " sets/sec")})}));
     };
 
     auto render_camera_metrics = [&]()
@@ -203,7 +230,7 @@ void processingThreadTask(
     double totalFindTime = 0.0;
 
     // Pre-allocate memory for images
-    cv::Mat image(height, width, CV_8UC1);
+    cv::Mat inputImage(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
 
     // const size_t BUFFER_THRESHOLD = config["buffer_threshold"];
@@ -229,62 +256,65 @@ void processingThreadTask(
             auto startTime = std::chrono::high_resolution_clock::now();
 
             auto imageData = circularBuffer.get(0);
-            image = cv::Mat(height, width, CV_8UC1, imageData.data());
-            // Measure processing time
-
-            // Preprocess Image using the optimized processFrame function
-            processFrame(imageData, width, height, shared, processedImage, true); // true indicates it's the processing thread
-
-            bool touchesBorder = false;
-            // Check left and right edges
-            for (int y = shared.roi.y; y < shared.roi.y + shared.roi.height && !touchesBorder; y++)
+            inputImage = cv::Mat(height, width, CV_8UC1, imageData.data());
+            // Check if ROI is the same as the full image
+            if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
             {
-                if (processedImage.at<uint8_t>(y, shared.roi.x) == 255 || // Left edge
-                    processedImage.at<uint8_t>(y, shared.roi.x + shared.roi.width - 1) == 255)
-                { // Right edge
-                    touchesBorder = true;
-                }
-            }
+                // Preprocess Image using the optimized processFrame function
+                processFrame(inputImage, shared, processedImage, true); // true indicates it's the processing thread
 
-            // Only proceed with contour detection if no border pixels were found
-            if (!touchesBorder)
-            {
-                // Find contour
-                ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
-                std::vector<std::vector<cv::Point>> contours = contourResult.contours;
-                double contourFindTime = contourResult.findTime;
-
-                // Calculate deformability and circularity for each contour
+                bool touchesBorder = false;
+                // Check left and right edges
+                for (int y = shared.roi.y; y < shared.roi.y + shared.roi.height && !touchesBorder; y++)
                 {
-                    std::lock_guard<std::mutex> circularitiesLock(shared.deformabilitiesMutex);
-                    // bool qualifiedContourFound = false;
-                    for (const auto &contour : contours)
+                    if (processedImage.at<uint8_t>(y, shared.roi.x) == 255 || // Left edge
+                        processedImage.at<uint8_t>(y, shared.roi.x + shared.roi.width - 1) == 255)
+                    { // Right edge
+                        touchesBorder = true;
+                    }
+                }
+
+                // Only proceed with contour detection if no border pixels were found
+                if (!touchesBorder)
+                {
+                    // Find contour
+                    ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
+                    std::vector<std::vector<cv::Point>> contours = contourResult.contours;
+                    double contourFindTime = contourResult.findTime;
+
+                    // Calculate deformability and circularity for each contour
                     {
-                        if (contour.size() >= 10)
+                        std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
+                        // bool qualifiedContourFound = false;
+                        for (const auto &contour : contours)
                         {
-
-                            auto [deformability, area] = calculateMetrics(contour);
-                            shared.deformabilities.emplace_back(deformability, area);
-                            shared.newScatterDataAvailable = true;
-                            shared.scatterDataCondition.notify_one();
-                            // qualifiedContourFound = true;
-                            QualifiedResult qualifiedResult;
-                            qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                            qualifiedResult.deformability = deformability;
-                            qualifiedResult.area = area;
-                            // qualifiedResult.contourResult = contourResult;
-                            qualifiedResult.originalImage = image.clone();
-
-                            std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
-                            auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
-                            currentBuffer.push_back(std::move(qualifiedResult));
-
-                            // Check if we need to switch buffers
-                            if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
+                            if (contour.size() >= 10)
                             {
-                                shared.usingBuffer1 = !shared.usingBuffer1;
-                                shared.savingInProgress = true;
-                                shared.savingCondition.notify_one();
+
+                                auto [deformability, area] = calculateMetrics(contour);
+                                auto metrics = std::make_tuple(deformability, area);
+                                shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
+                                shared.newScatterDataAvailable = true;
+                                shared.scatterDataCondition.notify_one();
+                                // qualifiedContourFound = true;
+                                QualifiedResult qualifiedResult;
+                                qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                                qualifiedResult.deformability = deformability;
+                                qualifiedResult.area = area;
+                                // qualifiedResult.contourResult = contourResult;
+                                qualifiedResult.originalImage = inputImage.clone();
+
+                                std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                                auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
+                                currentBuffer.push_back(std::move(qualifiedResult));
+
+                                // Check if we need to switch buffers
+                                if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
+                                {
+                                    shared.usingBuffer1 = !shared.usingBuffer1;
+                                    shared.savingInProgress = true;
+                                    shared.savingCondition.notify_one();
+                                }
                             }
                         }
                     }
@@ -387,7 +417,7 @@ void displayThreadTask(
                     }
 
                     // Preprocess Image using the optimized processFrame function
-                    processFrame(imageData, width, height, shared, processedImage, false); // false indicates it's the display thread
+                    processFrame(image, shared, processedImage, false); // false indicates it's the display thread
 
                     // Concatenate live feed and processed feed
                     cv::Mat topHalf, bottomHalf;
@@ -431,7 +461,7 @@ void displayThreadTask(
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
 
                         // Process and display the binary image using processFrame
-                        processFrame(imageData, width, height, shared, processedImage, false);
+                        processFrame(image, shared, processedImage, false);
 
                         // Concatenate live feed and processed feed
                         cv::Mat topHalf, bottomHalf;
@@ -504,25 +534,30 @@ void updateScatterPlot(SharedResources &shared)
 
         bool needsUpdate = false;
         {
-            std::lock_guard<std::mutex> lock(shared.deformabilitiesMutex);
+            std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
             if (shared.newScatterDataAvailable)
             {
                 x.clear();
                 y.clear();
 
                 // Reserve exact capacity to avoid reallocations
-                size_t size = shared.deformabilities.size();
+                size_t size = shared.deformabilityBuffer.size();
                 if (x.capacity() < size)
                 {
                     x.reserve(size);
                     y.reserve(size);
                 }
 
-                // Batch update the data
-                for (const auto &[deformability, area] : shared.deformabilities)
+                // Read from circular buffer
+                for (size_t i = 0; i < size; i++)
                 {
-                    x.push_back(area);
-                    y.push_back(deformability);
+                    const auto *metrics = reinterpret_cast<const std::tuple<double, double> *>(
+                        shared.deformabilityBuffer.getPointer(i));
+                    if (metrics)
+                    {
+                        x.push_back(std::get<1>(*metrics)); // area
+                        y.push_back(std::get<0>(*metrics)); // deformability
+                    }
                 }
 
                 shared.newScatterDataAvailable = false;
@@ -617,8 +652,8 @@ void keyboardHandlingThread(
             }
             else if (ch == 113)
             { // 'q' key
-                std::lock_guard<std::mutex> lock(shared.deformabilitiesMutex);
-                shared.deformabilities.clear();
+                std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
+                shared.deformabilityBuffer.clear();
                 // std::cout << "Circularities vector cleared." << std::endl;
             }
             else if (ch == 115)
@@ -714,7 +749,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.paused = false;
     shared.currentFrameIndex = -1;
     shared.displayNeedsUpdate = true;
-    shared.deformabilities.clear();
+    shared.deformabilityBuffer.clear();
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
 
@@ -778,11 +813,28 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         const CircularBuffer &circularBuffer, const ImageParams &params,
                         std::vector<std::thread> &threads)
 {
+    // Create processing thread first and set its priority
     threads.emplace_back(processingThreadTask,
                          std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
                          std::ref(shared.framesToProcess), std::ref(circularBuffer),
                          params.width, params.height, std::ref(shared));
 
+// Set priority for the processing thread
+#ifdef _WIN32
+    if (!SetThreadPriority(threads.back().native_handle(), THREAD_PRIORITY_HIGHEST))
+    {
+        std::cerr << "Failed to set thread priority: " << GetLastError() << std::endl;
+    }
+#else
+    sched_param sch_params;
+    sch_params.sched_priority = sched_get_priority_max(SCHED_FIFO);
+    if (pthread_setschedparam(threads.back().native_handle(), SCHED_FIFO, &sch_params) != 0)
+    {
+        std::cerr << "Failed to set thread priority: " << errno << std::endl;
+    }
+#endif
+
+    // Create remaining threads with normal priority
     threads.emplace_back(displayThreadTask, std::ref(shared.framesToDisplay),
                          std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
                          params.width, params.height, params.bufferCount, std::ref(shared));

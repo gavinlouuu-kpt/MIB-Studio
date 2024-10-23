@@ -63,8 +63,8 @@ struct SharedResources
     std::mutex processingQueueMutex;
     std::condition_variable displayQueueCondition;
     std::condition_variable processingQueueCondition;
-    std::vector<std::tuple<double, double>> deformabilities;
-    std::mutex deformabilitiesMutex;
+    // std::vector<std::tuple<double, double>> deformabilities;
+    // std::mutex deformabilitiesMutex;
     std::atomic<bool> newScatterDataAvailable{false};
     std::condition_variable scatterDataCondition;
     cv::Mat backgroundFrame;
@@ -84,11 +84,9 @@ struct SharedResources
     std::chrono::steady_clock::time_point lastSaveTime;
     std::atomic<double> diskSaveTime;
     // metrics
-    CircularBuffer processingTimes{1000, sizeof(double)}; // Buffer to store last 1000 processing times
-    // std::atomic<double> instantProcessingTime;
-    // std::atomic<double> averageProcessingTime;
-    // std::atomic<double> maxProcessingTime;
-    // std::atomic<double> minProcessingTime;
+    CircularBuffer processingTimes{1000, sizeof(double)};                         // Buffer to store last 1000 processing times
+    CircularBuffer deformabilityBuffer{2000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
+    std::mutex deformabilityBufferMutex;
     std::atomic<double> currentFPS;
     std::atomic<size_t> imagesInQueue;
     std::atomic<size_t> qualifiedResultCount;
@@ -101,8 +99,10 @@ struct SharedResources
 ImageParams initializeImageParams(const std::string &directory);
 void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder = false);
 void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
-void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
-                  SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
+// void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
+//                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
+void processFrame(const cv::Mat &inputImage, SharedResources &shared,
+                  cv::Mat &outputImage, bool isProcessingThread);
 ContourResult findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 

@@ -49,3 +49,11 @@ CircularBuffer::Iterator &CircularBuffer::Iterator::operator++()
 }
 
 bool CircularBuffer::Iterator::operator!=(const Iterator &other) const { return index_ != other.index_; }
+
+void CircularBuffer::clear()
+{
+    head_ = 0;
+    count_ = 0;
+    // Optional: clear the buffer contents
+    // std::fill(buffer_.begin(), buffer_.end(), 0);
+}
