@@ -74,6 +74,8 @@ void metricDisplayThread(SharedResources &shared)
     {
         double avgTime = 0.0, maxTime = 0.0, minTime = std::numeric_limits<double>::max();
         double instantTime = 0.0;
+        size_t highLatencyCount = 0;            // Count of times above 200us
+        const double LATENCY_THRESHOLD = 200.0; // 200us threshold
 
         size_t count = processingTimes.size();
         if (count > 0)
@@ -89,29 +91,29 @@ void metricDisplayThread(SharedResources &shared)
                 avgTime += time;
                 maxTime = std::max(maxTime, time);
                 minTime = std::min(minTime, time);
+                if (time > LATENCY_THRESHOLD)
+                {
+                    highLatencyCount++;
+                }
             }
             avgTime /= count;
         }
 
-        return std::make_tuple(instantTime, avgTime, maxTime, minTime);
+        double highLatencyPercentage = count > 0 ? (highLatencyCount * 100.0) / count : 0.0;
+        return std::make_tuple(instantTime, avgTime, maxTime, minTime, highLatencyPercentage);
     };
 
     auto render_processing_metrics = [&]()
     {
-        auto [instantTime, avgTime, maxTime, minTime] = calculateProcessingMetrics(shared.processingTimes);
+        auto [instantTime, avgTime, maxTime, minTime, highLatencyPct] = calculateProcessingMetrics(shared.processingTimes);
 
-        return window(text("Processing Metrics"), vbox({hbox({text("Instant Processing Time: "),
-                                                              text(std::to_string(instantTime) + " us")}),
-                                                        hbox({text("Avg Processing Time (1000 samples): "),
-                                                              text(std::to_string(avgTime) + " us")}),
-                                                        hbox({text("Max Processing Time: "),
-                                                              text(std::to_string(maxTime) + " us")}),
-                                                        hbox({text("Min Processing Time: "),
-                                                              text(std::to_string(minTime) + " us")}),
-                                                        hbox({text("Processing Queue Size: "),
-                                                              text(std::to_string(shared.framesToProcess.size()) + " frames")}),
-                                                        hbox({text("Deformability Size: "),
-                                                              text(std::to_string(shared.deformabilities.size()) + " sets")})}));
+        return window(text("Processing Metrics"), vbox({hbox({text("Instant Processing Time: "), text(std::to_string(instantTime) + " us")}),
+                                                        hbox({text("Avg Processing Time (1000 samples): "), text(std::to_string(avgTime) + " us")}),
+                                                        hbox({text("Max Processing Time: "), text(std::to_string(maxTime) + " us")}),
+                                                        hbox({text("Min Processing Time: "), text(std::to_string(minTime) + " us")}),
+                                                        hbox({text("High Latency (>200us): "), text(std::to_string(highLatencyPct) + "%")}),
+                                                        hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
+                                                        hbox({text("Deformability Size: "), text(std::to_string(shared.deformabilities.size()) + " sets")})}));
     };
 
     auto render_camera_metrics = [&]()
@@ -233,57 +235,57 @@ void processingThreadTask(
             // Preprocess Image using the optimized processFrame function
             processFrame(imageData, width, height, shared, processedImage, true); // true indicates it's the processing thread
 
-            // Find contour
-            ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
-            std::vector<std::vector<cv::Point>> contours = contourResult.contours;
-            double contourFindTime = contourResult.findTime;
-
-            // Calculate deformability and circularity for each contour
+            bool touchesBorder = false;
+            // Check left and right edges
+            for (int y = shared.roi.y; y < shared.roi.y + shared.roi.height && !touchesBorder; y++)
             {
-                std::lock_guard<std::mutex> circularitiesLock(shared.deformabilitiesMutex);
-                // bool qualifiedContourFound = false;
-                for (const auto &contour : contours)
+                if (processedImage.at<uint8_t>(y, shared.roi.x) == 255 || // Left edge
+                    processedImage.at<uint8_t>(y, shared.roi.x + shared.roi.width - 1) == 255)
+                { // Right edge
+                    touchesBorder = true;
+                }
+            }
+
+            // Only proceed with contour detection if no border pixels were found
+            if (!touchesBorder)
+            {
+                // Find contour
+                ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
+                std::vector<std::vector<cv::Point>> contours = contourResult.contours;
+                double contourFindTime = contourResult.findTime;
+
+                // Calculate deformability and circularity for each contour
                 {
-                    if (contour.size() >= 10)
+                    std::lock_guard<std::mutex> circularitiesLock(shared.deformabilitiesMutex);
+                    // bool qualifiedContourFound = false;
+                    for (const auto &contour : contours)
                     {
-                        // Check if contour touches the edge of ROI
-                        bool touchesBorder = false;
-                        for (const auto &point : contour)
+                        if (contour.size() >= 10)
                         {
-                            if (point.x == shared.roi.x || point.x == shared.roi.x + shared.roi.width - 1 ||
-                                point.y == shared.roi.y || point.y == shared.roi.y + shared.roi.height - 1)
+
+                            auto [deformability, area] = calculateMetrics(contour);
+                            shared.deformabilities.emplace_back(deformability, area);
+                            shared.newScatterDataAvailable = true;
+                            shared.scatterDataCondition.notify_one();
+                            // qualifiedContourFound = true;
+                            QualifiedResult qualifiedResult;
+                            qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                            qualifiedResult.deformability = deformability;
+                            qualifiedResult.area = area;
+                            // qualifiedResult.contourResult = contourResult;
+                            qualifiedResult.originalImage = image.clone();
+
+                            std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                            auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
+                            currentBuffer.push_back(std::move(qualifiedResult));
+
+                            // Check if we need to switch buffers
+                            if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
                             {
-                                touchesBorder = true;
-                                break;
+                                shared.usingBuffer1 = !shared.usingBuffer1;
+                                shared.savingInProgress = true;
+                                shared.savingCondition.notify_one();
                             }
-                        }
-                        // Skip if it touches the border
-                        if (touchesBorder)
-                        {
-                            continue;
-                        }
-                        auto [deformability, area] = calculateMetrics(contour);
-                        shared.deformabilities.emplace_back(deformability, area);
-                        shared.newScatterDataAvailable = true;
-                        shared.scatterDataCondition.notify_one();
-                        // qualifiedContourFound = true;
-                        QualifiedResult qualifiedResult;
-                        qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                        qualifiedResult.deformability = deformability;
-                        qualifiedResult.area = area;
-                        // qualifiedResult.contourResult = contourResult;
-                        qualifiedResult.originalImage = image.clone();
-
-                        std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
-                        auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
-                        currentBuffer.push_back(std::move(qualifiedResult));
-
-                        // Check if we need to switch buffers
-                        if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
-                        {
-                            shared.usingBuffer1 = !shared.usingBuffer1;
-                            shared.savingInProgress = true;
-                            shared.savingCondition.notify_one();
                         }
                     }
                 }
@@ -472,31 +474,71 @@ void updateScatterPlot(SharedResources &shared)
 {
     using namespace matplot;
 
+    // Create figure and axes only once
     auto f = figure(true);
+    f->quiet_mode(true); // Reduce console output
     auto ax = f->current_axes();
+
+    // Pre-allocate vectors with a reasonable capacity
     std::vector<double> x, y;
+    x.reserve(1000);
+    y.reserve(1000);
+
     auto sc = ax->scatter(x, y);
     ax->xlabel("Area");
     ax->ylabel("Deformability");
     ax->title("Deformability vs Area");
 
+    // Reduce update frequency
+    const auto updateInterval = std::chrono::milliseconds(5000);
+    auto lastUpdateTime = std::chrono::steady_clock::now();
+
     while (!shared.done)
     {
-        if (shared.newScatterDataAvailable.exchange(false))
+        auto now = std::chrono::steady_clock::now();
+        if (now - lastUpdateTime < updateInterval)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        bool needsUpdate = false;
         {
             std::lock_guard<std::mutex> lock(shared.deformabilitiesMutex);
-            x.clear();
-            y.clear();
-            for (const auto &[deformability, area] : shared.deformabilities)
+            if (shared.newScatterDataAvailable)
             {
-                x.push_back(area);
-                y.push_back(deformability);
+                x.clear();
+                y.clear();
+
+                // Reserve exact capacity to avoid reallocations
+                size_t size = shared.deformabilities.size();
+                if (x.capacity() < size)
+                {
+                    x.reserve(size);
+                    y.reserve(size);
+                }
+
+                // Batch update the data
+                for (const auto &[deformability, area] : shared.deformabilities)
+                {
+                    x.push_back(area);
+                    y.push_back(deformability);
+                }
+
+                shared.newScatterDataAvailable = false;
+                needsUpdate = true;
             }
+        }
+
+        if (needsUpdate)
+        {
             sc->x_data(x);
             sc->y_data(y);
             f->draw();
+            lastUpdateTime = now;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
@@ -750,7 +792,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
     threads.emplace_back(metricDisplayThread, std::ref(shared));
-    threads.emplace_back(updateScatterPlot, std::ref(shared));
+    // threads.emplace_back(updateScatterPlot, std::ref(shared));
 }
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)

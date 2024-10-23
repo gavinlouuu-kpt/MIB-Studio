@@ -5,11 +5,7 @@ thread_local struct ThreadLocalMats
 {
     cv::Mat original;
     cv::Mat blurred_target;
-    cv::Mat bg_sub;
     cv::Mat binary;
-    cv::Mat dilate1;
-    cv::Mat erode1;
-    cv::Mat erode2;
     cv::Mat kernel;
     bool initialized = false;
 } processingThreadMats, displayThreadMats;
@@ -23,13 +19,10 @@ void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t he
     // Initialize thread_local variables only once for each thread
     if (!mats.initialized)
     {
+        // Only initialize the Mats we actually need
         mats.original = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
         mats.blurred_target = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
-        mats.bg_sub = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
         mats.binary = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
-        mats.dilate1 = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
-        mats.erode1 = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
-        mats.erode2 = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
         mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
         mats.initialized = true;
     }
@@ -49,7 +42,6 @@ void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t he
     // Check if ROI is the same as the full image
     if (static_cast<size_t>(roi.width) == width && static_cast<size_t>(roi.height) == height)
     {
-        // Skip processing and return the original image
         mats.original.copyTo(outputImage);
         return;
     }
@@ -58,28 +50,24 @@ void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t he
     cv::Mat blurred_bg;
     {
         std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-        blurred_bg = shared.blurredBackground(roi); // Get only the ROI of the background
+        blurred_bg = shared.blurredBackground(roi);
     }
 
-    // Blur only the target image ROI
+    // Process only the ROI region
+    cv::Mat roiOutput = outputImage(roi);
+
+    // Perform operations directly on ROI
     cv::GaussianBlur(mats.original(roi), mats.blurred_target(roi), cv::Size(3, 3), 0);
+    cv::subtract(blurred_bg, mats.blurred_target(roi), mats.binary(roi));
+    cv::threshold(mats.binary(roi), roiOutput, 10, 255, cv::THRESH_BINARY);
 
-    // Background subtraction (only in ROI)
-    cv::subtract(blurred_bg, mats.blurred_target(roi), mats.bg_sub(roi));
+    // Combine erode and dilate operations
+    cv::morphologyEx(roiOutput, roiOutput, cv::MORPH_CLOSE, mats.kernel, cv::Point(-1, -1), 1);
+    cv::morphologyEx(roiOutput, roiOutput, cv::MORPH_OPEN, mats.kernel, cv::Point(-1, -1), 1);
 
-    // Apply threshold (only in ROI)
-    cv::threshold(mats.bg_sub(roi), mats.binary(roi), 10, 255, cv::THRESH_BINARY);
-
-    // Erode and dilate to remove noise (only in ROI)
-    cv::dilate(mats.binary(roi), mats.dilate1(roi), mats.kernel, cv::Point(-1, -1), 2);
-    cv::erode(mats.dilate1(roi), mats.erode1(roi), mats.kernel, cv::Point(-1, -1), 2);
-    cv::erode(mats.erode1(roi), mats.erode2(roi), mats.kernel, cv::Point(-1, -1), 1);
-    cv::dilate(mats.erode2(roi), outputImage(roi), mats.kernel, cv::Point(-1, -1), 1);
-
-    // Clear areas outside ROI in the output image
-    cv::Mat mask = cv::Mat::zeros(height, width, CV_8UC1);
-    mask(roi).setTo(255);
-    outputImage.setTo(0, mask == 0);
+    // Clear areas outside ROI
+    outputImage.setTo(0);
+    roiOutput.copyTo(outputImage(roi));
 }
 
 ContourResult findContours(const cv::Mat &processedImage)
