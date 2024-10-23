@@ -162,15 +162,45 @@ void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, cons
     std::cout << "Converted " << imageCount << " images to PNG format in " << outputDirectory << std::endl;
 }
 
+// json readConfig(const std::string &filename)
+// {
+//     std::ifstream file(filename);
+//     if (!file.is_open())
+//     {
+//         throw std::runtime_error("Unable to open config file: " + filename);
+//     }
+//     json config;
+//     file >> config;
+//     return config;
+// }
+
 json readConfig(const std::string &filename)
 {
-    std::ifstream file(filename);
-    if (!file.is_open())
-    {
-        throw std::runtime_error("Unable to open config file: " + filename);
-    }
     json config;
-    file >> config;
+
+    if (!std::filesystem::exists(filename))
+    {
+        // Create default config
+        config = {
+            {"save_directory", "updated_results"},
+            {"save_threshold", 1000},
+            {"buffer_threshold", 1000},
+            {"contour_size_threshold", 10},
+            {"target_fps", 5000},
+            {"display_fps", 25}};
+
+        // Write default config to file
+        std::ofstream configFile(filename);
+        configFile << std::setw(4) << config << std::endl;
+        std::cout << "Created default config file: " << filename << std::endl;
+    }
+    else
+    {
+        // Read existing config file
+        std::ifstream configFile(filename);
+        configFile >> config;
+    }
+
     return config;
 }
 

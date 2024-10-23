@@ -406,19 +406,6 @@ void displayThreadTask(
 
                     cv::imshow("Combined Feed", displayImage);
 
-                    // Update scatter plot using the global circularities vector
-                    // std::unique_lock<std::mutex> lock(shared.circularitiesMutex);
-                    // shared.scatterDataCondition.wait_for(lock, std::chrono::milliseconds(1),
-                    //                                      [&shared]
-                    //                                      { return shared.newScatterDataAvailable.load(); });
-
-                    // if (shared.newScatterDataAvailable)
-                    // {
-                    //     updateScatterPlot(scatterPlot, shared.circularities);
-                    //     cv::imshow("Scatter Plot", scatterPlot);
-                    //     shared.newScatterDataAvailable = false;
-                    // }
-
                     cv::waitKey(1); // Process GUI events
 
                     nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
@@ -701,6 +688,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 
     // saving UI block
     json config = readConfig("config.json");
+    // create a default config.json if it doesn't exist
     std::string saveDir = config["save_directory"];
 
     std::cout << "Current save directory: " << saveDir << std::endl;
@@ -791,21 +779,6 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                                   if (imageData != nullptr)
                                   {
                                       circularBuffer.push(imageData);
-                                    //   //linear processing for speed
-                                    //   {
-                                    //     int height = static_cast<int>(params.height);
-                                    //     int width = static_cast<int>(params.width);
-                                    //     cv::Mat image(height, width, CV_8UC1, const_cast<uint8_t*>(imageData));
-                                    //     cv::Mat processedImage(height, width, CV_8UC1);
-                                    //     auto startTime = std::chrono::high_resolution_clock::now();
-                                    //     processFrame(image, width, height, shared, processedImage, false);
-                                    //     auto endTime = std::chrono::high_resolution_clock::now();
-                                    //     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
-                                    //     shared.linearProcessingTime = duration.count();
-                                    //     shared.updated = true;
-                                    //   }                                  
-
-
                                       {
                                           std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
                                           std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
