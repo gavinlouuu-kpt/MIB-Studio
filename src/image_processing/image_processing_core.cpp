@@ -1,39 +1,36 @@
 #include "image_processing/image_processing.h"
 #include "CircularBuffer/CircularBuffer.h"
 
-thread_local struct ThreadLocalMats
+// void initializeThreadMats(ThreadLocalMats &mats, int height, int width) {
+//     if (!mats.initialized) {
+//         mats.blurred_target = cv::Mat(height, width, CV_8UC1);
+//         mats.bg_sub = cv::Mat(height, width, CV_8UC1);
+//         mats.binary = cv::Mat(height, width, CV_8UC1);
+//         mats.dilate1 = cv::Mat(height, width, CV_8UC1);
+//         mats.erode1 = cv::Mat(height, width, CV_8UC1);
+//         mats.erode2 = cv::Mat(height, width, CV_8UC1);
+//         mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+//         mats.initialized = true;
+//     }
+// }
+
+ThreadLocalMats initializeThreadMats(int height, int width)
 {
-    cv::Mat original;
-    cv::Mat blurred_target;
-    cv::Mat bg_sub;
-    cv::Mat binary;
-    cv::Mat dilate1;
-    cv::Mat erode1;
-    cv::Mat erode2;
-    cv::Mat kernel;
-    bool initialized = false;
-} processingThreadMats, displayThreadMats;
+    ThreadLocalMats mats;
+    mats.blurred_target = cv::Mat(height, width, CV_8UC1);
+    mats.bg_sub = cv::Mat(height, width, CV_8UC1);
+    mats.binary = cv::Mat(height, width, CV_8UC1);
+    mats.dilate1 = cv::Mat(height, width, CV_8UC1);
+    mats.erode1 = cv::Mat(height, width, CV_8UC1);
+    mats.erode2 = cv::Mat(height, width, CV_8UC1);
+    mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+    mats.initialized = true;
+    return mats;
+}
 
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
-                  cv::Mat &outputImage, bool isProcessingThread)
+                  cv::Mat &outputImage, ThreadLocalMats &mats)
 {
-    // Choose the appropriate set of thread-local variables
-    ThreadLocalMats &mats = isProcessingThread ? processingThreadMats : displayThreadMats;
-
-    // Initialize thread_local variables only once for each thread
-    if (!mats.initialized)
-    {
-        int height = inputImage.rows;
-        int width = inputImage.cols;
-        mats.blurred_target = cv::Mat(height, width, CV_8UC1);
-        mats.bg_sub = cv::Mat(height, width, CV_8UC1);
-        mats.binary = cv::Mat(height, width, CV_8UC1);
-        mats.dilate1 = cv::Mat(height, width, CV_8UC1);
-        mats.erode1 = cv::Mat(height, width, CV_8UC1);
-        mats.erode2 = cv::Mat(height, width, CV_8UC1);
-        mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
-        mats.initialized = true;
-    }
 
     // Direct access without locks
     cv::Rect roi = shared.roi;

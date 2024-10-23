@@ -49,6 +49,20 @@ struct QualifiedResult
 //     std::atomic<bool> updated{false};
 // };
 
+struct ThreadLocalMats
+{
+    cv::Mat original;
+    cv::Mat blurred_target;
+    cv::Mat bg_sub;
+    cv::Mat binary;
+    cv::Mat dilate1;
+    cv::Mat erode1;
+    cv::Mat erode2;
+    cv::Mat kernel;
+    bool initialized = false;
+};
+ThreadLocalMats initializeThreadMats(int height, int width);
+
 struct SharedResources
 {
     std::atomic<bool> done{false};
@@ -102,7 +116,7 @@ void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &p
 // void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
 //                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
-                  cv::Mat &outputImage, bool isProcessingThread);
+                  cv::Mat &outputImage, ThreadLocalMats &mats);
 ContourResult findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 

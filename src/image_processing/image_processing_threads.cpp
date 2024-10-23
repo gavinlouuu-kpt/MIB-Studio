@@ -233,6 +233,8 @@ void processingThreadTask(
     cv::Mat inputImage(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
 
+    ThreadLocalMats mats = initializeThreadMats(height, width);
+
     // const size_t BUFFER_THRESHOLD = config["buffer_threshold"];
 
     // const size_t SAVE_THRESHOLD = 1000;   // Adjust as needed
@@ -257,11 +259,12 @@ void processingThreadTask(
 
             auto imageData = circularBuffer.get(0);
             inputImage = cv::Mat(height, width, CV_8UC1, imageData.data());
+
             // Check if ROI is the same as the full image
             if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
             {
                 // Preprocess Image using the optimized processFrame function
-                processFrame(inputImage, shared, processedImage, true); // true indicates it's the processing thread
+                processFrame(inputImage, shared, processedImage, mats); // true indicates it's the processing thread
 
                 bool touchesBorder = false;
                 // Check left and right edges
@@ -348,6 +351,7 @@ void displayThreadTask(
 {
     const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
     auto nextFrameTime = std::chrono::steady_clock::now();
+    ThreadLocalMats mats = initializeThreadMats(height, width);
 
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
@@ -417,7 +421,7 @@ void displayThreadTask(
                     }
 
                     // Preprocess Image using the optimized processFrame function
-                    processFrame(image, shared, processedImage, false); // false indicates it's the display thread
+                    processFrame(image, shared, processedImage, mats); // false indicates it's the display thread
 
                     // Concatenate live feed and processed feed
                     cv::Mat topHalf, bottomHalf;
@@ -461,7 +465,7 @@ void displayThreadTask(
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
 
                         // Process and display the binary image using processFrame
-                        processFrame(image, shared, processedImage, false);
+                        processFrame(image, shared, processedImage, mats);
 
                         // Concatenate live feed and processed feed
                         cv::Mat topHalf, bottomHalf;
