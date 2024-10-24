@@ -221,50 +221,51 @@ void processingThreadTask(
     std::mutex &processingQueueMutex,
     std::condition_variable &processingQueueCondition,
     std::queue<size_t> &framesToProcess,
-    const CircularBuffer &processingBuffer,
-    size_t width, size_t height, SharedResources &shared)
+    std::shared_ptr<ImageBuffer> buffer1,
+    std::shared_ptr<ImageBuffer> buffer2,
+    size_t width, size_t height,
+    SharedResources &shared)
 {
     auto lastPrintTime = std::chrono::steady_clock::now();
-    // int frameCount = 0;
-    // double totalProcessingTime = 0.0;
     double totalFindTime = 0.0;
 
     // Pre-allocate memory for images
     cv::Mat inputImage(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
-
     ThreadLocalMats mats = initializeThreadMats(height, width);
 
-    // const size_t BUFFER_THRESHOLD = config["buffer_threshold"];
-
-    // const size_t SAVE_THRESHOLD = 1000;   // Adjust as needed
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
 
     while (!shared.done)
     {
-        std::unique_lock<std::mutex> lock(processingQueueMutex);
-        processingQueueCondition.wait(lock, [&]()
-                                      { return !framesToProcess.empty() || shared.done || shared.paused; });
-
-        if (shared.done)
-            break;
-
-        if (!framesToProcess.empty() && !shared.paused)
+        // Check both buffers for new data
+        ImageBuffer *bufferToProcess = nullptr;
+        if (buffer1->hasNewData.load())
         {
-            // size_t frame = framesToProcess.front(); //retrieve content of queue
-            framesToProcess.pop();
-            lock.unlock();
+            bufferToProcess = buffer1.get();
+        }
+        else if (buffer2->hasNewData.load())
+        {
+            bufferToProcess = buffer2.get();
+        }
 
+        if (bufferToProcess && !shared.paused)
+        {
             auto startTime = std::chrono::high_resolution_clock::now();
 
-            auto imageData = processingBuffer.get(0);
-            inputImage = cv::Mat(height, width, CV_8UC1, imageData.data());
+            // Mark buffer as in use
+            bufferToProcess->inUse.store(true);
+            bufferToProcess->hasNewData.store(false);
+
+            // Process the image
+            inputImage = cv::Mat(height, width, CV_8UC1, bufferToProcess->data.data());
 
             // Check if ROI is the same as the full image
-            if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
+            if (static_cast<size_t>(shared.roi.width) != width &&
+                static_cast<size_t>(shared.roi.height) != height)
             {
                 // Preprocess Image using the optimized processFrame function
-                processFrame(inputImage, shared, processedImage, mats); // true indicates it's the processing thread
+                processFrame(inputImage, shared, processedImage, mats);
 
                 bool touchesBorder = false;
                 // Check left and right edges
@@ -281,30 +282,29 @@ void processingThreadTask(
                 if (!touchesBorder)
                 {
                     // Find contour
-                    ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
+                    ContourResult contourResult = findContours(processedImage);
                     std::vector<std::vector<cv::Point>> contours = contourResult.contours;
                     double contourFindTime = contourResult.findTime;
 
                     // Calculate deformability and circularity for each contour
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
-                        // bool qualifiedContourFound = false;
                         for (const auto &contour : contours)
                         {
                             if (contour.size() >= 10)
                             {
-
                                 auto [deformability, area] = calculateMetrics(contour);
                                 auto metrics = std::make_tuple(deformability, area);
                                 shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
                                 shared.newScatterDataAvailable = true;
                                 shared.scatterDataCondition.notify_one();
-                                // qualifiedContourFound = true;
+
                                 QualifiedResult qualifiedResult;
-                                qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                                qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                std::chrono::system_clock::now().time_since_epoch())
+                                                                .count();
                                 qualifiedResult.deformability = deformability;
                                 qualifiedResult.area = area;
-                                // qualifiedResult.contourResult = contourResult;
                                 qualifiedResult.originalImage = inputImage.clone();
 
                                 std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
@@ -324,17 +324,21 @@ void processingThreadTask(
                 }
             }
 
+            // Mark buffer as no longer in use
+            bufferToProcess->inUse.store(false);
+
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
             double processingTime = duration.count();
 
-            // Just store the processing time
+            // Store the processing time
             shared.processingTimes.push(reinterpret_cast<const uint8_t *>(&processingTime));
             shared.updated = true;
         }
         else
         {
-            lock.unlock();
+            // No new data to process, sleep briefly
+            // std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
     }
     std::cout << "Processing thread interrupted." << std::endl;

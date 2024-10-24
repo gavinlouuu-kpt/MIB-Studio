@@ -17,6 +17,17 @@ using json = nlohmann::json;
 
 class CircularBuffer;
 
+struct ImageBuffer
+{
+    std::vector<uint8_t> data;
+    std::atomic<bool> inUse;
+    std::atomic<bool> hasNewData;
+
+    ImageBuffer(size_t size) : data(size),
+                               inUse(false),
+                               hasNewData(false) {}
+};
+
 struct ImageParams
 {
     size_t width;

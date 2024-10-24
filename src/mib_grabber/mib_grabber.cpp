@@ -85,60 +85,64 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
-                          std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
-                          grabber.start();
-                          size_t frameCount = 0;
-                          uint64_t lastFrameId = 0;
-                          uint64_t duplicateCount = 0;
-                          while (!shared.done)
-                          {
-                              if (shared.paused)
-                              {
-                                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                  cv::waitKey(1);
-                                  continue;
-                              }
+        std::vector<std::thread> threads;
+        
+        // Create two image buffers for round-robin
+        auto buffer1 = std::make_shared<ImageBuffer>(params.imageSize);
+        auto buffer2 = std::make_shared<ImageBuffer>(params.imageSize);
+        std::atomic<ImageBuffer*> activeBuffer(buffer1.get());
 
-                              ScopedBuffer buffer(grabber);
-                              uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
-                              uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);
-                              uint64_t timestamp = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_TIMESTAMP);
-                              bool isIncomplete = buffer.getInfo<bool>(gc::BUFFER_INFO_IS_INCOMPLETE);
-                              size_t sizeFilled = buffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE_FILLED);
+        setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads, buffer1, buffer2);
 
-                              if (!isIncomplete)
-                              {
-                                  if (frameId <= lastFrameId)
-                                  {
-                                      ++duplicateCount;
-                                      //   std::cout << "Duplicate frame detected: FrameID=" << frameId << ", Timestamp=" << timestamp << std::endl;
-                                  }
-                                  else
-                                  {
-                                      circularBuffer.push(imagePointer);
-                                      processingBuffer.push(imagePointer);
-                                      {
-                                          std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
-                                          std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
-                                          shared.framesToProcess.push(frameCount);
-                                          shared.framesToDisplay.push(frameCount);
-                                      }
-                                      shared.displayQueueCondition.notify_one();
-                                      shared.processingQueueCondition.notify_one();
-                                      frameCount++;
-                                  }
-                                  lastFrameId = frameId;
-                              }
-                              else
-                              {
-                                  //   std::cout << "Incomplete frame received: FrameID=" << frameId << std::endl;
-                              }
-                          }
+        grabber.start();
+        size_t frameCount = 0;
+        uint64_t lastFrameId = 0;
 
-                          grabber.stop();
+        while (!shared.done)
+        {
+            if (shared.paused)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                cv::waitKey(1);
+                continue;
+            }
 
-                          return threads; });
+            ScopedBuffer buffer(grabber);
+            uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
+            uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);
+            bool isIncomplete = buffer.getInfo<bool>(gc::BUFFER_INFO_IS_INCOMPLETE);
+
+            if (!isIncomplete && frameId > lastFrameId)
+            {
+                // Get current active buffer
+                ImageBuffer* currentBuffer = activeBuffer.load();
+                
+                // If current buffer is in use, switch to the other buffer
+                if (currentBuffer->inUse.load())
+                {
+                    currentBuffer = (currentBuffer == buffer1.get()) ? buffer2.get() : buffer1.get();
+                    activeBuffer.store(currentBuffer);
+                }
+
+                // Copy new image to the active buffer
+                std::memcpy(currentBuffer->data.data(), imagePointer, params.imageSize);
+                currentBuffer->hasNewData.store(true);
+                
+                // Keep this for display purposes
+                circularBuffer.push(imagePointer);
+                
+                {
+                    std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+                    shared.framesToDisplay.push(frameCount);
+                }
+                shared.displayQueueCondition.notify_one();
+                frameCount++;
+                lastFrameId = frameId;
+            }
+        }
+
+        grabber.stop();
+        return threads; });
 }
 
 int mib_grabber_main()
