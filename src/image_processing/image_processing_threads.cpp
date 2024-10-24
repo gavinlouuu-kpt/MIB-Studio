@@ -238,7 +238,21 @@ void processingThreadTask(
 
     while (!shared.done)
     {
-        // Check both buffers for new data
+        // Use condition variable to wait for new data
+        std::unique_lock<std::mutex> lock(shared.processingQueueMutex);
+        shared.processingQueueCondition.wait_for(lock, std::chrono::milliseconds(100),
+                                                 [&]()
+                                                 {
+                                                     return shared.done ||
+                                                            (!shared.paused && (buffer1->hasNewData.load() || buffer2->hasNewData.load()));
+                                                 });
+
+        if (shared.done)
+            break;
+        if (shared.paused)
+            continue;
+
+        // Check buffers after waking up
         ImageBuffer *bufferToProcess = nullptr;
         if (buffer1->hasNewData.load())
         {
@@ -249,7 +263,10 @@ void processingThreadTask(
             bufferToProcess = buffer2.get();
         }
 
-        if (bufferToProcess && !shared.paused)
+        // Release the lock before processing
+        lock.unlock();
+
+        if (bufferToProcess)
         {
             auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -829,29 +846,19 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 }
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
-                        const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
-                        std::vector<std::thread> &threads)
+                        const CircularBuffer &circularBuffer, const ImageParams &params,
+                        std::vector<std::thread> &threads, std::shared_ptr<ImageBuffer> buffer1, std::shared_ptr<ImageBuffer> buffer2)
 {
     // Create processing thread first and set its priority
     threads.emplace_back(processingThreadTask,
-                         std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
-                         std::ref(shared.framesToProcess), std::ref(processingBuffer),
-                         params.width, params.height, std::ref(shared));
-
-// Set priority for the processing thread
-#ifdef _WIN32
-    if (!SetThreadPriority(threads.back().native_handle(), THREAD_PRIORITY_HIGHEST))
-    {
-        std::cerr << "Failed to set thread priority: " << GetLastError() << std::endl;
-    }
-#else
-    sched_param sch_params;
-    sch_params.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    if (pthread_setschedparam(threads.back().native_handle(), SCHED_FIFO, &sch_params) != 0)
-    {
-        std::cerr << "Failed to set thread priority: " << errno << std::endl;
-    }
-#endif
+                         std::ref(shared.processingQueueMutex),
+                         std::ref(shared.processingQueueCondition),
+                         std::ref(shared.framesToProcess),
+                         std::ref(buffer1), // Use shared buffer1
+                         std::ref(buffer2), // Use shared buffer2
+                         params.width,
+                         params.height,
+                         std::ref(shared));
 
     // Create remaining threads with normal priority
     threads.emplace_back(displayThreadTask, std::ref(shared.framesToDisplay),
@@ -874,12 +881,16 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     }
 }
 
-void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
+void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
+                          // Create two image buffers for round-robin
+                          auto buffer1 = std::make_shared<ImageBuffer>(params.imageSize);
+                          auto buffer2 = std::make_shared<ImageBuffer>(params.imageSize);
+                          std::atomic<ImageBuffer*> activeBuffer(buffer1.get());
                           std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
+                          setupCommonThreads(shared, saveDir, circularBuffer,  params, threads, buffer1, buffer2);
 
                           threads.emplace_back(simulateCameraThread,
                                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
@@ -898,16 +909,35 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                                   const uint8_t *imageData = cameraBuffer.getPointer(latestFrame);
                                   if (imageData != nullptr)
                                   {
+                                      // Get current active buffer
+                                      ImageBuffer* currentBuffer = activeBuffer.load();
+
+                                      // If current buffer is in use, switch to the other buffer
+                                      if (currentBuffer->inUse.load())
+                                      {
+                                          currentBuffer = (currentBuffer == buffer1.get()) ? buffer2.get() : buffer1.get();
+                                          activeBuffer.store(currentBuffer);
+                                      }
+
+                                      // Copy new image to the active buffer
+                                      std::memcpy(currentBuffer->data.data(), imageData, params.imageSize);
+                                      currentBuffer->hasNewData.store(true);
+                                      {
+                                          std::lock_guard<std::mutex> processLock(shared.processingQueueMutex);
+                                          currentBuffer->hasNewData.store(true);
+                                      }
+                                      shared.processingQueueCondition.notify_one();
+
                                       circularBuffer.push(imageData);
-                                      processingBuffer.push(imageData);
+                                      // TODO: add processing buffer
                                       {
                                           std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
-                                          std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+                                        //   std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
                                           shared.framesToProcess.push(latestFrame);
-                                          shared.framesToDisplay.push(latestFrame);
+                                        //   shared.framesToDisplay.push(latestFrame);
                                       }
                                       shared.displayQueueCondition.notify_one();
-                                      shared.processingQueueCondition.notify_one();
+                                    //   shared.processingQueueCondition.notify_one();
                                       lastProcessedFrame = latestFrame;
 
                                       // Optional: Print frame grabbing information
