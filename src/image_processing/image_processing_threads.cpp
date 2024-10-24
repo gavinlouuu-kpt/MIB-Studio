@@ -221,7 +221,7 @@ void processingThreadTask(
     std::mutex &processingQueueMutex,
     std::condition_variable &processingQueueCondition,
     std::queue<size_t> &framesToProcess,
-    const CircularBuffer &circularBuffer,
+    const CircularBuffer &processingBuffer,
     size_t width, size_t height, SharedResources &shared)
 {
     auto lastPrintTime = std::chrono::steady_clock::now();
@@ -257,7 +257,7 @@ void processingThreadTask(
 
             auto startTime = std::chrono::high_resolution_clock::now();
 
-            auto imageData = circularBuffer.get(0);
+            auto imageData = processingBuffer.get(0);
             inputImage = cv::Mat(height, width, CV_8UC1, imageData.data());
 
             // Check if ROI is the same as the full image
@@ -814,13 +814,13 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 }
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
-                        const CircularBuffer &circularBuffer, const ImageParams &params,
+                        const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
                         std::vector<std::thread> &threads)
 {
     // Create processing thread first and set its priority
     threads.emplace_back(processingThreadTask,
                          std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
-                         std::ref(shared.framesToProcess), std::ref(circularBuffer),
+                         std::ref(shared.framesToProcess), std::ref(processingBuffer),
                          params.width, params.height, std::ref(shared));
 
 // Set priority for the processing thread
@@ -859,12 +859,12 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     }
 }
 
-void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared)
+void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
                           std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, params, threads);
+                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
 
                           threads.emplace_back(simulateCameraThread,
                                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
@@ -884,6 +884,7 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                                   if (imageData != nullptr)
                                   {
                                       circularBuffer.push(imageData);
+                                      processingBuffer.push(imageData);
                                       {
                                           std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
                                           std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);

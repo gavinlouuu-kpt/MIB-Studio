@@ -81,12 +81,12 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
-void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, SharedResources &shared)
+void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
                           std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, params, threads);
+                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
                           grabber.start();
                           size_t frameCount = 0;
                           uint64_t lastFrameId = 0;
@@ -117,6 +117,7 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                                   else
                                   {
                                       circularBuffer.push(imagePointer);
+                                      processingBuffer.push(imagePointer);
                                       {
                                           std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
                                           std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
@@ -155,11 +156,12 @@ int mib_grabber_main()
         ImageParams params = initializeGrabber(grabber);
 
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
+        CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
         SharedResources shared;
         initializeBackgroundFrame(shared, params);
         shared.roi = cv::Rect(0, 0, params.width, params.height);
 
-        temp_sample(grabber, params, circularBuffer, shared);
+        temp_sample(grabber, params, circularBuffer, processingBuffer, shared);
     }
     catch (const std::exception &e)
     {

@@ -210,14 +210,14 @@ namespace MenuSystem
             ImageParams params = initializeImageParams(imageDirectory);
             CircularBuffer cameraBuffer(params.bufferCount, params.imageSize);
             CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
-
+            CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
             loadImages(imageDirectory, cameraBuffer, true);
 
             SharedResources shared;
             initializeMockBackgroundFrame(shared, params, cameraBuffer);
             shared.roi = cv::Rect(0, 0, static_cast<int>(params.width), static_cast<int>(params.height));
 
-            temp_mockSample(params, cameraBuffer, circularBuffer, shared);
+            temp_mockSample(params, cameraBuffer, circularBuffer, processingBuffer, shared);
 
             std::cout << "Mock sampling completed.\n";
         }

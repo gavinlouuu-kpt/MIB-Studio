@@ -129,10 +129,10 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
 json readConfig(const std::string &filename);
 bool updateConfig(const std::string &filename, const std::string &key, const json &value);
-void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, SharedResources &shared);
+void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared);
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
-                        const CircularBuffer &circularBuffer, const ImageParams &params,
+                        const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
                         std::vector<std::thread> &threads);
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
                        std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
