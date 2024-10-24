@@ -1,4 +1,11 @@
 # TODO
+## 2024/10/24
+- Duplicate frame detection
+- Calculate DI (gating from noise, debris, shake*)
+- Background acquisition uncouple from pause
+- XY offset to align field of view from 1920 x 1080 to 512 x 96 (EGrabber script to offset)
+- Faster image conversion for review
+
 ## 2024/10/16
 - Show keyboard instructions
 - Metrics to monitor
