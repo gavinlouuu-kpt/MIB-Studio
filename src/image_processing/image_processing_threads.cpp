@@ -662,11 +662,21 @@ void keyboardHandlingThread(
             }
             else if (ch == 115)
             { // 's' key - save the current frame
-                std::filesystem::path outputDir = "output";
+                std::filesystem::path outputDir = "stream_output";
                 if (!std::filesystem::exists(outputDir))
                 {
                     std::filesystem::create_directory(outputDir);
                 }
+                // Find the next available numbered folder
+                int folderNum = 1;
+                while (std::filesystem::exists(outputDir / std::to_string(folderNum)))
+                {
+                    folderNum++;
+                }
+
+                // Create the numbered subfolder
+                std::filesystem::path currentSaveDir = outputDir / std::to_string(folderNum);
+                std::filesystem::create_directory(currentSaveDir);
 
                 size_t frameCount = circularBuffer.size();
                 // std::cout << "Saving " << frameCount << " frames..." << std::endl;
@@ -674,19 +684,19 @@ void keyboardHandlingThread(
                 for (size_t i = 0; i < frameCount; ++i)
                 {
                     auto imageData = circularBuffer.get(frameCount - 1 - i); // Start from oldest frame
-                    cv::Mat image(512, 512, CV_8UC1, imageData.data());
+                    cv::Mat image(height, width, CV_8UC1, imageData.data());
 
                     std::ostringstream oss;
                     oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".png";
                     std::string filename = oss.str();
 
-                    std::filesystem::path fullPath = outputDir / filename;
+                    std::filesystem::path fullPath = currentSaveDir / filename;
 
                     cv::imwrite(fullPath.string(), image);
                     // std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
                 }
 
-                std::cout << "\nAll frames saved in the 'output' directory." << std::endl;
+                // std::cout << "\nAll frames saved in the 'output' directory." << std::endl;
             }
         }
         shared.updated = true;
@@ -785,6 +795,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     // Create full path within output directory
     std::filesystem::path fullPath = outputDir / saveDir;
     std::string basePath = fullPath.string();
+    shared.saveDirectory = basePath;
 
     // Automatically increment the directory name if it already exists
     int suffix = 1;

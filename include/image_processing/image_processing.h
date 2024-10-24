@@ -97,6 +97,7 @@ struct SharedResources
     std::atomic<size_t> totalSavedResults{0};
     std::chrono::steady_clock::time_point lastSaveTime;
     std::atomic<double> diskSaveTime;
+    std::string saveDirectory;
     // metrics
     CircularBuffer processingTimes{1000, sizeof(double)};                         // Buffer to store last 1000 processing times
     CircularBuffer deformabilityBuffer{2000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
