@@ -10,6 +10,7 @@
 - larger saving batch (saving speed is not the bottleneck)
 - Do not auto-save with deformabilities
 - change scatter plot to qt
+- create a setup mode
 
 
 ## 2024/10/16
