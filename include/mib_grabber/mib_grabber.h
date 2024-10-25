@@ -17,6 +17,5 @@ void configure(Euresys::EGrabber<Euresys::CallbackOnDemand> &grabber);
 void configure_js(std::string config_path);
 GrabberParams initializeGrabber(Euresys::EGrabber<Euresys::CallbackOnDemand> &grabber);
 void initializeBackgroundFrame(SharedResources &shared, const ImageParams &params);
-void sample(Euresys::EGrabber<Euresys::CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, SharedResources &shared);
-void temp_sample(Euresys::EGrabber<Euresys::CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, SharedResources &shared);
+void temp_sample(Euresys::EGrabber<Euresys::CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared);
 int mib_grabber_main();

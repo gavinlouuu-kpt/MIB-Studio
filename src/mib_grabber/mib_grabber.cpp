@@ -83,10 +83,10 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
 
 void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
-    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
+    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir, const ProcessingConfig &processingConfig)
                       {
                           std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
+                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads, processingConfig);
                           grabber.start();
                           size_t frameCount = 0;
                           uint64_t lastFrameId = 0;

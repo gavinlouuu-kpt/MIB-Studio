@@ -71,7 +71,7 @@ void simulateCameraThread(
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
-void metricDisplayThread(SharedResources &shared)
+void metricDisplayThread(SharedResources &shared, const ProcessingConfig &processingConfig)
 {
     using namespace ftxui;
     std::this_thread::sleep_for(std::chrono::milliseconds(100)); // sleep for 1ms to allow other things to be printed first
@@ -133,8 +133,8 @@ void metricDisplayThread(SharedResources &shared)
         auto [instantTime, avgTime, maxTime, minTime, highLatencyPct] = calculateProcessingMetrics(shared.processingTimes);
         double rate = calculateDeformabilityBufferRate(shared);
 
-        return window(text("Processing Metrics"), vbox({hbox({text("Avg Processing Time: "), text(std::to_string(avgTime) + " us")}),
-                                                        hbox({text("Max Processing Time: "), text(std::to_string(maxTime) + " us")}),
+        return window(text("Processing Metrics"), vbox({hbox({text("Avg Processing Time: "), text(std::to_string((int)avgTime) + " us")}),
+                                                        hbox({text("Max Processing Time: "), text(std::to_string((int)maxTime) + " us")}),
                                                         hbox({text("High Latency (>200us): "), text(std::to_string(highLatencyPct) + "%")}),
                                                         hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
                                                         hbox({text("Deformability Buffer Size: "), text(std::to_string(shared.deformabilityBuffer.size()) + " sets")}),
@@ -142,29 +142,29 @@ void metricDisplayThread(SharedResources &shared)
                                                         hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))})}));
     };
 
-    auto render_camera_metrics = [&]()
+    auto render_config_metrics = [&]()
     {
-        return window(text("Camera Metrics"), vbox({
-                                                  hbox({text("Current FPS: "),
-                                                        text(std::to_string(shared.currentFPS.load()))}),
-                                                  hbox({text("Images in Queue: "),
-                                                        text(std::to_string(shared.imagesInQueue.load()))}),
-                                              }));
+        return window(text("Configuration"), vbox({hbox({text("Current FPS: "),
+                                                         text(std::to_string((int)shared.currentFPS.load()))}),
+                                                   hbox({text("Binary Threshold: "),
+                                                         text(std::to_string(processingConfig.bg_subtract_threshold))}),
+                                                   hbox({text("Contour Size Threshold: "),
+                                                         text(std::to_string(processingConfig.contour_threshold))})}));
     };
 
-    auto render_roi = [&]()
-    {
-        return window(text("ROI"), vbox({
-                                       hbox({text("X: "),
-                                             text(std::to_string(shared.roi.x))}),
-                                       hbox({text("Y: "),
-                                             text(std::to_string(shared.roi.y))}),
-                                       hbox({text("Width: "),
-                                             text(std::to_string(shared.roi.width))}),
-                                       hbox({text("Height: "),
-                                             text(std::to_string(shared.roi.height))}),
-                                   }));
-    };
+    // auto render_roi = [&]()
+    // {
+    //     return window(text("ROI"), vbox({
+    //                                    hbox({text("X: "),
+    //                                          text(std::to_string(shared.roi.x))}),
+    //                                    hbox({text("Y: "),
+    //                                          text(std::to_string(shared.roi.y))}),
+    //                                    hbox({text("Width: "),
+    //                                          text(std::to_string(shared.roi.width))}),
+    //                                    hbox({text("Height: "),
+    //                                          text(std::to_string(shared.roi.height))}),
+    //                                }));
+    // };
 
     auto render_status = [&]()
     {
@@ -178,7 +178,7 @@ void metricDisplayThread(SharedResources &shared)
                                           hbox({text("Current Frame Index: "),
                                                 text(std::to_string(shared.currentFrameIndex.load()))}),
                                           hbox({text("Saving Speed: "),
-                                                text(std::to_string(shared.diskSaveTime.load()) + " ms")}),
+                                                text(std::to_string((int)shared.diskSaveTime.load()) + " ms")}),
 
                                       }));
     };
@@ -188,11 +188,13 @@ void metricDisplayThread(SharedResources &shared)
         return window(text("Keyboard Instructions"), vbox({
                                                          text("ESC: Exit"),
                                                          text("Space: Pause/Resume"),
-                                                         text("Space: Background frame"),
-                                                         text("A: Move to older frame"),
-                                                         text("D: Move to newer frame"),
+                                                         text("B: Set background frame (paused)"),
+                                                         text("A: Move to newer frame (paused)"),
+                                                         text("D: Move to older frame (paused)"),
+                                                         text("P: Toggle overlay mode"),
                                                          text("Q: Clear circularities"),
-                                                         text("S: Save current frame"),
+                                                         text("R: Toggle data recording"),
+                                                         text("S: Save all frames"),
                                                      }));
     };
 
@@ -203,8 +205,8 @@ void metricDisplayThread(SharedResources &shared)
         {
             auto document = hbox({
                 render_processing_metrics(),
-                render_camera_metrics(),
-                render_roi(),
+                render_config_metrics(),
+                // render_roi(),
                 render_status(),
                 render_keyboard_instructions(),
             });
@@ -225,12 +227,12 @@ void processingThreadTask(
     std::condition_variable &processingQueueCondition,
     std::queue<size_t> &framesToProcess,
     const CircularBuffer &processingBuffer,
-    size_t width, size_t height, SharedResources &shared)
+    size_t width, size_t height, SharedResources &shared, const ProcessingConfig &processingConfig)
 {
     // Pre-allocate memory for images
     cv::Mat inputImage(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
-    ThreadLocalMats mats = initializeThreadMats(height, width);
+    ThreadLocalMats mats = initializeThreadMats(height, width, processingConfig);
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
     const size_t contour_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
@@ -259,7 +261,7 @@ void processingThreadTask(
             if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
             {
                 // Preprocess Image using the optimized processFrame function
-                processFrame(inputImage, shared, processedImage, mats);
+                processFrame(inputImage, shared, processedImage, mats, processingConfig);
                 bool touchesBorder = false;
                 bool hasContent = false;
                 // Check left and right edges
@@ -347,11 +349,13 @@ void displayThreadTask(
     size_t width,
     size_t height,
     size_t bufferCount,
-    SharedResources &shared)
+    SharedResources &shared, const ProcessingConfig &processingConfig)
 {
-    const std::chrono::duration<double> frameDuration(1.0 / 60.0); // Increase to 60 FPS for smoother response
+    const double displayFPS = 60.0;
+
+    const std::chrono::duration<double> frameDuration(1.0 / displayFPS); // Increase to 60 FPS for smoother response
     auto nextFrameTime = std::chrono::steady_clock::now();
-    ThreadLocalMats mats = initializeThreadMats(height, width);
+    ThreadLocalMats mats = initializeThreadMats(height, width, processingConfig);
 
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
@@ -381,7 +385,7 @@ void displayThreadTask(
         // Draw ROI rectangle
         {
             std::lock_guard<std::mutex> roiLock(shared.roiMutex);
-            cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 2);
+            cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
         }
 
         cv::imshow("Live Feed", displayImage);
@@ -431,7 +435,7 @@ void displayThreadTask(
 
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(height, width, CV_8UC1, imageData.data());
-                    processFrame(image, shared, processedImage, mats);
+                    processFrame(image, shared, processedImage, mats, processingConfig);
                     updateDisplay(image, processedImage);
                     shouldUpdate = true;
 
@@ -454,7 +458,7 @@ void displayThreadTask(
                     if (!imageData.empty())
                     {
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
-                        processFrame(image, shared, processedImage, mats);
+                        processFrame(image, shared, processedImage, mats, processingConfig);
                         // find contours and calculate deformabilities and areas
                         ContourResult contourResult = findContours(processedImage);
                         std::vector<std::vector<cv::Point>> contours = contourResult.contours;
@@ -748,7 +752,7 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
 }
 
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
-                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads)
+                       std::function<std::vector<std::thread>(SharedResources &, const std::string &, const ProcessingConfig &)> setupThreads)
 {
     shared.done = false;
     shared.paused = false;
@@ -767,6 +771,13 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 
     // saving UI block
     json config = readConfig("config.json");
+    // Initialize processing configuration
+    ProcessingConfig processingConfig = ProcessingConfig{
+        config["image_processing"]["gaussian_blur_size"],
+        config["image_processing"]["bg_subtract_threshold"],
+        config["image_processing"]["morph_kernel_size"],
+        config["image_processing"]["morph_iterations"],
+        config["image_processing"]["contour_threshold"]};
     std::string saveDir = config["save_directory"];
 
     std::cout << "Current save directory: " << saveDir << std::endl;
@@ -802,7 +813,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     std::cout << "Using save directory: " << fullPath.string() << std::endl;
 
     // Call the setup function passed as parameter
-    std::vector<std::thread> threads = setupThreads(shared, fullPath.string());
+    std::vector<std::thread> threads = setupThreads(shared, fullPath.string(), processingConfig);
 
     // Wait for completion
     shared.displayQueueCondition.notify_all();
@@ -817,39 +828,23 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
-                        std::vector<std::thread> &threads)
+                        std::vector<std::thread> &threads, const ProcessingConfig &processingConfig)
 {
     // Create processing thread first and set its priority
     threads.emplace_back(processingThreadTask,
                          std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
                          std::ref(shared.framesToProcess), std::ref(processingBuffer),
-                         params.width, params.height, std::ref(shared));
-
-// Set priority for the processing thread
-#ifdef _WIN32
-    if (!SetThreadPriority(threads.back().native_handle(), THREAD_PRIORITY_HIGHEST))
-    {
-        std::cerr << "Failed to set thread priority: " << GetLastError() << std::endl;
-    }
-#else
-    sched_param sch_params;
-    sch_params.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    if (pthread_setschedparam(threads.back().native_handle(), SCHED_FIFO, &sch_params) != 0)
-    {
-        std::cerr << "Failed to set thread priority: " << errno << std::endl;
-    }
-#endif
-
+                         params.width, params.height, std::ref(shared), processingConfig);
     // Create remaining threads with normal priority
     threads.emplace_back(displayThreadTask, std::ref(shared.framesToDisplay),
                          std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
-                         params.width, params.height, params.bufferCount, std::ref(shared));
+                         params.width, params.height, params.bufferCount, std::ref(shared), processingConfig);
 
     threads.emplace_back(keyboardHandlingThread,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    threads.emplace_back(metricDisplayThread, std::ref(shared));
+    threads.emplace_back(metricDisplayThread, std::ref(shared), processingConfig);
 
     // Read from json to check if scatterplot is enabled
     json config = readConfig("config.json");
@@ -863,10 +858,10 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
-    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
+    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir, const ProcessingConfig &processingConfig)
                       {
                           std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
+                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads, processingConfig);
 
                           threads.emplace_back(simulateCameraThread,
                                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
@@ -896,13 +891,6 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                                       shared.displayQueueCondition.notify_one();
                                       shared.processingQueueCondition.notify_one();
                                       lastProcessedFrame = latestFrame;
-
-                                      // Optional: Print frame grabbing information
-                                    //   static size_t frameCount = 0;
-                                    //   if (++frameCount % 100 == 0) // Print every 100 frames
-                                    //   {
-                                    //       // std::cout << "Program grabbed frame " << frameCount << " (Camera frame: " << latestFrame << ")" << std::endl;
-                                    //   }
                                   }
                               }
                           }

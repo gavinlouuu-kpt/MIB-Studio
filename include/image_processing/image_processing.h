@@ -41,13 +41,14 @@ struct QualifiedResult
     cv::Mat originalImage;
 };
 
-// struct ProcessingMetrics
-// {
-//     std::atomic<double> averageProcessingTime{0.0};
-//     std::atomic<double> averageFindTime{0.0};
-//     std::atomic<int> qualifiedResultCount{0};
-//     std::atomic<bool> updated{false};
-// };
+struct ProcessingConfig
+{
+    int gaussian_blur_size;
+    int bg_subtract_threshold;
+    int morph_kernel_size;
+    int morph_iterations;
+    int contour_threshold;
+};
 
 struct ThreadLocalMats
 {
@@ -61,7 +62,6 @@ struct ThreadLocalMats
     cv::Mat kernel;
     bool initialized = false;
 };
-ThreadLocalMats initializeThreadMats(int height, int width);
 
 struct SharedResources
 {
@@ -124,10 +124,8 @@ struct SharedResources
 ImageParams initializeImageParams(const std::string &directory);
 void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder = false);
 void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
-// void processFrame(const std::vector<uint8_t> &imageData, size_t width, size_t height,
-//                   SharedResources &shared, cv::Mat &outputImage, bool isProcessingThread);
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
-                  cv::Mat &outputImage, ThreadLocalMats &mats);
+                  cv::Mat &outputImage, ThreadLocalMats &mats, const ProcessingConfig &config); // if put it under shared we dont need a new signature
 ContourResult findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 
@@ -144,7 +142,10 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
-                        std::vector<std::thread> &threads);
+                        std::vector<std::thread> &threads, const ProcessingConfig &processingConfig);
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
-                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
+                       std::function<std::vector<std::thread>(SharedResources &, const std::string &, const ProcessingConfig &)> setupThreads);
+
+ThreadLocalMats initializeThreadMats(int height, int width, const ProcessingConfig &processingConfig);
+
 void reviewSavedData();

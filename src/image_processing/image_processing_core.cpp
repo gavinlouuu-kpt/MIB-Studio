@@ -1,20 +1,7 @@
 #include "image_processing/image_processing.h"
 #include "CircularBuffer/CircularBuffer.h"
 
-// void initializeThreadMats(ThreadLocalMats &mats, int height, int width) {
-//     if (!mats.initialized) {
-//         mats.blurred_target = cv::Mat(height, width, CV_8UC1);
-//         mats.bg_sub = cv::Mat(height, width, CV_8UC1);
-//         mats.binary = cv::Mat(height, width, CV_8UC1);
-//         mats.dilate1 = cv::Mat(height, width, CV_8UC1);
-//         mats.erode1 = cv::Mat(height, width, CV_8UC1);
-//         mats.erode2 = cv::Mat(height, width, CV_8UC1);
-//         mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
-//         mats.initialized = true;
-//     }
-// }
-
-ThreadLocalMats initializeThreadMats(int height, int width)
+ThreadLocalMats initializeThreadMats(int height, int width, const ProcessingConfig &config)
 {
     ThreadLocalMats mats;
     mats.blurred_target = cv::Mat(height, width, CV_8UC1);
@@ -23,41 +10,34 @@ ThreadLocalMats initializeThreadMats(int height, int width)
     mats.dilate1 = cv::Mat(height, width, CV_8UC1);
     mats.erode1 = cv::Mat(height, width, CV_8UC1);
     mats.erode2 = cv::Mat(height, width, CV_8UC1);
-    mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+    mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS,
+                                            cv::Size(config.morph_kernel_size,
+                                                     config.morph_kernel_size));
     mats.initialized = true;
     return mats;
 }
 
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
-                  cv::Mat &outputImage, ThreadLocalMats &mats)
+                  cv::Mat &outputImage, ThreadLocalMats &mats, const ProcessingConfig &config)
 {
-
-    // Direct access without locks
     cv::Rect roi = shared.roi;
-
     // Ensure ROI is within image bounds
     roi &= cv::Rect(0, 0, inputImage.cols, inputImage.rows);
-
     // Direct access to background
     cv::Mat blurred_bg = shared.blurredBackground(roi);
-
-    // Optimize morphological operations
-    static const int iterations = 1;
-
     // Process only ROI area
     auto roiArea = inputImage(roi);
-    cv::GaussianBlur(roiArea, mats.blurred_target(roi), cv::Size(3, 3), 0);
+    cv::GaussianBlur(roiArea, mats.blurred_target(roi),
+                     cv::Size(config.gaussian_blur_size, config.gaussian_blur_size), 0);
     cv::subtract(blurred_bg, mats.blurred_target(roi), mats.bg_sub(roi));
-    cv::threshold(mats.bg_sub(roi), mats.binary(roi), 10, 255, cv::THRESH_BINARY);
-
+    cv::threshold(mats.bg_sub(roi), mats.binary(roi),
+                  config.bg_subtract_threshold, 255, cv::THRESH_BINARY);
     // Combine operations to reduce memory transfers
     cv::morphologyEx(mats.binary(roi), mats.dilate1(roi), cv::MORPH_CLOSE, mats.kernel,
-                     cv::Point(-1, -1), iterations);
+                     cv::Point(-1, -1), config.morph_iterations);
     cv::morphologyEx(mats.dilate1(roi), outputImage(roi), cv::MORPH_OPEN, mats.kernel,
-                     cv::Point(-1, -1), iterations);
+                     cv::Point(-1, -1), config.morph_iterations);
 
-    // Q: is this necessary? will it affect the determination of the content?
-    // Use more efficient mask creation
     if (roi.width != inputImage.cols || roi.height != inputImage.rows)
     {
         cv::Mat mask(inputImage.rows, inputImage.cols, CV_8UC1, cv::Scalar(0));

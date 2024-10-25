@@ -3,11 +3,11 @@
 ### Target: Get real time cell contour
 - Duplicate frame detection
 - Calculate DI (gating from noise, debris, shake*)
-- Easy to tune threshold params 
+- (can tune from json) Easy to tune threshold params 
 - (ok - use 'b' when paused) Background acquisition uncouple from pause
 - XY offset to align field of view from 1920 x 1080 to 512 x 96 (EGrabber script to offset)
 - (ok for now - direct read from bin, need to integrate back to current functions) Faster image conversion for review
-- larger saving batch (saving speed is not the bottleneck)
+- (not essential) larger saving batch (saving speed is not the bottleneck)
 - (ok - use 'r' to start saving) Do not auto-save with deformabilities
 - change scatter plot to qt
 - create a setup mode

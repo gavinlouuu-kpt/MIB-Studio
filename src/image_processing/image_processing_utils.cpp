@@ -110,6 +110,12 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                 << shared.roi.width << ","
                 << shared.roi.height;
         roiFile.close();
+
+        // Save processing configuration
+        json config = readConfig("config.json");
+        std::ofstream configFile(batchDir + "/processing_config.json");
+        configFile << std::setw(4) << config["image_processing"] << std::endl;
+        configFile.close();
     }
 
     for (const auto &result : results)
@@ -180,12 +186,10 @@ json readConfig(const std::string &filename)
         // Create default config
         config = {
             {"save_directory", "updated_results"},
-            {"save_threshold", 1000},
             {"buffer_threshold", 1000},
-            {"contour_size_threshold", 10},
             {"target_fps", 5000},
-            {"display_fps", 25},
-            {"scatter_plot_enabled", false}};
+            {"scatter_plot_enabled", false},
+            {"image_processing", {{"gaussian_blur_size", 3}, {"bg_subtract_threshold", 10}, {"morph_kernel_size", 3}, {"morph_iterations", 1}, {"contour_threshold", 10}}}};
 
         // Write default config to file
         std::ofstream configFile(filename);
@@ -242,9 +246,30 @@ bool updateConfig(const std::string &filename, const std::string &key, const jso
 
 void reviewSavedData()
 {
-    // Find all batch directories
     std::string projectPath = MenuSystem::navigateAndSelectFolder();
     std::vector<std::filesystem::path> batchDirs;
+    ProcessingConfig processingConfig;
+
+    // Remove this since we'll load it per batch
+    // json config = readConfig("config.json");
+
+    auto loadBatchConfig = [](const std::filesystem::path &batchPath) -> ProcessingConfig
+    {
+        std::ifstream configFile(batchPath / "processing_config.json");
+        if (!configFile.is_open())
+        {
+            throw std::runtime_error("Failed to load processing config from: " + batchPath.string());
+        }
+        json config;
+        configFile >> config;
+
+        return ProcessingConfig{
+            config["gaussian_blur_size"],
+            config["bg_subtract_threshold"],
+            config["morph_kernel_size"],
+            config["morph_iterations"]};
+    };
+
     for (const auto &entry : std::filesystem::directory_iterator(projectPath))
     {
         if (entry.is_directory() && entry.path().filename().string().find("batch_") != std::string::npos)
@@ -259,8 +284,11 @@ void reviewSavedData()
         return;
     }
 
-    auto initializeBatch = [](const std::filesystem::path &batchPath, SharedResources &shared) -> cv::Mat
+    auto initializeBatch = [&processingConfig, &loadBatchConfig](const std::filesystem::path &batchPath, SharedResources &shared) -> cv::Mat
     {
+        // Load batch-specific processing config
+        processingConfig = loadBatchConfig(batchPath);
+
         // Load background image
         cv::Mat backgroundClean = cv::imread((batchPath / "background_clean.png").string(), cv::IMREAD_GRAYSCALE);
         if (backgroundClean.empty())
@@ -300,7 +328,7 @@ void reviewSavedData()
 
     // Initial batch setup
     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
-    ThreadLocalMats mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols);
+    ThreadLocalMats mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, processingConfig);
 
     // Create display window
     cv::namedWindow("Data Review", cv::WINDOW_NORMAL);
@@ -365,7 +393,7 @@ void reviewSavedData()
                 cv::Mat processedImage = cv::Mat(images[currentImageIndex].rows,
                                                  images[currentImageIndex].cols,
                                                  CV_8UC1);
-                processFrame(images[currentImageIndex], shared, processedImage, mats);
+                processFrame(images[currentImageIndex], shared, processedImage, mats, processingConfig);
 
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
@@ -414,7 +442,7 @@ void reviewSavedData()
                     currentBatchIndex--;
                     currentImageIndex = 0;
                     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
-                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols);
+                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, processingConfig);
                     break;
                 }
                 break;
@@ -424,7 +452,7 @@ void reviewSavedData()
                     currentBatchIndex++;
                     currentImageIndex = 0;
                     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
-                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols);
+                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, processingConfig);
                     break;
                 }
                 break;
