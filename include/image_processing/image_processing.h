@@ -87,6 +87,7 @@ struct SharedResources
     cv::Rect roi;
     std::mutex roiMutex;
 
+    std::atomic<bool> running{false};
     std::vector<QualifiedResult> qualifiedResults;
     std::mutex qualifiedResultsMutex;
     std::vector<QualifiedResult> qualifiedResultsBuffer1;
@@ -137,3 +138,4 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         std::vector<std::thread> &threads);
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
                        std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
+void reviewSavedData();

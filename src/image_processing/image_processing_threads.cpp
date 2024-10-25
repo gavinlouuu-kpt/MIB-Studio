@@ -224,21 +224,13 @@ void processingThreadTask(
     const CircularBuffer &processingBuffer,
     size_t width, size_t height, SharedResources &shared)
 {
-    auto lastPrintTime = std::chrono::steady_clock::now();
-    // int frameCount = 0;
-    // double totalProcessingTime = 0.0;
-    double totalFindTime = 0.0;
-
     // Pre-allocate memory for images
     cv::Mat inputImage(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
-
     ThreadLocalMats mats = initializeThreadMats(height, width);
-
-    // const size_t BUFFER_THRESHOLD = config["buffer_threshold"];
-
-    // const size_t SAVE_THRESHOLD = 1000;   // Adjust as needed
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
+    const size_t contour_threshold = 10;
+    const uint8_t processedColor = 255; // grey scaled cell color
 
     while (!shared.done)
     {
@@ -264,15 +256,16 @@ void processingThreadTask(
             if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
             {
                 // Preprocess Image using the optimized processFrame function
-                processFrame(inputImage, shared, processedImage, mats); // true indicates it's the processing thread
-
+                processFrame(inputImage, shared, processedImage, mats);
                 bool touchesBorder = false;
+                bool hasContent = false;
                 // Check left and right edges
-                for (int y = shared.roi.y; y < shared.roi.y + shared.roi.height && !touchesBorder; y++)
+                cv::Mat roiImage = processedImage(shared.roi);
+                for (int y = 0; y < roiImage.rows && !touchesBorder; y++)
                 {
-                    if (processedImage.at<uint8_t>(y, shared.roi.x) == 255 || // Left edge
-                        processedImage.at<uint8_t>(y, shared.roi.x + shared.roi.width - 1) == 255)
-                    { // Right edge
+                    if (roiImage.at<uint8_t>(y, 0) == processedColor || // Left edge of ROI
+                        roiImage.at<uint8_t>(y, roiImage.cols - 1) == processedColor)
+                    { // Right edge of ROI
                         touchesBorder = true;
                     }
                 }
@@ -291,7 +284,7 @@ void processingThreadTask(
                         // bool qualifiedContourFound = false;
                         for (const auto &contour : contours)
                         {
-                            if (contour.size() >= 10)
+                            if (contour.size() >= contour_threshold)
                             {
 
                                 auto [deformability, area] = calculateMetrics(contour);
@@ -299,24 +292,28 @@ void processingThreadTask(
                                 shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
                                 shared.newScatterDataAvailable = true;
                                 shared.scatterDataCondition.notify_one();
-                                // qualifiedContourFound = true;
-                                QualifiedResult qualifiedResult;
-                                qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                                qualifiedResult.deformability = deformability;
-                                qualifiedResult.area = area;
-                                // qualifiedResult.contourResult = contourResult;
-                                qualifiedResult.originalImage = inputImage.clone();
-
-                                std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
-                                auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
-                                currentBuffer.push_back(std::move(qualifiedResult));
-
-                                // Check if we need to switch buffers
-                                if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
+                                // create a flag to check if user wants to save
+                                if (shared.running)
                                 {
-                                    shared.usingBuffer1 = !shared.usingBuffer1;
-                                    shared.savingInProgress = true;
-                                    shared.savingCondition.notify_one();
+                                    // qualifiedContourFound = true;
+                                    QualifiedResult qualifiedResult;
+                                    qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                                    qualifiedResult.deformability = deformability;
+                                    qualifiedResult.area = area;
+                                    // qualifiedResult.contourResult = contourResult;
+                                    qualifiedResult.originalImage = inputImage.clone();
+
+                                    std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                                    auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
+                                    currentBuffer.push_back(std::move(qualifiedResult));
+
+                                    // Check if we need to switch buffers
+                                    if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
+                                    {
+                                        shared.usingBuffer1 = !shared.usingBuffer1;
+                                        shared.savingInProgress = true;
+                                        shared.savingCondition.notify_one();
+                                    }
                                 }
                             }
                         }
@@ -593,7 +590,6 @@ void keyboardHandlingThread(
             int ch = _getch();
             if (ch == 27)
             { // ESC key
-                // std::cout << "ESC pressed. Stopping capture..." << std::endl;
                 shared.done = true;
                 shared.displayQueueCondition.notify_all();
                 shared.processingQueueCondition.notify_all();
@@ -613,37 +609,20 @@ void keyboardHandlingThread(
                     // grabber.start();
                 }
             }
-            else if (ch == 97 && shared.paused)
+            else if (ch == 97 && shared.paused && shared.currentFrameIndex < circularBuffer.size() - 1)
             { // 'a' key - move to older frame
-                if (shared.currentFrameIndex < circularBuffer.size() - 1)
-                {
-                    shared.currentFrameIndex++;
-                    // std::cout << "a key pressed\nMoved to older frame. Current Frame Index: " << shared.currentFrameIndex << std::endl;
-                    shared.displayNeedsUpdate = true;
-                }
-                else
-                {
-                    // std::cout << "Already at oldest frame." << std::endl;
-                }
+                shared.currentFrameIndex++;
+                shared.displayNeedsUpdate = true;
             }
-            else if (ch == 100 && shared.paused)
+            else if (ch == 100 && shared.paused && shared.currentFrameIndex > 0)
             { // 'd' key - move to newer frame
-                if (shared.currentFrameIndex > 0)
-                {
-                    shared.currentFrameIndex--;
-                    // std::cout << "d key pressed\nMoved to newer frame. Current Frame Index: " << shared.currentFrameIndex << std::endl;
-                    shared.displayNeedsUpdate = true;
-                }
-                else
-                {
-                    // std::cout << "Already at newest frame." << std::endl;
-                }
+                shared.currentFrameIndex--;
+                shared.displayNeedsUpdate = true;
             }
             else if (ch == 113)
-            { // 'q' key
+            { // 'q' key - clear deformability buffer
                 std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
                 shared.deformabilityBuffer.clear();
-                // std::cout << "Circularities vector cleared." << std::endl;
             }
             else if (ch == 115)
             { // 's' key - save the current frame
@@ -680,8 +659,6 @@ void keyboardHandlingThread(
                     cv::imwrite(fullPath.string(), image);
                     // std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
                 }
-
-                // std::cout << "\nAll frames saved in the 'output' directory." << std::endl;
             }
             else if (ch == 98 && shared.paused)
             { // 'b' key - acquire background image
@@ -691,8 +668,12 @@ void keyboardHandlingThread(
                     shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, backgroundImageData.data()).clone();
                     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
                 }
-                std::cout << "Background frame updated with the latest frame." << std::endl;
                 shared.displayNeedsUpdate = true;
+            }
+            // use 'r' key to run experiment by setting running flag to true
+            else if (ch == 114)
+            {
+                shared.running = !shared.running;
             }
         }
         shared.updated = true;

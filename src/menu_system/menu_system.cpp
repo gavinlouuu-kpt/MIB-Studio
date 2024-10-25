@@ -298,6 +298,7 @@ namespace MenuSystem
         std::vector<std::string> entries = {
             "Run Mock Sample",
             "Run Live Sample",
+            "Review Saved Data",
             "Convert Saved Images",
             "EGrabber Config",
             "Exit"};
@@ -337,12 +338,15 @@ namespace MenuSystem
                 runLiveSample();
                 break;
             case 2:
-                convertSavedImages();
+                reviewSavedData();
                 break;
             case 3:
-                egrabberConfig();
+                convertSavedImages();
                 break;
             case 4:
+                egrabberConfig();
+                break;
+            case 5:
                 std::cout << "Exiting program.\n";
                 return 0;
             }

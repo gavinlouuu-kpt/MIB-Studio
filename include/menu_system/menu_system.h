@@ -13,5 +13,5 @@ namespace MenuSystem
     void egrabberConfig();
     int runMenu();
     void processAllBatches(const std::string &saveDirectory);
-
+    std::string navigateAndSelectFolder();
 } // namespace MenuSystem

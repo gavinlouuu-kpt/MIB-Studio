@@ -56,6 +56,7 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     cv::morphologyEx(mats.dilate1(roi), outputImage(roi), cv::MORPH_OPEN, mats.kernel,
                      cv::Point(-1, -1), iterations);
 
+    // Q: is this necessary? will it affect the determination of the content?
     // Use more efficient mask creation
     if (roi.width != inputImage.cols || roi.height != inputImage.rows)
     {
