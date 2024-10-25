@@ -133,14 +133,13 @@ void metricDisplayThread(SharedResources &shared)
         auto [instantTime, avgTime, maxTime, minTime, highLatencyPct] = calculateProcessingMetrics(shared.processingTimes);
         double rate = calculateDeformabilityBufferRate(shared);
 
-        return window(text("Processing Metrics"), vbox({hbox({text("Instant Processing Time: "), text(std::to_string(instantTime) + " us")}),
-                                                        hbox({text("Avg Processing Time (1000 samples): "), text(std::to_string(avgTime) + " us")}),
+        return window(text("Processing Metrics"), vbox({hbox({text("Avg Processing Time: "), text(std::to_string(avgTime) + " us")}),
                                                         hbox({text("Max Processing Time: "), text(std::to_string(maxTime) + " us")}),
-                                                        hbox({text("Min Processing Time: "), text(std::to_string(minTime) + " us")}),
                                                         hbox({text("High Latency (>200us): "), text(std::to_string(highLatencyPct) + "%")}),
                                                         hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
                                                         hbox({text("Deformability Buffer Size: "), text(std::to_string(shared.deformabilityBuffer.size()) + " sets")}),
-                                                        hbox({text("Deformability Buffer Rate: "), text(std::to_string(rate) + " sets/sec")})}));
+                                                        hbox({text("Deformability: "), text(std::to_string(shared.frameDeformabilities.load()))}),
+                                                        hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))})}));
     };
 
     auto render_camera_metrics = [&]()
@@ -174,6 +173,8 @@ void metricDisplayThread(SharedResources &shared)
                                                 text(shared.running.load() ? "Yes" : "No")}),
                                           hbox({text("Paused: "),
                                                 text(shared.paused.load() ? "Yes" : "No")}),
+                                          hbox({text("Overlay Mode: "),
+                                                text(shared.overlayMode.load() ? "Yes" : "No")}),
                                           hbox({text("Current Frame Index: "),
                                                 text(std::to_string(shared.currentFrameIndex.load()))}),
                                           hbox({text("Saving Speed: "),
@@ -454,6 +455,16 @@ void displayThreadTask(
                     {
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats);
+                        // find contours and calculate deformabilities and areas
+                        ContourResult contourResult = findContours(processedImage);
+                        std::vector<std::vector<cv::Point>> contours = contourResult.contours;
+                        // only display the largest contour
+                        for (const auto &contour : contours)
+                        {
+                            auto [deformability, area] = calculateMetrics(contour);
+                            shared.frameDeformabilities.store(deformability);
+                            shared.frameAreas.store(area);
+                        }
                         updateDisplay(image, processedImage);
                         cv::setTrackbarPos("Frame", "Live Feed", index);
                         shouldUpdate = true;
@@ -607,10 +618,14 @@ void keyboardHandlingThread(
             shared.currentFrameIndex--;
             shared.displayNeedsUpdate = true;
         }
+        else if (key == 'p' || key == 'P')
+        {
+            shared.overlayMode = !shared.overlayMode;
+        }
         else if (key == 'q' || key == 'Q')
         {
-            std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
-            shared.deformabilityBuffer.clear();
+            // std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
+            // shared.deformabilityBuffer.clear();
         }
         else if (key == 's' || key == 'S')
         {

@@ -73,8 +73,9 @@ struct SharedResources
     std::atomic<bool> overlayMode{false};
     std::atomic<int> currentFrameIndex{-1};
     std::atomic<bool> displayNeedsUpdate{false};
-    std::atomic<size_t> latestCameraFrame{0};
-    std::atomic<size_t> frameRateCount{0}; // for simulated camera
+
+    std::atomic<size_t> latestCameraFrame{0}; // for simulated camera
+    std::atomic<size_t> frameRateCount{0};    // for simulated camera
     std::queue<size_t> framesToProcess;
     std::queue<size_t> framesToDisplay;
     std::mutex displayQueueMutex;
@@ -110,6 +111,10 @@ struct SharedResources
     std::atomic<double> currentFPS;
     std::atomic<size_t> imagesInQueue;
     std::atomic<size_t> qualifiedResultCount;
+    // frameDeformabilities and frameAreas are used for review
+    std::atomic<double> frameDeformabilities;
+    std::atomic<double> frameAreas;
+    std::atomic<size_t> frameContourSize;
     // std::atomic<size_t> totalFramesProcessed;
     std::atomic<bool> updated;
     // std::atomic<double> linearProcessingTime;
