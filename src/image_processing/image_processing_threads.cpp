@@ -170,6 +170,8 @@ void metricDisplayThread(SharedResources &shared)
     auto render_status = [&]()
     {
         return window(text("Status"), vbox({
+                                          hbox({text("Running: "),
+                                                text(shared.running.load() ? "Yes" : "No")}),
                                           hbox({text("Paused: "),
                                                 text(shared.paused.load() ? "Yes" : "No")}),
                                           hbox({text("Current Frame Index: "),
@@ -346,26 +348,43 @@ void displayThreadTask(
     size_t bufferCount,
     SharedResources &shared)
 {
-    const std::chrono::duration<double> frameDuration(1.0 / 25.0); // 25 FPS
+    const std::chrono::duration<double> frameDuration(1.0 / 60.0); // Increase to 60 FPS for smoother response
     auto nextFrameTime = std::chrono::steady_clock::now();
     ThreadLocalMats mats = initializeThreadMats(height, width);
 
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
-    cv::Mat displayImage(height * 2, width, CV_8UC3);
+    cv::Mat displayImage(height, width, CV_8UC3);
 
-    cv::namedWindow("Combined Feed", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Combined Feed", width, height * 2);
-
-    // cv::namedWindow("Scatter Plot", cv::WINDOW_NORMAL);
-    // cv::resizeWindow("Scatter Plot", 400, 400);
+    cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Live Feed", width, height);
 
     int trackbarPos = 0;
-    cv::createTrackbar("Frame", "Combined Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
 
-    // Variable for scatter plot
-    // cv::Mat scatterPlot(400, 400, CV_8UC3, cv::Scalar(255, 255, 255));
+    auto updateDisplay = [&](const cv::Mat &originalImage, const cv::Mat &processedImage)
+    {
+        // Convert original image to color
+        cv::cvtColor(originalImage, displayImage, cv::COLOR_GRAY2BGR);
+
+        if (shared.overlayMode)
+        {
+            // Create a mask from the processed image
+            cv::Mat mask = (processedImage > 0);
+
+            // Overlay processed image in red
+            displayImage.setTo(cv::Scalar(0, 0, 255), mask);
+        }
+
+        // Draw ROI rectangle
+        {
+            std::lock_guard<std::mutex> roiLock(shared.roiMutex);
+            cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 2);
+        }
+
+        cv::imshow("Live Feed", displayImage);
+    };
 
     // Function to handle mouse events for ROI selection
     auto onMouse = [](int event, int x, int y, int flags, void *userdata)
@@ -380,10 +399,8 @@ void displayThreadTask(
         else if (event == cv::EVENT_LBUTTONUP)
         {
             cv::Point endPoint(x, y);
-            // Calculate the distance between start and end points
             double distance = cv::norm(startPoint - endPoint);
 
-            // Only update ROI if the distance is greater than a threshold (e.g., 5 pixels)
             if (distance > 5)
             {
                 cv::Rect newRoi(startPoint, endPoint);
@@ -394,16 +411,18 @@ void displayThreadTask(
         }
     };
 
-    cv::setMouseCallback("Combined Feed", onMouse, &shared);
+    cv::setMouseCallback("Live Feed", onMouse, &shared);
 
     while (!shared.done)
     {
+        auto now = std::chrono::steady_clock::now();
+        bool shouldUpdate = false;
+
         if (!shared.paused)
         {
-            std::unique_lock<std::mutex> lock(displayQueueMutex);
-            auto now = std::chrono::steady_clock::now();
             if (now >= nextFrameTime)
             {
+                std::unique_lock<std::mutex> lock(displayQueueMutex);
                 if (!framesToDisplay.empty())
                 {
                     framesToDisplay.pop();
@@ -411,25 +430,9 @@ void displayThreadTask(
 
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(height, width, CV_8UC1, imageData.data());
-
-                    {
-                        std::lock_guard<std::mutex> roiLock(shared.roiMutex);
-                        cv::rectangle(image, shared.roi, cv::Scalar(0, 255, 0), 2);
-                    }
-
-                    // Preprocess Image using the optimized processFrame function
-                    processFrame(image, shared, processedImage, mats); // false indicates it's the display thread
-
-                    // Concatenate live feed and processed feed
-                    cv::Mat topHalf, bottomHalf;
-                    cv::cvtColor(image, topHalf, cv::COLOR_GRAY2BGR);
-                    cv::cvtColor(processedImage, bottomHalf, cv::COLOR_GRAY2BGR);
-                    topHalf.copyTo(displayImage(cv::Rect(0, 0, width, height)));
-                    bottomHalf.copyTo(displayImage(cv::Rect(0, height, width, height)));
-
-                    cv::imshow("Combined Feed", displayImage);
-
-                    cv::waitKey(1); // Process GUI events
+                    processFrame(image, shared, processedImage, mats);
+                    updateDisplay(image, processedImage);
+                    shouldUpdate = true;
 
                     nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
                     if (nextFrameTime < now)
@@ -437,15 +440,6 @@ void displayThreadTask(
                         nextFrameTime = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
                     }
                 }
-                else
-                {
-                    lock.unlock();
-                }
-            }
-            else
-            {
-                lock.unlock();
-                cv::waitKey(1); // Process GUI events
             }
         }
         else
@@ -456,40 +450,43 @@ void displayThreadTask(
                 if (index >= 0 && index < circularBuffer.size())
                 {
                     auto imageData = circularBuffer.get(index);
-
                     if (!imageData.empty())
                     {
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
-
-                        // Process and display the binary image using processFrame
                         processFrame(image, shared, processedImage, mats);
-
-                        // Concatenate live feed and processed feed
-                        cv::Mat topHalf, bottomHalf;
-                        cv::cvtColor(image, topHalf, cv::COLOR_GRAY2BGR);
-                        cv::cvtColor(processedImage, bottomHalf, cv::COLOR_GRAY2BGR);
-                        topHalf.copyTo(displayImage(cv::Rect(0, 0, width, height)));
-                        bottomHalf.copyTo(displayImage(cv::Rect(0, height, width, height)));
-
-                        cv::imshow("Combined Feed", displayImage);
-
-                        cv::setTrackbarPos("Frame", "Combined Feed", index);
-                        // std::cout << "Displaying frame: " << index << std::endl;
+                        updateDisplay(image, processedImage);
+                        cv::setTrackbarPos("Frame", "Live Feed", index);
+                        shouldUpdate = true;
                     }
-                    else
-                    {
-                        std::cout << "Failed to get image data from buffer" << std::endl;
-                    }
-                }
-                else
-                {
-                    std::cout << "Invalid frame index: " << index << std::endl;
                 }
                 shared.displayNeedsUpdate = false;
             }
-            cv::waitKey(1); // Process GUI events
+        }
+
+        // Handle keyboard input more frequently
+        for (int i = 0; i < 5; i++)
+        { // Check multiple times per frame
+            int key = cv::waitKey(1) & 0xFF;
+            if (key != -1 && shared.keyboardCallback)
+            {
+                std::lock_guard<std::mutex> lock(shared.keyboardMutex);
+                shared.keyboardCallback(key);
+            }
+
+            // If we're not updating the display, add a small sleep
+            if (!shouldUpdate)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+
+        // Only call imshow when we actually need to update the display
+        if (shouldUpdate)
+        {
+            cv::imshow("Live Feed", displayImage);
         }
     }
+
     cv::destroyAllWindows();
     std::cout << "Display thread interrupted." << std::endl;
 }
@@ -583,101 +580,103 @@ void keyboardHandlingThread(
     size_t bufferCount, size_t width, size_t height,
     SharedResources &shared)
 {
+    auto handleKeypress = [&](int key)
+    {
+        if (key == 27)
+        { // ESC key
+            shared.done = true;
+            shared.displayQueueCondition.notify_all();
+            shared.processingQueueCondition.notify_all();
+            shared.savingCondition.notify_all();
+        }
+        else if (key == 32)
+        { // Space bar
+            shared.paused = !shared.paused;
+            if (shared.paused)
+            {
+                shared.currentFrameIndex = 0;
+            }
+        }
+        else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex < circularBuffer.size() - 1)
+        {
+            shared.currentFrameIndex++;
+            shared.displayNeedsUpdate = true;
+        }
+        else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex > 0)
+        {
+            shared.currentFrameIndex--;
+            shared.displayNeedsUpdate = true;
+        }
+        else if (key == 'q' || key == 'Q')
+        {
+            std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
+            shared.deformabilityBuffer.clear();
+        }
+        else if (key == 's' || key == 'S')
+        {
+            std::filesystem::path outputDir = "stream_output";
+            if (!std::filesystem::exists(outputDir))
+            {
+                std::filesystem::create_directory(outputDir);
+            }
+            // Find the next available numbered folder
+            int folderNum = 1;
+            while (std::filesystem::exists(outputDir / std::to_string(folderNum)))
+            {
+                folderNum++;
+            }
+
+            // Create the numbered subfolder
+            std::filesystem::path currentSaveDir = outputDir / std::to_string(folderNum);
+            std::filesystem::create_directory(currentSaveDir);
+
+            size_t frameCount = circularBuffer.size();
+            // std::cout << "Saving " << frameCount << " frames..." << std::endl;
+
+            for (size_t i = 0; i < frameCount; ++i)
+            {
+                auto imageData = circularBuffer.get(frameCount - 1 - i); // Start from oldest frame
+                cv::Mat image(height, width, CV_8UC1, imageData.data());
+
+                std::ostringstream oss;
+                oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".png";
+                std::string filename = oss.str();
+
+                std::filesystem::path fullPath = currentSaveDir / filename;
+
+                cv::imwrite(fullPath.string(), image);
+                // std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
+            }
+        }
+        else if ((key == 'b' || key == 'B') && shared.paused)
+        {
+            auto backgroundImageData = circularBuffer.get(shared.currentFrameIndex);
+            {
+                std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+                shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, backgroundImageData.data()).clone();
+                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
+            }
+            shared.displayNeedsUpdate = true;
+        }
+        else if (key == 'r' || key == 'R')
+        {
+            shared.running = !shared.running;
+        }
+        shared.updated = true;
+    };
+
+    // Store the callback for use in displayThreadTask
+    shared.keyboardCallback = handleKeypress;
+
+    // Handle console input
     while (!shared.done)
     {
         if (_kbhit())
         {
             int ch = _getch();
-            if (ch == 27)
-            { // ESC key
-                shared.done = true;
-                shared.displayQueueCondition.notify_all();
-                shared.processingQueueCondition.notify_all();
-                shared.savingCondition.notify_all();
-            }
-            else if (ch == 32)
-            { // Space bar
-                shared.paused = !shared.paused;
-                if (shared.paused)
-                {
-                    shared.currentFrameIndex = 0;
-                    // should set a flag to stop grabber
-                }
-                else
-                {
-                    // set a flag to start grabber
-                    // grabber.start();
-                }
-            }
-            else if (ch == 97 && shared.paused && shared.currentFrameIndex < circularBuffer.size() - 1)
-            { // 'a' key - move to older frame
-                shared.currentFrameIndex++;
-                shared.displayNeedsUpdate = true;
-            }
-            else if (ch == 100 && shared.paused && shared.currentFrameIndex > 0)
-            { // 'd' key - move to newer frame
-                shared.currentFrameIndex--;
-                shared.displayNeedsUpdate = true;
-            }
-            else if (ch == 113)
-            { // 'q' key - clear deformability buffer
-                std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
-                shared.deformabilityBuffer.clear();
-            }
-            else if (ch == 115)
-            { // 's' key - save the current frame
-                std::filesystem::path outputDir = "stream_output";
-                if (!std::filesystem::exists(outputDir))
-                {
-                    std::filesystem::create_directory(outputDir);
-                }
-                // Find the next available numbered folder
-                int folderNum = 1;
-                while (std::filesystem::exists(outputDir / std::to_string(folderNum)))
-                {
-                    folderNum++;
-                }
-
-                // Create the numbered subfolder
-                std::filesystem::path currentSaveDir = outputDir / std::to_string(folderNum);
-                std::filesystem::create_directory(currentSaveDir);
-
-                size_t frameCount = circularBuffer.size();
-                // std::cout << "Saving " << frameCount << " frames..." << std::endl;
-
-                for (size_t i = 0; i < frameCount; ++i)
-                {
-                    auto imageData = circularBuffer.get(frameCount - 1 - i); // Start from oldest frame
-                    cv::Mat image(height, width, CV_8UC1, imageData.data());
-
-                    std::ostringstream oss;
-                    oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".png";
-                    std::string filename = oss.str();
-
-                    std::filesystem::path fullPath = currentSaveDir / filename;
-
-                    cv::imwrite(fullPath.string(), image);
-                    // std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
-                }
-            }
-            else if (ch == 98 && shared.paused)
-            { // 'b' key - acquire background image
-                auto backgroundImageData = circularBuffer.get(shared.currentFrameIndex);
-                {
-                    std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-                    shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, backgroundImageData.data()).clone();
-                    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
-                }
-                shared.displayNeedsUpdate = true;
-            }
-            // use 'r' key to run experiment by setting running flag to true
-            else if (ch == 114)
-            {
-                shared.running = !shared.running;
-            }
+            handleKeypress(ch);
         }
-        shared.updated = true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small sleep to reduce CPU usage
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::cout << "Keyboard handling thread interrupted." << std::endl;
 }

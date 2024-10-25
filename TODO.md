@@ -4,13 +4,15 @@
 - Duplicate frame detection
 - Calculate DI (gating from noise, debris, shake*)
 - Easy to tune threshold params 
-- Background acquisition uncouple from pause
+- (ok - use 'b' when paused) Background acquisition uncouple from pause
 - XY offset to align field of view from 1920 x 1080 to 512 x 96 (EGrabber script to offset)
-- Faster image conversion for review
+- (ok for now - direct read from bin, need to integrate back to current functions) Faster image conversion for review
 - larger saving batch (saving speed is not the bottleneck)
-- Do not auto-save with deformabilities
+- (ok - use 'r' to start saving) Do not auto-save with deformabilities
 - change scatter plot to qt
 - create a setup mode
+
+
 
 
 ## 2024/10/16

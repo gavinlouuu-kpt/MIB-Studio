@@ -65,12 +65,16 @@ ThreadLocalMats initializeThreadMats(int height, int width);
 
 struct SharedResources
 {
+
     std::atomic<bool> done{false};
     std::atomic<bool> paused{false};
+    std::function<void(int)> keyboardCallback;
+    std::mutex keyboardMutex;
+    std::atomic<bool> overlayMode{false};
     std::atomic<int> currentFrameIndex{-1};
     std::atomic<bool> displayNeedsUpdate{false};
     std::atomic<size_t> latestCameraFrame{0};
-    std::atomic<size_t> frameRateCount{0};
+    std::atomic<size_t> frameRateCount{0}; // for simulated camera
     std::queue<size_t> framesToProcess;
     std::queue<size_t> framesToDisplay;
     std::mutex displayQueueMutex;
