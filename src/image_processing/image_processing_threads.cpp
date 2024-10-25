@@ -604,31 +604,16 @@ void keyboardHandlingThread(
                 shared.paused = !shared.paused;
                 if (shared.paused)
                 {
-                    // uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
-                    // uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
-                    // std::cout << "EGrabber Frame Rate: " << fr << " FPS" << std::endl;
-                    // std::cout << "EGrabber Data Rate: " << dr << " MB/s" << std::endl;
-                    // grabber.stop();
                     shared.currentFrameIndex = 0;
-                    auto BackgroundImageData = circularBuffer.get(shared.currentFrameIndex);
-                    {
-                        std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-                        shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, BackgroundImageData.data()).clone();
-                        cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
-                    }
-
-                    // std::cout << "Background frame captured and blurred." << std::endl;
-
-                    // std::cout << "Paused" << std::endl;
-                    shared.displayNeedsUpdate = true;
+                    // should set a flag to stop grabber
                 }
                 else
                 {
+                    // set a flag to start grabber
                     // grabber.start();
-                    // std::cout << "Resumed" << std::endl;
                 }
             }
-            else if (ch == 97)
+            else if (ch == 97 && shared.paused)
             { // 'a' key - move to older frame
                 if (shared.currentFrameIndex < circularBuffer.size() - 1)
                 {
@@ -641,7 +626,7 @@ void keyboardHandlingThread(
                     // std::cout << "Already at oldest frame." << std::endl;
                 }
             }
-            else if (ch == 100)
+            else if (ch == 100 && shared.paused)
             { // 'd' key - move to newer frame
                 if (shared.currentFrameIndex > 0)
                 {
@@ -697,6 +682,17 @@ void keyboardHandlingThread(
                 }
 
                 // std::cout << "\nAll frames saved in the 'output' directory." << std::endl;
+            }
+            else if (ch == 98 && shared.paused)
+            { // 'b' key - acquire background image
+                auto backgroundImageData = circularBuffer.get(shared.currentFrameIndex);
+                {
+                    std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+                    shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, backgroundImageData.data()).clone();
+                    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
+                }
+                std::cout << "Background frame updated with the latest frame." << std::endl;
+                shared.displayNeedsUpdate = true;
             }
         }
         shared.updated = true;
