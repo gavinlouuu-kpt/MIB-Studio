@@ -148,8 +148,10 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                          text(std::to_string((int)shared.currentFPS.load()))}),
                                                    hbox({text("Binary Threshold: "),
                                                          text(std::to_string(processingConfig.bg_subtract_threshold))}),
-                                                   hbox({text("Contour Size Threshold: "),
-                                                         text(std::to_string(processingConfig.contour_threshold))})}));
+                                                   hbox({text("Contour Min Threshold: "),
+                                                         text(std::to_string(processingConfig.contour_threshold_min))}),
+                                                   hbox({text("Contour Max Threshold: "),
+                                                         text(std::to_string(processingConfig.contour_threshold_max))})}));
     };
 
     // auto render_roi = [&]()
@@ -289,7 +291,8 @@ void processingThreadTask(
                         // bool qualifiedContourFound = false;
                         for (const auto &contour : contours)
                         {
-                            if (contour.size() >= contour_threshold)
+                            if (contour.size() >= processingConfig.contour_threshold_min &&
+                                contour.size() <= processingConfig.contour_threshold_max)
                             {
 
                                 auto [deformability, area] = calculateMetrics(contour);
@@ -457,19 +460,49 @@ void displayThreadTask(
                     auto imageData = circularBuffer.get(index);
                     if (!imageData.empty())
                     {
+                        // read config to enable hot reloading of image processing parameters
+                        auto config = readConfig("config.json");
+
+                        ProcessingConfig newConfig{
+                            config["image_processing"]["gaussian_blur_size"],
+                            config["image_processing"]["bg_subtract_threshold"],
+                            config["image_processing"]["morph_kernel_size"],
+                            config["image_processing"]["morph_iterations"],
+                            config["image_processing"]["contour_threshold_min"],
+                            config["image_processing"]["contour_threshold_max"]};
+
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
-                        processFrame(image, shared, processedImage, mats, processingConfig);
+                        processFrame(image, shared, processedImage, mats, newConfig);
                         // find contours and calculate deformabilities and areas
                         ContourResult contourResult = findContours(processedImage);
                         std::vector<std::vector<cv::Point>> contours = contourResult.contours;
-                        // only display the largest contour
-                        for (const auto &contour : contours)
+                        // TODO: only display the largest contour
+                        if (contours.empty())
                         {
-                            auto [deformability, area] = calculateMetrics(contour);
-                            shared.frameDeformabilities.store(deformability);
-                            shared.frameAreas.store(area);
+                            // No contours found at all
+                            processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
+                            updateDisplay(image, processedImage);
                         }
-                        updateDisplay(image, processedImage);
+                        else
+                        {
+                            for (const auto &contour : contours)
+                            {
+                                if (contour.size() >= newConfig.contour_threshold_min &&
+                                    contour.size() <= newConfig.contour_threshold_max)
+                                {
+                                    auto [deformability, area] = calculateMetrics(contour);
+                                    shared.frameDeformabilities.store(deformability);
+                                    shared.frameAreas.store(area);
+                                    updateDisplay(image, processedImage);
+                                }
+                                else
+                                {
+                                    processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
+                                    updateDisplay(image, processedImage);
+                                }
+                            }
+                        }
+
                         cv::setTrackbarPos("Frame", "Live Feed", index);
                         shouldUpdate = true;
                     }
@@ -777,7 +810,8 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
         config["image_processing"]["bg_subtract_threshold"],
         config["image_processing"]["morph_kernel_size"],
         config["image_processing"]["morph_iterations"],
-        config["image_processing"]["contour_threshold"]};
+        config["image_processing"]["contour_threshold_min"],
+        config["image_processing"]["contour_threshold_max"]};
     std::string saveDir = config["save_directory"];
 
     std::cout << "Current save directory: " << saveDir << std::endl;

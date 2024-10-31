@@ -47,7 +47,8 @@ struct ProcessingConfig
     int bg_subtract_threshold;
     int morph_kernel_size;
     int morph_iterations;
-    int contour_threshold;
+    int contour_threshold_min;
+    int contour_threshold_max;
 };
 
 struct ThreadLocalMats

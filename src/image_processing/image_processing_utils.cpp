@@ -189,7 +189,7 @@ json readConfig(const std::string &filename)
             {"buffer_threshold", 1000},
             {"target_fps", 5000},
             {"scatter_plot_enabled", false},
-            {"image_processing", {{"gaussian_blur_size", 3}, {"bg_subtract_threshold", 10}, {"morph_kernel_size", 3}, {"morph_iterations", 1}, {"contour_threshold", 10}}}};
+            {"image_processing", {{"gaussian_blur_size", 3}, {"bg_subtract_threshold", 10}, {"morph_kernel_size", 3}, {"morph_iterations", 1}, {"contour_threshold_min", 100}, {"contour_threshold_max", 1000}}}};
 
         // Write default config to file
         std::ofstream configFile(filename);
