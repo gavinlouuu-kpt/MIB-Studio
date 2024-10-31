@@ -1,4 +1,8 @@
 # TODO
+## 2024/10/31
+- Duplicate frame detection works, repeated saving is because of more than one contour found
+- Param hot reload completed with json in display mode. Need to leave and re enter to see the effect
+
 ## 2024/10/24
 ### Target: Get real time cell contour
 - Duplicate frame detection
