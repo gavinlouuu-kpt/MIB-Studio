@@ -199,6 +199,11 @@ namespace MenuSystem
         configure_js(configPath);
     }
 
+    void egrabberHotReload()
+    {
+        configure_js("egrabberConfig.js");
+    }
+
     void runMockSample()
     {
 
@@ -301,6 +306,7 @@ namespace MenuSystem
             "Review Saved Data",
             "Convert Saved Images",
             "EGrabber Config",
+            "EGrabber Hot Reload",
             "Exit"};
 
         auto menu = Menu(&entries, &selected);
@@ -347,6 +353,9 @@ namespace MenuSystem
                 egrabberConfig();
                 break;
             case 5:
+                egrabberHotReload();
+                break;
+            case 6:
                 std::cout << "Exiting program.\n";
                 return 0;
             }

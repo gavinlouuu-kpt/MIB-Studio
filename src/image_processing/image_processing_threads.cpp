@@ -1,5 +1,6 @@
 #include "image_processing/image_processing.h"
 #include "CircularBuffer/CircularBuffer.h"
+#include "mib_grabber/mib_grabber.h"
 #include <chrono>
 #include <iostream>
 #include <conio.h>
@@ -154,20 +155,6 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                          text(std::to_string(processingConfig.contour_threshold_max))})}));
     };
 
-    // auto render_roi = [&]()
-    // {
-    //     return window(text("ROI"), vbox({
-    //                                    hbox({text("X: "),
-    //                                          text(std::to_string(shared.roi.x))}),
-    //                                    hbox({text("Y: "),
-    //                                          text(std::to_string(shared.roi.y))}),
-    //                                    hbox({text("Width: "),
-    //                                          text(std::to_string(shared.roi.width))}),
-    //                                    hbox({text("Height: "),
-    //                                          text(std::to_string(shared.roi.height))}),
-    //                                }));
-    // };
-
     auto render_status = [&]()
     {
         return window(text("Status"), vbox({
@@ -188,15 +175,20 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
     auto render_keyboard_instructions = [&]()
     {
         return window(text("Keyboard Instructions"), vbox({
-                                                         text("ESC: Exit"),
-                                                         text("Space: Pause/Resume"),
-                                                         text("B: Set background frame (paused)"),
-                                                         text("A: Move to newer frame (paused)"),
-                                                         text("D: Move to older frame (paused)"),
-                                                         text("P: Toggle overlay mode"),
-                                                         text("Q: Clear circularities"),
-                                                         text("R: Toggle data recording"),
-                                                         text("S: Save all frames"),
+                                                         text("ESC: Exit program"),
+                                                         text("Space: Pause/Resume live feed"),
+                                                         text("When Paused:"),
+                                                         text("  B: Set current frame as background"),
+                                                         text("  A: Next frame"),
+                                                         text("  D: Previous frame"),
+                                                         text("Display Options:"),
+                                                         text("  P: Toggle processed image overlay"),
+                                                         text("  Q: Clear deformability buffer"),
+                                                         text("Data Management:"),
+                                                         text("  R: Toggle data recording"),
+                                                         text("  S: Save all frames to disk"),
+                                                         text("  F: Configure eGrabber settings"),
+                                                         text("ROI: Click and drag to select region"),
                                                      }));
     };
 
@@ -655,6 +647,10 @@ void keyboardHandlingThread(
             shared.currentFrameIndex--;
             shared.displayNeedsUpdate = true;
         }
+        else if (key == 'f' || key == 'F')
+        {
+            configure_js("egrabberConfig.js");
+        }
         else if (key == 'p' || key == 'P')
         {
             shared.overlayMode = !shared.overlayMode;
@@ -802,6 +798,23 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
         std::filesystem::create_directory(outputDir);
     }
 
+    // Create egrabberConfig.js if it doesn't exist
+    std::filesystem::path configFile("egrabberConfig.js");
+    if (!std::filesystem::exists(configFile))
+    {
+        std::ofstream file(configFile);
+        file << "// Decrease the resolution before increasing the frame rate\n\n"
+             << "// var g = grabbers[0];\n"
+             << "// g.RemotePort.set(\"Width\", 512);\n"
+             << "// g.RemotePort.set(\"Height\", 96);\n"
+             << "// g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
+             << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
+             << "// var g = grabbers[0];\n"
+             << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
+             << "// g.RemotePort.set(\"Width\", 1920);\n"
+             << "// g.RemotePort.set(\"Height\", 1080);\n";
+        file.close();
+    }
     // saving UI block
     json config = readConfig("config.json");
     // Initialize processing configuration
@@ -815,7 +828,11 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     std::string saveDir = config["save_directory"];
 
     std::cout << "Current save directory: " << saveDir << std::endl;
-    std::cout << "Do you want to use this directory or enter a new one? (1: use current / 2: enter new): ";
+    std::cout << "Choose save directory option:\n";
+    std::cout << "1: Use current directory\n";
+    std::cout << "2: Enter new directory\n";
+    std::cout << "3: Use testing directory (will overwrite existing)\n";
+    std::cout << "Choice: ";
     int choice;
     std::cin >> choice;
 
@@ -825,6 +842,18 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
         std::cin >> saveDir;
 
         // Update the config file with the new base directory
+        updateConfig("config.json", "save_directory", saveDir);
+    }
+    else if (choice == 3)
+    {
+        saveDir = "testing";
+        // Remove existing testing directory if it exists
+        std::filesystem::path testPath = outputDir / saveDir;
+        if (std::filesystem::exists(testPath))
+        {
+            std::filesystem::remove_all(testPath);
+        }
+        // Update the config file with the testing directory
         updateConfig("config.json", "save_directory", saveDir);
     }
 
