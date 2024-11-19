@@ -149,9 +149,12 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                          text(std::to_string((int)shared.currentFPS.load()))}),
                                                    hbox({text("Binary Threshold: "),
                                                          text(std::to_string(processingConfig.bg_subtract_threshold))}),
-                                                   hbox({text("Contour Min Threshold: "),
+                                                   // display if valid display frame
+                                                   hbox({text("Valid Display Frame: "),
+                                                         text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
+                                                   hbox({text("Area Min Threshold: "),
                                                          text(std::to_string(processingConfig.area_threshold_min))}),
-                                                   hbox({text("Contour Max Threshold: "),
+                                                   hbox({text("Area Max Threshold: "),
                                                          text(std::to_string(processingConfig.area_threshold_max))})}));
     };
 
@@ -449,9 +452,11 @@ void displayThreadTask(
                 int index = shared.currentFrameIndex;
                 if (index >= 0 && index < circularBuffer.size())
                 {
+                    shared.validDisplayFrame = false;
                     auto imageData = circularBuffer.get(index);
                     if (!imageData.empty())
                     {
+
                         // read config to enable hot reloading of image processing parameters
                         auto config = readConfig("config.json");
 
@@ -477,12 +482,15 @@ void displayThreadTask(
                         }
                         else
                         {
-                            for (const auto &contour : contours)
+                            if (contours.size() == 1)
                             {
-                                if (contour.size() >= newConfig.area_threshold_min &&
-                                    contour.size() <= newConfig.area_threshold_max)
+                                const auto &contour = contours[0];
+                                auto [deformability, area] = calculateMetrics(contour);
+                                auto metrics = std::make_tuple(deformability, area);
+                                if (area >= newConfig.area_threshold_min &&
+                                    area <= newConfig.area_threshold_max)
                                 {
-                                    auto [deformability, area] = calculateMetrics(contour);
+                                    shared.validDisplayFrame = true;
                                     shared.frameDeformabilities.store(deformability);
                                     shared.frameAreas.store(area);
                                     updateDisplay(image, processedImage);
