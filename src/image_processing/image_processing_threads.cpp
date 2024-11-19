@@ -150,9 +150,9 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                    hbox({text("Binary Threshold: "),
                                                          text(std::to_string(processingConfig.bg_subtract_threshold))}),
                                                    hbox({text("Contour Min Threshold: "),
-                                                         text(std::to_string(processingConfig.contour_threshold_min))}),
+                                                         text(std::to_string(processingConfig.area_threshold_min))}),
                                                    hbox({text("Contour Max Threshold: "),
-                                                         text(std::to_string(processingConfig.contour_threshold_max))})}));
+                                                         text(std::to_string(processingConfig.area_threshold_max))})}));
     };
 
     auto render_status = [&]()
@@ -228,7 +228,7 @@ void processingThreadTask(
     cv::Mat processedImage(height, width, CV_8UC1);
     ThreadLocalMats mats = initializeThreadMats(height, width, processingConfig);
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
-    const size_t contour_threshold = 10;
+    // const size_t area_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
 
     while (!shared.done)
@@ -247,7 +247,7 @@ void processingThreadTask(
             lock.unlock();
 
             auto startTime = std::chrono::high_resolution_clock::now();
-
+            shared.validProcessingFrame = false;
             auto imageData = processingBuffer.get(0);
             inputImage = cv::Mat(height, width, CV_8UC1, imageData.data());
 
@@ -281,14 +281,14 @@ void processingThreadTask(
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
                         // bool qualifiedContourFound = false;
-                        for (const auto &contour : contours)
+                        if (contours.size() == 1)
                         {
-                            if (contour.size() >= processingConfig.contour_threshold_min &&
-                                contour.size() <= processingConfig.contour_threshold_max)
+                            const auto &contour = contours[0];
+                            auto [deformability, area] = calculateMetrics(contour);
+                            auto metrics = std::make_tuple(deformability, area);
+                            if (area >= processingConfig.area_threshold_min && area <= processingConfig.area_threshold_max)
                             {
-
-                                auto [deformability, area] = calculateMetrics(contour);
-                                auto metrics = std::make_tuple(deformability, area);
+                                shared.validProcessingFrame = true;
                                 shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
                                 shared.newScatterDataAvailable = true;
                                 shared.scatterDataCondition.notify_one();
@@ -460,8 +460,8 @@ void displayThreadTask(
                             config["image_processing"]["bg_subtract_threshold"],
                             config["image_processing"]["morph_kernel_size"],
                             config["image_processing"]["morph_iterations"],
-                            config["image_processing"]["contour_threshold_min"],
-                            config["image_processing"]["contour_threshold_max"]};
+                            config["image_processing"]["area_threshold_min"],
+                            config["image_processing"]["area_threshold_max"]};
 
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats, newConfig);
@@ -479,8 +479,8 @@ void displayThreadTask(
                         {
                             for (const auto &contour : contours)
                             {
-                                if (contour.size() >= newConfig.contour_threshold_min &&
-                                    contour.size() <= newConfig.contour_threshold_max)
+                                if (contour.size() >= newConfig.area_threshold_min &&
+                                    contour.size() <= newConfig.area_threshold_max)
                                 {
                                     auto [deformability, area] = calculateMetrics(contour);
                                     shared.frameDeformabilities.store(deformability);
@@ -823,8 +823,8 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
         config["image_processing"]["bg_subtract_threshold"],
         config["image_processing"]["morph_kernel_size"],
         config["image_processing"]["morph_iterations"],
-        config["image_processing"]["contour_threshold_min"],
-        config["image_processing"]["contour_threshold_max"]};
+        config["image_processing"]["area_threshold_min"],
+        config["image_processing"]["area_threshold_max"]};
     std::string saveDir = config["save_directory"];
 
     std::cout << "Current save directory: " << saveDir << std::endl;

@@ -47,8 +47,8 @@ struct ProcessingConfig
     int bg_subtract_threshold;
     int morph_kernel_size;
     int morph_iterations;
-    int contour_threshold_min;
-    int contour_threshold_max;
+    int area_threshold_min;
+    int area_threshold_max;
 };
 
 struct ThreadLocalMats
@@ -118,6 +118,8 @@ struct SharedResources
     std::atomic<size_t> frameContourSize;
     // std::atomic<size_t> totalFramesProcessed;
     std::atomic<bool> updated;
+    std::atomic<bool> validProcessingFrame{false};
+    std::atomic<bool> validDisplayFrame{false};
     // std::atomic<double> linearProcessingTime;
 };
 
