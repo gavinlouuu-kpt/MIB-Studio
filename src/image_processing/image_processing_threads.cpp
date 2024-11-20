@@ -152,6 +152,8 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                    // display if valid display frame
                                                    hbox({text("Valid Display Frame: "),
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
+                                                   hbox({text("Display Frame Touched Border: "),
+                                                         text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
                                                          text(std::to_string(processingConfig.area_threshold_min))}),
                                                    hbox({text("Area Max Threshold: "),
@@ -350,6 +352,7 @@ void displayThreadTask(
     SharedResources &shared, const ProcessingConfig &processingConfig)
 {
     const double displayFPS = 60.0;
+    const uint8_t processedColor = 255; // grey scaled cell color
 
     const std::chrono::duration<double> frameDuration(1.0 / displayFPS); // Increase to 60 FPS for smoother response
     auto nextFrameTime = std::chrono::steady_clock::now();
@@ -453,6 +456,7 @@ void displayThreadTask(
                 if (index >= 0 && index < circularBuffer.size())
                 {
                     shared.validDisplayFrame = false;
+                    shared.displayFrameTouchedBorder = false;
                     auto imageData = circularBuffer.get(index);
                     if (!imageData.empty())
                     {
@@ -470,41 +474,169 @@ void displayThreadTask(
 
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats, newConfig);
-                        // find contours and calculate deformabilities and areas
-                        ContourResult contourResult = findContours(processedImage);
-                        std::vector<std::vector<cv::Point>> contours = contourResult.contours;
-                        // TODO: only display the largest contour
-                        if (contours.empty())
+                        bool hasContent = false;
+                        cv::Mat roiImage = processedImage(shared.roi);
+                        std::cout << "\n=== Coordinate Systems Debug ===\n";
+                        std::cout << "Full Image Size: " << processedImage.size() << std::endl;
+                        std::cout << "ROI Position (absolute): (" << shared.roi.x << "," << shared.roi.y << ")" << std::endl;
+                        std::cout << "ROI Size: " << shared.roi.width << "x" << shared.roi.height << std::endl;
+
+                        // Get ROI in absolute coordinates
+                        cv::Rect absoluteRoi = shared.roi;
+                        std::cout << "ROI Bounds (absolute): "
+                                  << "(" << absoluteRoi.x << "," << absoluteRoi.y << ") to "
+                                  << "(" << absoluteRoi.x + absoluteRoi.width << ","
+                                  << absoluteRoi.y + absoluteRoi.height << ")" << std::endl;
+
+                        // Print some sample pixel values in both coordinate systems
+                        for (int y = 0; y < roiImage.rows; y += roiImage.rows / 4)
                         {
-                            // No contours found at all
-                            processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
-                            updateDisplay(image, processedImage);
+                            int absoluteY = y + shared.roi.y; // Convert to absolute coordinates
+                            std::cout << "Row " << y << " (relative) = Row " << absoluteY << " (absolute)" << std::endl;
+
+                            uint8_t relativePixel = roiImage.at<uint8_t>(y, 0);
+                            uint8_t absolutePixel = processedImage.at<uint8_t>(absoluteY, shared.roi.x);
+
+                            std::cout << "Pixel value at left edge - "
+                                      << "Relative: " << (int)relativePixel
+                                      << ", Absolute: " << (int)absolutePixel << std::endl;
                         }
-                        else
+
+                        // Check top and bottom borders
+                        std::cout << "\nChecking horizontal borders:\n";
+                        std::cout << "Top border pixels (first 5):\n";
+                        for (int x = 0; x < std::min(5, roiImage.cols); x++)
                         {
-                            if (contours.size() == 1)
+                            std::cout << "Col " << x << ": " << (int)roiImage.at<uint8_t>(0, x) << " ";
+                        }
+                        std::cout << "\nBottom border pixels (first 5):\n";
+                        for (int x = 0; x < std::min(5, roiImage.cols); x++)
+                        {
+                            std::cout << "Col " << x << ": " << (int)roiImage.at<uint8_t>(roiImage.rows - 1, x) << " ";
+                        }
+                        std::cout << "\n";
+
+                        // Sample vertical borders with more detail
+                        std::cout << "\nDetailed vertical border check:\n";
+                        for (int y = 0; y < roiImage.rows; y += 5) // Check every 5th row
+                        {
+                            uint8_t leftPixel = roiImage.at<uint8_t>(y, 0);
+                            uint8_t leftPixel2 = roiImage.at<uint8_t>(y, 1); // Check second column
+                            uint8_t rightPixel = roiImage.at<uint8_t>(y, roiImage.cols - 1);
+                            uint8_t rightPixel2 = roiImage.at<uint8_t>(y, roiImage.cols - 2); // Check second-to-last column
+
+                            std::cout << "Row " << std::setw(3) << y << ": "
+                                      << "Left[0,1]=" << std::setw(3) << (int)leftPixel << "," << std::setw(3) << (int)leftPixel2
+                                      << " Right[-2,-1]=" << std::setw(3) << (int)rightPixel2 << "," << std::setw(3) << (int)rightPixel << std::endl;
+                        }
+
+                        // Print location of all non-zero pixels
+                        std::cout << "\nNon-zero pixel locations:\n";
+                        for (int y = 0; y < roiImage.rows; y++)
+                        {
+                            for (int x = 0; x < roiImage.cols; x++)
                             {
-                                const auto &contour = contours[0];
-                                auto [deformability, area] = calculateMetrics(contour);
-                                auto metrics = std::make_tuple(deformability, area);
-                                if (area >= newConfig.area_threshold_min &&
-                                    area <= newConfig.area_threshold_max)
+                                if (roiImage.at<uint8_t>(y, x) == processedColor)
                                 {
-                                    shared.validDisplayFrame = true;
-                                    shared.frameDeformabilities.store(deformability);
-                                    shared.frameAreas.store(area);
-                                    updateDisplay(image, processedImage);
-                                }
-                                else
-                                {
-                                    processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
-                                    updateDisplay(image, processedImage);
+                                    std::cout << "Found processedColor at (x,y): (" << x << "," << y << ")\n";
                                 }
                             }
                         }
 
-                        cv::setTrackbarPos("Frame", "Live Feed", index);
-                        shouldUpdate = true;
+                        int nonZeroCount = cv::countNonZero(roiImage);
+                        std::cout << "\nTotal non-zero pixels in ROI: " << nonZeroCount << std::endl;
+
+                        // Rest of the existing debug output...
+
+                        // Regular border check with enhanced logging
+                        const int borderThreshold = 2; // Consider pixels this close to border
+                        bool touchesBorder = false;
+
+                        // Check left and right borders
+                        for (int y = 0; y < roiImage.rows && !touchesBorder; y++)
+                        {
+                            // Check left border region
+                            for (int x = 0; x < borderThreshold; x++)
+                            {
+                                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                                {
+                                    touchesBorder = true;
+                                    std::cout << "Border touched near left edge at y=" << y << ", x=" << x << std::endl;
+                                    break;
+                                }
+                            }
+
+                            // Check right border region
+                            for (int x = roiImage.cols - borderThreshold; x < roiImage.cols && !touchesBorder; x++)
+                            {
+                                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                                {
+                                    touchesBorder = true;
+                                    std::cout << "Border touched near right edge at y=" << y << ", x=" << x << std::endl;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Check top and bottom borders
+                        for (int x = 0; x < roiImage.cols && !touchesBorder; x++)
+                        {
+                            // Check top border region
+                            for (int y = 0; y < borderThreshold; y++)
+                            {
+                                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                                {
+                                    touchesBorder = true;
+                                    std::cout << "Border touched near top edge at y=" << y << ", x=" << x << std::endl;
+                                    break;
+                                }
+                            }
+
+                            // Check bottom border region
+                            for (int y = roiImage.rows - borderThreshold; y < roiImage.rows && !touchesBorder; y++)
+                            {
+                                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                                {
+                                    touchesBorder = true;
+                                    std::cout << "Border touched near bottom edge at y=" << y << ", x=" << x << std::endl;
+                                    break;
+                                }
+                            }
+                        }
+
+                        shared.displayFrameTouchedBorder = touchesBorder;
+
+                        // Only proceed with contour detection if no border pixels were found
+                        if (!shared.displayFrameTouchedBorder)
+                        {
+                            ContourResult contourResult = findContours(processedImage);
+                            const auto &contours = contourResult.contours;
+
+                            // Reset processed image if no valid contours
+                            if (contours.size() != 1)
+                            {
+                                processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
+                            }
+                            // Process single contour case
+                            else
+                            {
+                                auto [deformability, area] = calculateMetrics(contours[0]);
+                                if (area >= newConfig.area_threshold_min && area <= newConfig.area_threshold_max)
+                                {
+                                    shared.validDisplayFrame = true;
+                                    shared.frameDeformabilities.store(deformability);
+                                    shared.frameAreas.store(area);
+                                }
+                                else
+                                {
+                                    processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
+                                }
+                            }
+
+                            updateDisplay(image, processedImage);
+                            cv::setTrackbarPos("Frame", "Live Feed", index);
+                            shouldUpdate = true;
+                        }
                     }
                 }
                 shared.displayNeedsUpdate = false;
@@ -915,7 +1047,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    threads.emplace_back(metricDisplayThread, std::ref(shared), processingConfig);
+    // threads.emplace_back(metricDisplayThread, std::ref(shared), processingConfig);
 
     // Read from json to check if scatterplot is enabled
     json config = readConfig("config.json");

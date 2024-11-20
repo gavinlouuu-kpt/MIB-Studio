@@ -120,6 +120,7 @@ struct SharedResources
     std::atomic<bool> updated;
     std::atomic<bool> validProcessingFrame{false};
     std::atomic<bool> validDisplayFrame{false};
+    std::atomic<bool> displayFrameTouchedBorder{false};
     // std::atomic<double> linearProcessingTime;
 };
 
