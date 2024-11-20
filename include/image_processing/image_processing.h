@@ -109,7 +109,7 @@ struct SharedResources
     // frameDeformabilities and frameAreas are used for review
     std::atomic<double> frameDeformabilities;
     std::atomic<double> frameAreas;
-    std::atomic<size_t> frameContourSize;
+    std::atomic<double> frameAreaRatios;
     // std::atomic<size_t> totalFramesProcessed;
     std::atomic<bool> updated;
     std::atomic<bool> validProcessingFrame{false};

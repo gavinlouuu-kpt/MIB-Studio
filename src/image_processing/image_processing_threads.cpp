@@ -32,12 +32,13 @@ struct FilterResult
     bool touchesBorder;
     double deformability;
     double area;
+    double areaRatio;
 };
 
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                   const ProcessingConfig &config, const uint8_t processedColor = 255)
 {
-    FilterResult result = {false, false, 0.0, 0.0};
+    FilterResult result = {false, false, 0.0, 0.0, 0.0};
 
     // Get ROI from processed image
     cv::Mat roiImage = processedImage(roi);
@@ -100,6 +101,17 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 
         if (contours.size() == 1)
         {
+            // Calculate contour area
+            double contourArea = cv::contourArea(contours[0]);
+
+            // Calculate convex hull
+            std::vector<cv::Point> hull;
+            cv::convexHull(contours[0], hull);
+            double hullArea = cv::contourArea(hull);
+
+            // Calculate area ratio (R = Ahull/Acontour)
+            result.areaRatio = hullArea / contourArea;
+
             auto [deformability, area] = calculateMetrics(contours[0]);
             result.deformability = deformability;
             result.area = area;
@@ -229,7 +241,8 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                         hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
                                                         hbox({text("Deformability Buffer Size: "), text(std::to_string(shared.deformabilityBuffer.size()) + " sets")}),
                                                         hbox({text("Deformability: "), text(std::to_string(shared.frameDeformabilities.load()))}),
-                                                        hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))})}));
+                                                        hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))}),
+                                                        hbox({text("Area Ratio: "), text(std::to_string(shared.frameAreaRatios.load()))})}));
     };
 
     auto render_config_metrics = [&]()
@@ -355,11 +368,13 @@ void processingThreadTask(
                 if (!filterResult.touchesBorder && filterResult.isValid)
                 {
                     shared.validProcessingFrame = true;
-                    auto metrics = std::make_tuple(filterResult.deformability, filterResult.area);
+                    auto metrics = std::make_tuple(filterResult.deformability, filterResult.area, filterResult.areaRatio);
 
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
                         shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
+                        shared.frameAreaRatios.store(filterResult.areaRatio);
+                        // apply sorting function to give signal to EGrabber
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
 
@@ -552,6 +567,9 @@ void displayThreadTask(
                         }
                         else
                         {
+                            // store negative values of the metrics to indicate invalid frames
+                            shared.frameDeformabilities.store(-filterResult.deformability);
+                            shared.frameAreas.store(-filterResult.area);
                             processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
                         }
 
