@@ -28,23 +28,25 @@ cv::Mat backgroundFrame;
 
 using namespace Euresys;
 
-struct GrabberParams
-{
-    size_t width;
-    size_t height;
-    uint64_t pixelFormat;
-    size_t imageSize;
-    size_t bufferCount;
-};
+// struct GrabberParams
+// {
+//     size_t width;
+//     size_t height;
+//     uint64_t pixelFormat;
+//     size_t imageSize;
+//     size_t bufferCount;
+// };
 
-void configure(EGrabber<CallbackOnDemand> &grabber)
-{
-    grabber.setInteger<RemoteModule>("Width", 512);
-    grabber.setInteger<RemoteModule>("Height", 96);
-    grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
-    // ... (other configuration settings)
-}
+// void configure(EGrabber<CallbackOnDemand> &grabber)
+// {
+//     grabber.setInteger<RemoteModule>("Width", 512);
+//     grabber.setInteger<RemoteModule>("Height", 96);
+//     grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
+//     // ... (other configuration settings)
+// }
+
 static int lastUsedCameraIndex = -1;
+
 void configure_js(std::string config_path)
 {
     // Euresys::EGenTL gentl;
@@ -124,6 +126,14 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                           std::vector<std::thread> threads;
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads, processingConfig);
                           grabber.start();
+                          // egrabber request fps and exposure time load to shared.resources for metric display
+                          uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
+                          uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
+                          // Get exposure time
+                          uint64_t exposureTime = grabber.getInteger<RemoteModule>("ExposureTime");
+                          shared.currentFPS = fr;
+                          shared.dataRate = dr;
+                          shared.exposureTime = exposureTime;
                           size_t frameCount = 0;
                           uint64_t lastFrameId = 0;
                           uint64_t duplicateCount = 0;

@@ -137,8 +137,8 @@ void simulateCameraThread(
     auto lastFrameTime = clock::now();
     auto fpsStartTime = clock::now();
     size_t frameCount = 0;
-    const int targetFPS = 5000;
-    const std::chrono::nanoseconds frameInterval(1000000000 / targetFPS);
+    const int simCameraTargetFPS = 5000;
+    const std::chrono::nanoseconds frameInterval(1000000000 / simCameraTargetFPS);
 
     while (!shared.done)
     {
@@ -249,6 +249,10 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
     {
         return window(text("Configuration"), vbox({hbox({text("Current FPS: "),
                                                          text(std::to_string((int)shared.currentFPS.load()))}),
+                                                   hbox({text("Data Rate: "),
+                                                         text(std::to_string((int)shared.dataRate.load()))}),
+                                                   hbox({text("Exposure Time: "),
+                                                         text(std::to_string((int)shared.exposureTime.load()))}),
                                                    hbox({text("Binary Threshold: "),
                                                          text(std::to_string(processingConfig.bg_subtract_threshold))}),
                                                    // display if valid display frame
@@ -441,7 +445,7 @@ void displayThreadTask(
     cv::Mat processedImage(height, width, CV_8UC1);
     cv::Mat displayImage(height, width, CV_8UC3);
 
-    cv::namedWindow("Live Feed", cv::WINDOW_NORMAL);
+    cv::namedWindow("Live Feed", cv::WINDOW_AUTOSIZE);
     cv::resizeWindow("Live Feed", width, height);
 
     int trackbarPos = 0;
@@ -457,8 +461,12 @@ void displayThreadTask(
             // Create a mask from the processed image
             cv::Mat mask = (processedImage > 0);
 
-            // Overlay processed image in red
-            displayImage.setTo(cv::Scalar(0, 0, 255), mask);
+            // Create a colored overlay image
+            cv::Mat overlay = cv::Mat::zeros(displayImage.size(), CV_8UC3);
+            overlay.setTo(cv::Scalar(0, 0, 255), mask); // Red overlay
+
+            // Blend the overlay with the original image
+            cv::addWeighted(displayImage, 1.0, overlay, 0.3, 0, displayImage);
         }
 
         // Draw ROI rectangle
@@ -713,7 +721,8 @@ void keyboardHandlingThread(
             shared.paused = !shared.paused;
             if (shared.paused)
             {
-                shared.currentFrameIndex = 0;
+                shared.currentFrameIndex = circularBuffer.size() - 1;
+                shared.displayNeedsUpdate = true;
             }
         }
         else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex < circularBuffer.size() - 1)

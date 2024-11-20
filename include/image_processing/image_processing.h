@@ -104,6 +104,8 @@ struct SharedResources
     CircularBuffer deformabilityBuffer{2000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
     std::mutex deformabilityBufferMutex;
     std::atomic<double> currentFPS;
+    std::atomic<double> dataRate;
+    std::atomic<uint64_t> exposureTime;
     std::atomic<size_t> imagesInQueue;
     std::atomic<size_t> qualifiedResultCount;
     // frameDeformabilities and frameAreas are used for review

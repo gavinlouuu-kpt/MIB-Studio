@@ -1,9 +1,10 @@
 # TODO
 ## 2024/11/20
 - [x] Convex hull calculation
-- [ ] FPS monitoring
-- [ ] Exposure time monitoring
-- [ ] Always keep the same proportion
+- [x] FPS monitoring
+- [x] Opactiy over original image
+- [-] Exposure time monitoring (testing on camera needed)
+- [x] Always keep the same proportion (cannot change size entirely)
 
 ## 2024/10/31
 - Duplicate frame detection works, repeated saving is because of more than one contour found
