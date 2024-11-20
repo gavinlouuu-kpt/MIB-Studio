@@ -25,6 +25,96 @@
 using json = nlohmann::json;
 
 namespace fs = std::filesystem;
+
+struct FilterResult
+{
+    bool isValid;
+    bool touchesBorder;
+    double deformability;
+    double area;
+};
+
+FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
+                                  const ProcessingConfig &config, const uint8_t processedColor = 255)
+{
+    FilterResult result = {false, false, 0.0, 0.0};
+
+    // Get ROI from processed image
+    cv::Mat roiImage = processedImage(roi);
+
+    // Check borders
+    const int borderThreshold = 2;
+
+    // Check left and right borders
+    for (int y = 0; y < roiImage.rows && !result.touchesBorder; y++)
+    {
+        // Check left border region
+        for (int x = 0; x < borderThreshold; x++)
+        {
+            if (roiImage.at<uint8_t>(y, x) == processedColor)
+            {
+                result.touchesBorder = true;
+                break;
+            }
+        }
+
+        // Check right border region
+        for (int x = roiImage.cols - borderThreshold; x < roiImage.cols && !result.touchesBorder; x++)
+        {
+            if (roiImage.at<uint8_t>(y, x) == processedColor)
+            {
+                result.touchesBorder = true;
+                break;
+            }
+        }
+    }
+
+    // Check top and bottom borders
+    for (int x = 0; x < roiImage.cols && !result.touchesBorder; x++)
+    {
+        // Check top border region
+        for (int y = 0; y < borderThreshold; y++)
+        {
+            if (roiImage.at<uint8_t>(y, x) == processedColor)
+            {
+                result.touchesBorder = true;
+                break;
+            }
+        }
+
+        // Check bottom border region
+        for (int y = roiImage.rows - borderThreshold; y < roiImage.rows && !result.touchesBorder; y++)
+        {
+            if (roiImage.at<uint8_t>(y, x) == processedColor)
+            {
+                result.touchesBorder = true;
+                break;
+            }
+        }
+    }
+
+    // Only proceed with contour detection if no border pixels were found
+    if (!result.touchesBorder)
+    {
+        ContourResult contourResult = findContours(processedImage);
+        const auto &contours = contourResult.contours;
+
+        if (contours.size() == 1)
+        {
+            auto [deformability, area] = calculateMetrics(contours[0]);
+            result.deformability = deformability;
+            result.area = area;
+
+            if (area >= config.area_threshold_min && area <= config.area_threshold_max)
+            {
+                result.isValid = true;
+            }
+        }
+    }
+
+    return result;
+}
+
 void simulateCameraThread(
     CircularBuffer &cameraBuffer, SharedResources &shared,
     const ImageParams &params)
@@ -261,65 +351,39 @@ void processingThreadTask(
             {
                 // Preprocess Image using the optimized processFrame function
                 processFrame(inputImage, shared, processedImage, mats, processingConfig);
-                bool touchesBorder = false;
-                bool hasContent = false;
-                // Check left and right edges
-                cv::Mat roiImage = processedImage(shared.roi);
-                for (int y = 0; y < roiImage.rows && !touchesBorder; y++)
-                {
-                    if (roiImage.at<uint8_t>(y, 0) == processedColor || // Left edge of ROI
-                        roiImage.at<uint8_t>(y, roiImage.cols - 1) == processedColor)
-                    { // Right edge of ROI
-                        touchesBorder = true;
-                    }
-                }
+                auto filterResult = filterProcessedImage(processedImage, shared.roi, processingConfig);
 
-                // Only proceed with contour detection if no border pixels were found
-                if (!touchesBorder)
+                if (!filterResult.touchesBorder && filterResult.isValid)
                 {
-                    // Find contour
-                    ContourResult contourResult = findContours(processedImage); // Assuming findContours is modified to accept pre-allocated contours
-                    std::vector<std::vector<cv::Point>> contours = contourResult.contours;
-                    double contourFindTime = contourResult.findTime;
+                    shared.validProcessingFrame = true;
+                    auto metrics = std::make_tuple(filterResult.deformability, filterResult.area);
 
-                    // Calculate deformability and circularity for each contour
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
-                        // bool qualifiedContourFound = false;
-                        if (contours.size() == 1)
+                        shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
+                        shared.newScatterDataAvailable = true;
+                        shared.scatterDataCondition.notify_one();
+
+                        if (shared.running)
                         {
-                            const auto &contour = contours[0];
-                            auto [deformability, area] = calculateMetrics(contour);
-                            auto metrics = std::make_tuple(deformability, area);
-                            if (area >= processingConfig.area_threshold_min && area <= processingConfig.area_threshold_max)
+                            QualifiedResult qualifiedResult;
+                            qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                            std::chrono::system_clock::now().time_since_epoch())
+                                                            .count();
+                            qualifiedResult.deformability = filterResult.deformability;
+                            qualifiedResult.area = filterResult.area;
+                            qualifiedResult.originalImage = inputImage.clone();
+
+                            std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                            auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1
+                                                                      : shared.qualifiedResultsBuffer2;
+                            currentBuffer.push_back(std::move(qualifiedResult));
+
+                            if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
                             {
-                                shared.validProcessingFrame = true;
-                                shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
-                                shared.newScatterDataAvailable = true;
-                                shared.scatterDataCondition.notify_one();
-                                // create a flag to check if user wants to save
-                                if (shared.running)
-                                {
-                                    // qualifiedContourFound = true;
-                                    QualifiedResult qualifiedResult;
-                                    qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                                    qualifiedResult.deformability = deformability;
-                                    qualifiedResult.area = area;
-                                    // qualifiedResult.contourResult = contourResult;
-                                    qualifiedResult.originalImage = inputImage.clone();
-
-                                    std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
-                                    auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
-                                    currentBuffer.push_back(std::move(qualifiedResult));
-
-                                    // Check if we need to switch buffers
-                                    if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
-                                    {
-                                        shared.usingBuffer1 = !shared.usingBuffer1;
-                                        shared.savingInProgress = true;
-                                        shared.savingCondition.notify_one();
-                                    }
-                                }
+                                shared.usingBuffer1 = !shared.usingBuffer1;
+                                shared.savingInProgress = true;
+                                shared.savingCondition.notify_one();
                             }
                         }
                     }
@@ -474,169 +538,27 @@ void displayThreadTask(
 
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats, newConfig);
-                        bool hasContent = false;
-                        cv::Mat roiImage = processedImage(shared.roi);
-                        std::cout << "\n=== Coordinate Systems Debug ===\n";
-                        std::cout << "Full Image Size: " << processedImage.size() << std::endl;
-                        std::cout << "ROI Position (absolute): (" << shared.roi.x << "," << shared.roi.y << ")" << std::endl;
-                        std::cout << "ROI Size: " << shared.roi.width << "x" << shared.roi.height << std::endl;
+                        auto filterResult = filterProcessedImage(processedImage, shared.roi, newConfig);
+                        shared.displayFrameTouchedBorder = filterResult.touchesBorder;
 
-                        // Get ROI in absolute coordinates
-                        cv::Rect absoluteRoi = shared.roi;
-                        std::cout << "ROI Bounds (absolute): "
-                                  << "(" << absoluteRoi.x << "," << absoluteRoi.y << ") to "
-                                  << "(" << absoluteRoi.x + absoluteRoi.width << ","
-                                  << absoluteRoi.y + absoluteRoi.height << ")" << std::endl;
-
-                        // Print some sample pixel values in both coordinate systems
-                        for (int y = 0; y < roiImage.rows; y += roiImage.rows / 4)
+                        if (filterResult.touchesBorder)
                         {
-                            int absoluteY = y + shared.roi.y; // Convert to absolute coordinates
-                            std::cout << "Row " << y << " (relative) = Row " << absoluteY << " (absolute)" << std::endl;
-
-                            uint8_t relativePixel = roiImage.at<uint8_t>(y, 0);
-                            uint8_t absolutePixel = processedImage.at<uint8_t>(absoluteY, shared.roi.x);
-
-                            std::cout << "Pixel value at left edge - "
-                                      << "Relative: " << (int)relativePixel
-                                      << ", Absolute: " << (int)absolutePixel << std::endl;
+                            processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
+                        }
+                        else if (filterResult.isValid)
+                        {
+                            shared.validDisplayFrame = true;
+                            shared.frameDeformabilities.store(filterResult.deformability);
+                            shared.frameAreas.store(filterResult.area);
+                        }
+                        else
+                        {
+                            processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
                         }
 
-                        // Check top and bottom borders
-                        std::cout << "\nChecking horizontal borders:\n";
-                        std::cout << "Top border pixels (first 5):\n";
-                        for (int x = 0; x < std::min(5, roiImage.cols); x++)
-                        {
-                            std::cout << "Col " << x << ": " << (int)roiImage.at<uint8_t>(0, x) << " ";
-                        }
-                        std::cout << "\nBottom border pixels (first 5):\n";
-                        for (int x = 0; x < std::min(5, roiImage.cols); x++)
-                        {
-                            std::cout << "Col " << x << ": " << (int)roiImage.at<uint8_t>(roiImage.rows - 1, x) << " ";
-                        }
-                        std::cout << "\n";
-
-                        // Sample vertical borders with more detail
-                        std::cout << "\nDetailed vertical border check:\n";
-                        for (int y = 0; y < roiImage.rows; y += 5) // Check every 5th row
-                        {
-                            uint8_t leftPixel = roiImage.at<uint8_t>(y, 0);
-                            uint8_t leftPixel2 = roiImage.at<uint8_t>(y, 1); // Check second column
-                            uint8_t rightPixel = roiImage.at<uint8_t>(y, roiImage.cols - 1);
-                            uint8_t rightPixel2 = roiImage.at<uint8_t>(y, roiImage.cols - 2); // Check second-to-last column
-
-                            std::cout << "Row " << std::setw(3) << y << ": "
-                                      << "Left[0,1]=" << std::setw(3) << (int)leftPixel << "," << std::setw(3) << (int)leftPixel2
-                                      << " Right[-2,-1]=" << std::setw(3) << (int)rightPixel2 << "," << std::setw(3) << (int)rightPixel << std::endl;
-                        }
-
-                        // Print location of all non-zero pixels
-                        std::cout << "\nNon-zero pixel locations:\n";
-                        for (int y = 0; y < roiImage.rows; y++)
-                        {
-                            for (int x = 0; x < roiImage.cols; x++)
-                            {
-                                if (roiImage.at<uint8_t>(y, x) == processedColor)
-                                {
-                                    std::cout << "Found processedColor at (x,y): (" << x << "," << y << ")\n";
-                                }
-                            }
-                        }
-
-                        int nonZeroCount = cv::countNonZero(roiImage);
-                        std::cout << "\nTotal non-zero pixels in ROI: " << nonZeroCount << std::endl;
-
-                        // Rest of the existing debug output...
-
-                        // Regular border check with enhanced logging
-                        const int borderThreshold = 2; // Consider pixels this close to border
-                        bool touchesBorder = false;
-
-                        // Check left and right borders
-                        for (int y = 0; y < roiImage.rows && !touchesBorder; y++)
-                        {
-                            // Check left border region
-                            for (int x = 0; x < borderThreshold; x++)
-                            {
-                                if (roiImage.at<uint8_t>(y, x) == processedColor)
-                                {
-                                    touchesBorder = true;
-                                    std::cout << "Border touched near left edge at y=" << y << ", x=" << x << std::endl;
-                                    break;
-                                }
-                            }
-
-                            // Check right border region
-                            for (int x = roiImage.cols - borderThreshold; x < roiImage.cols && !touchesBorder; x++)
-                            {
-                                if (roiImage.at<uint8_t>(y, x) == processedColor)
-                                {
-                                    touchesBorder = true;
-                                    std::cout << "Border touched near right edge at y=" << y << ", x=" << x << std::endl;
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Check top and bottom borders
-                        for (int x = 0; x < roiImage.cols && !touchesBorder; x++)
-                        {
-                            // Check top border region
-                            for (int y = 0; y < borderThreshold; y++)
-                            {
-                                if (roiImage.at<uint8_t>(y, x) == processedColor)
-                                {
-                                    touchesBorder = true;
-                                    std::cout << "Border touched near top edge at y=" << y << ", x=" << x << std::endl;
-                                    break;
-                                }
-                            }
-
-                            // Check bottom border region
-                            for (int y = roiImage.rows - borderThreshold; y < roiImage.rows && !touchesBorder; y++)
-                            {
-                                if (roiImage.at<uint8_t>(y, x) == processedColor)
-                                {
-                                    touchesBorder = true;
-                                    std::cout << "Border touched near bottom edge at y=" << y << ", x=" << x << std::endl;
-                                    break;
-                                }
-                            }
-                        }
-
-                        shared.displayFrameTouchedBorder = touchesBorder;
-
-                        // Only proceed with contour detection if no border pixels were found
-                        if (!shared.displayFrameTouchedBorder)
-                        {
-                            ContourResult contourResult = findContours(processedImage);
-                            const auto &contours = contourResult.contours;
-
-                            // Reset processed image if no valid contours
-                            if (contours.size() != 1)
-                            {
-                                processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
-                            }
-                            // Process single contour case
-                            else
-                            {
-                                auto [deformability, area] = calculateMetrics(contours[0]);
-                                if (area >= newConfig.area_threshold_min && area <= newConfig.area_threshold_max)
-                                {
-                                    shared.validDisplayFrame = true;
-                                    shared.frameDeformabilities.store(deformability);
-                                    shared.frameAreas.store(area);
-                                }
-                                else
-                                {
-                                    processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
-                                }
-                            }
-
-                            updateDisplay(image, processedImage);
-                            cv::setTrackbarPos("Frame", "Live Feed", index);
-                            shouldUpdate = true;
-                        }
+                        updateDisplay(image, processedImage);
+                        cv::setTrackbarPos("Frame", "Live Feed", index);
+                        shouldUpdate = true;
                     }
                 }
                 shared.displayNeedsUpdate = false;
@@ -1047,7 +969,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    // threads.emplace_back(metricDisplayThread, std::ref(shared), processingConfig);
+    threads.emplace_back(metricDisplayThread, std::ref(shared), processingConfig);
 
     // Read from json to check if scatterplot is enabled
     json config = readConfig("config.json");
