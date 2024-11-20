@@ -46,14 +46,11 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     }
 }
 
-ContourResult findContours(const cv::Mat &processedImage)
+std::vector<std::vector<cv::Point>> findContours(const cv::Mat &processedImage)
 {
     std::vector<std::vector<cv::Point>> contours;
-    auto start = std::chrono::high_resolution_clock::now();
     cv::findContours(processedImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    auto end = std::chrono::high_resolution_clock::now();
-    double findTime = std::chrono::duration<double, std::micro>(end - start).count();
-    return {contours, findTime};
+    return contours;
 }
 
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour)

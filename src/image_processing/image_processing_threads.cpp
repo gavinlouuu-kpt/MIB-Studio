@@ -96,8 +96,7 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
     // Only proceed with contour detection if no border pixels were found
     if (!result.touchesBorder)
     {
-        ContourResult contourResult = findContours(processedImage);
-        const auto &contours = contourResult.contours;
+        auto contours = findContours(processedImage);
 
         if (contours.size() == 1)
         {

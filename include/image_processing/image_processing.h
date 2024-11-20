@@ -26,12 +26,6 @@ struct ImageParams
     size_t bufferCount;
 };
 
-struct ContourResult
-{
-    std::vector<std::vector<cv::Point>> contours;
-    double findTime;
-};
-
 struct QualifiedResult
 {
     // ContourResult contourResult;
@@ -130,7 +124,7 @@ void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool
 void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
                   cv::Mat &outputImage, ThreadLocalMats &mats, const ProcessingConfig &config); // if put it under shared we dont need a new signature
-ContourResult findContours(const cv::Mat &processedImage);
+std::vector<std::vector<cv::Point>> findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 
 void onTrackbar(int pos, void *userdata);
