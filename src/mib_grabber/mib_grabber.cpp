@@ -146,6 +146,18 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                                   continue;
                               }
 
+                              // Update FPS and other metrics periodically (every 100 frames or so)
+                              if (frameCount % 100 == 0)
+                              {
+                                  uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
+                                  uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
+                                  uint64_t exposureTime = grabber.getInteger<RemoteModule>("ExposureTime");
+                                  shared.currentFPS = fr;
+                                  shared.dataRate = dr;
+                                  shared.exposureTime = exposureTime;
+                                  shared.updated = true;
+                              }
+
                               ScopedBuffer buffer(grabber);
                               uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
                               uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);

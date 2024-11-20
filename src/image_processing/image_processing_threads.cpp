@@ -170,7 +170,7 @@ void simulateCameraThread(
         }
         shared.updated = true;
     }
-    std::cout << "Camera thread interrupted." << std::endl;
+    // std::cout << "Camera thread interrupted." << std::endl;
 }
 
 void metricDisplayThread(SharedResources &shared, const ProcessingConfig &processingConfig)
@@ -249,16 +249,16 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
     {
         return window(text("Configuration"), vbox({hbox({text("Current FPS: "),
                                                          text(std::to_string((int)shared.currentFPS.load()))}),
-                                                   hbox({text("Data Rate: "),
+                                                   hbox({text("Data Rate (MB/s): "),
                                                          text(std::to_string((int)shared.dataRate.load()))}),
-                                                   hbox({text("Exposure Time: "),
+                                                   hbox({text("Exposure Time (us): "),
                                                          text(std::to_string((int)shared.exposureTime.load()))}),
                                                    hbox({text("Binary Threshold: "),
                                                          text(std::to_string(processingConfig.bg_subtract_threshold))}),
                                                    // display if valid display frame
                                                    hbox({text("Valid Display Frame: "),
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
-                                                   hbox({text("Display Frame Touched Border: "),
+                                                   hbox({text("Touched Border: "),
                                                          text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
                                                          text(std::to_string(processingConfig.area_threshold_min))}),
@@ -421,7 +421,7 @@ void processingThreadTask(
             lock.unlock();
         }
     }
-    std::cout << "Processing thread interrupted." << std::endl;
+    // std::cout << "Processing thread interrupted." << std::endl;
 }
 
 void displayThreadTask(
@@ -449,7 +449,8 @@ void displayThreadTask(
     cv::resizeWindow("Live Feed", width, height);
 
     int trackbarPos = 0;
-    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+    cv::createTrackbar("Frame", "Live Feed", nullptr, bufferCount - 1, onTrackbar, &shared);
+    // cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
 
     auto updateDisplay = [&](const cv::Mat &originalImage, const cv::Mat &processedImage)
     {
@@ -615,7 +616,7 @@ void displayThreadTask(
     }
 
     cv::destroyAllWindows();
-    std::cout << "Display thread interrupted." << std::endl;
+    // std::cout << "Display thread interrupted." << std::endl;
 }
 
 void onTrackbar(int pos, void *userdata)
@@ -814,7 +815,7 @@ void keyboardHandlingThread(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    std::cout << "Keyboard handling thread interrupted." << std::endl;
+    // std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
 
 void resultSavingThread(SharedResources &shared, const std::string &saveDirectory)
@@ -865,7 +866,7 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
         }
         shared.updated = true;
     }
-    std::cout << "Result saving thread interrupted." << std::endl;
+    // std::cout << "Result saving thread interrupted." << std::endl;
 }
 
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
@@ -895,10 +896,12 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
              << "// var g = grabbers[0];\n"
              << "// g.RemotePort.set(\"Width\", 512);\n"
              << "// g.RemotePort.set(\"Height\", 96);\n"
+             << "// g.RemotePort.set(\"ExposureTime\", 2);\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
              << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
              << "// var g = grabbers[0];\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
+             << "// g.RemotePort.set(\"ExposureTime\", 500);\n"
              << "// g.RemotePort.set(\"Width\", 1920);\n"
              << "// g.RemotePort.set(\"Height\", 1080);\n";
         file.close();
