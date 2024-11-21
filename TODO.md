@@ -13,6 +13,7 @@
 - [ ] Digital contrast as part of processing
   - [ ] Digital contrast performance test
 - [ ] TUI for minio upload with predefined alias 
+- [ ] Mock grabber using batch format
 ## 2024/11/20
 - [x] Convex hull calculation
 - [x] FPS monitoring
