@@ -1,9 +1,23 @@
 # TODO
+## 2024/11/21
+### Issues
+- [x] Fix scatter plot orientation due to area Ratio added
+- [x] Included density in scatter plot
+- [ ] Fill in center for accurate area estimation
+- [ ] Saving batch continues after each experiment when not quitting programme. (residual variables and occasional error from camera loading on the next trial)
+- [ ] Consistency between preview with and without pausing
+- [ ] Intermediate processing view if error exist use differnet color
+- [ ] Detailed rejection reasons 
+### Features
+- [ ] GUI offset field of view
+- [ ] Digital contrast as part of processing
+  - [ ] Digital contrast performance test
+- [ ] TUI for minio upload with predefined alias 
 ## 2024/11/20
 - [x] Convex hull calculation
 - [x] FPS monitoring
 - [x] Opactiy over original image
-- [-] Exposure time monitoring (testing on camera needed)
+- [x] Exposure time monitoring (testing on camera needed)
 - [x] Always keep the same proportion (cannot change size entirely)
 
 ## 2024/10/31
