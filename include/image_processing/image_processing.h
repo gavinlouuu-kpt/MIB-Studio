@@ -33,7 +33,6 @@ struct QualifiedResult
     double areaRatio;
     double area;
     double deformability;
-    
 
     cv::Mat originalImage;
 };
@@ -71,6 +70,7 @@ struct SharedResources
     std::atomic<bool> overlayMode{false};
     std::atomic<int> currentFrameIndex{-1};
     std::atomic<bool> displayNeedsUpdate{false};
+    std::atomic<int> currentBatchNumber{0};
 
     std::atomic<size_t> latestCameraFrame{0}; // for simulated camera
     std::atomic<size_t> frameRateCount{0};    // for simulated camera
@@ -103,8 +103,8 @@ struct SharedResources
     std::atomic<double> diskSaveTime;
     std::string saveDirectory;
     // metrics
-    CircularBuffer processingTimes{1000, sizeof(double)};                         // Buffer to store last 1000 processing times
-    CircularBuffer deformabilityBuffer{2000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
+    CircularBuffer processingTimes{1000, sizeof(double)};                          // Buffer to store last 1000 processing times
+    CircularBuffer deformabilityBuffer{10000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
     std::mutex deformabilityBufferMutex;
     std::atomic<double> currentFPS;
     std::atomic<double> dataRate;

@@ -334,6 +334,7 @@ void processingThreadTask(
     const CircularBuffer &processingBuffer,
     size_t width, size_t height, SharedResources &shared, const ProcessingConfig &processingConfig)
 {
+    shared.currentBatchNumber = 0;
     // Pre-allocate memory for images
     cv::Mat inputImage(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
@@ -402,6 +403,7 @@ void processingThreadTask(
                             {
                                 shared.usingBuffer1 = !shared.usingBuffer1;
                                 shared.savingInProgress = true;
+                                shared.currentBatchNumber++;
                                 shared.savingCondition.notify_one();
                             }
                         }

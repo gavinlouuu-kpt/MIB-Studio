@@ -84,8 +84,7 @@ void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &p
 
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared)
 {
-    static int batchNumber = 0;
-    std::string batchDir = directory + "/batch_" + std::to_string(batchNumber++);
+    std::string batchDir = directory + "/batch_" + std::to_string(shared.currentBatchNumber);
     std::filesystem::create_directories(batchDir);
 
     std::string csvFilePath = batchDir + "/batch_data.csv";
