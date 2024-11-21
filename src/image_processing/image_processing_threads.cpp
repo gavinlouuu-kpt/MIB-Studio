@@ -30,6 +30,8 @@ struct FilterResult
 {
     bool isValid;
     bool touchesBorder;
+    bool hasMultipleContours;
+    bool inRange;
     double deformability;
     double area;
     double areaRatio;
@@ -99,7 +101,11 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
     {
         auto contours = findContours(processedImage);
 
-        if (contours.size() == 1)
+        if (contours.size() > 1)
+        {
+            result.hasMultipleContours = true;
+        }
+        else if (contours.size() == 1)
         {
             // Calculate contour area
             double contourArea = cv::contourArea(contours[0]);
@@ -258,8 +264,10 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                    // display if valid display frame
                                                    hbox({text("Valid Display Frame: "),
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
-                                                   hbox({text("Display Frame Touched Border: "),
+                                                   hbox({text("Touched Border: "),
                                                          text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
+                                                   hbox({text("Multiple Contours: "),
+                                                         text(shared.hasMultipleContours.load() ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
                                                          text(std::to_string(processingConfig.area_threshold_min))}),
                                                    hbox({text("Area Max Threshold: "),
@@ -466,10 +474,35 @@ void displayThreadTask(
 
             // Create a colored overlay image
             cv::Mat overlay = cv::Mat::zeros(displayImage.size(), CV_8UC3);
-            overlay.setTo(cv::Scalar(0, 0, 255), mask); // Red overlay
 
-            // Blend the overlay with the original image
-            cv::addWeighted(displayImage, 1.0, overlay, 0.3, 0, displayImage);
+            const double opacity = 0.3; // Reduced opacity for better blending
+            cv::Scalar overlayColor;
+
+            // Hierarchical condition checking
+            if (shared.displayFrameTouchedBorder)
+            {
+                // Red for border touching (highest priority)
+                overlayColor = cv::Scalar(0, 0, 255); // BGR: Red
+            }
+            else if (shared.hasMultipleContours)
+            {
+                // Blue for multiple contours (second priority)
+                overlayColor = cv::Scalar(255, 0, 0); // BGR: Blue
+            }
+            else if (shared.validDisplayFrame)
+            {
+                // Green for valid frames (that passed all filters)
+                overlayColor = cv::Scalar(0, 255, 0); // BGR: Green
+            }
+            else
+            {
+                // Yellow for frames filtered out due to being out of range
+                overlayColor = cv::Scalar(0, 255, 255); // BGR: Yellow
+            }
+
+            // Create semi-transparent overlay
+            overlay.setTo(overlayColor, mask);
+            cv::addWeighted(displayImage, 1.0, overlay, opacity, 0, displayImage);
         }
 
         // Draw ROI rectangle
@@ -546,6 +579,7 @@ void displayThreadTask(
                 {
                     shared.validDisplayFrame = false;
                     shared.displayFrameTouchedBorder = false;
+                    shared.hasMultipleContours = false;
                     auto imageData = circularBuffer.get(index);
                     if (!imageData.empty())
                     {
@@ -564,13 +598,10 @@ void displayThreadTask(
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats, newConfig);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, newConfig);
+                        shared.hasMultipleContours = filterResult.hasMultipleContours;
                         shared.displayFrameTouchedBorder = filterResult.touchesBorder;
 
-                        if (filterResult.touchesBorder)
-                        {
-                            processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
-                        }
-                        else if (filterResult.isValid)
+                        if (filterResult.isValid)
                         {
                             shared.validDisplayFrame = true;
                             shared.frameDeformabilities.store(filterResult.deformability);
@@ -581,7 +612,7 @@ void displayThreadTask(
                             // store negative values of the metrics to indicate invalid frames
                             shared.frameDeformabilities.store(-filterResult.deformability);
                             shared.frameAreas.store(-filterResult.area);
-                            processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
+                            // processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
                         }
 
                         updateDisplay(image, processedImage);
@@ -779,12 +810,12 @@ void keyboardHandlingThread(
                 shared.displayNeedsUpdate = true;
             }
         }
-        else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex < circularBuffer.size() - 1)
+        else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < circularBuffer.size() - 1)
         {
             shared.currentFrameIndex++;
             shared.displayNeedsUpdate = true;
         }
-        else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex > 0)
+        else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex > 0)
         {
             shared.currentFrameIndex--;
             shared.displayNeedsUpdate = true;

@@ -4,10 +4,10 @@
 - [x] Fix scatter plot orientation due to area Ratio added
 - [x] Included density in scatter plot
 - [ ] Fill in center for accurate area estimation
-- [ ] Saving batch continues after each experiment when not quitting programme. (residual variables and occasional error from camera loading on the next trial)
-- [ ] Consistency between preview with and without pausing
-- [ ] Intermediate processing view if error exist use differnet color
-- [ ] Detailed rejection reasons 
+- [x] Saving batch continues after each experiment when not quitting programme. (residual variables and occasional error from camera loading on the next trial)
+- [-] Consistency between preview with and without pausing
+- [x] Intermediate processing view if error exist use differnet color
+- [x] Detailed rejection reasons 
 ### Features
 - [ ] GUI offset field of view
 - [ ] Digital contrast as part of processing
