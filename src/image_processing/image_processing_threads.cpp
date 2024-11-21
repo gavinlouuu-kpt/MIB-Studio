@@ -170,7 +170,7 @@ void simulateCameraThread(
         }
         shared.updated = true;
     }
-    // std::cout << "Camera thread interrupted." << std::endl;
+    std::cout << "Camera thread interrupted." << std::endl;
 }
 
 void metricDisplayThread(SharedResources &shared, const ProcessingConfig &processingConfig)
@@ -249,16 +249,16 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
     {
         return window(text("Configuration"), vbox({hbox({text("Current FPS: "),
                                                          text(std::to_string((int)shared.currentFPS.load()))}),
-                                                   hbox({text("Data Rate (MB/s): "),
+                                                   hbox({text("Data Rate: "),
                                                          text(std::to_string((int)shared.dataRate.load()))}),
-                                                   hbox({text("Exposure Time (us): "),
+                                                   hbox({text("Exposure Time: "),
                                                          text(std::to_string((int)shared.exposureTime.load()))}),
                                                    hbox({text("Binary Threshold: "),
                                                          text(std::to_string(processingConfig.bg_subtract_threshold))}),
                                                    // display if valid display frame
                                                    hbox({text("Valid Display Frame: "),
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
-                                                   hbox({text("Touched Border: "),
+                                                   hbox({text("Display Frame Touched Border: "),
                                                          text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
                                                          text(std::to_string(processingConfig.area_threshold_min))}),
@@ -372,11 +372,11 @@ void processingThreadTask(
                 if (!filterResult.touchesBorder && filterResult.isValid)
                 {
                     shared.validProcessingFrame = true;
-                    auto metrics = std::make_tuple(filterResult.deformability, filterResult.area, filterResult.areaRatio);
+                    auto plotMetrics = std::make_tuple(filterResult.deformability, filterResult.area);
 
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
-                        shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&metrics));
+                        shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&plotMetrics));
                         shared.frameAreaRatios.store(filterResult.areaRatio);
                         // apply sorting function to give signal to EGrabber
                         shared.newScatterDataAvailable = true;
@@ -388,8 +388,9 @@ void processingThreadTask(
                             qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
                                                             std::chrono::system_clock::now().time_since_epoch())
                                                             .count();
-                            qualifiedResult.deformability = filterResult.deformability;
+                            qualifiedResult.areaRatio = filterResult.areaRatio;
                             qualifiedResult.area = filterResult.area;
+                            qualifiedResult.deformability = filterResult.deformability;
                             qualifiedResult.originalImage = inputImage.clone();
 
                             std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
@@ -421,7 +422,7 @@ void processingThreadTask(
             lock.unlock();
         }
     }
-    // std::cout << "Processing thread interrupted." << std::endl;
+    std::cout << "Processing thread interrupted." << std::endl;
 }
 
 void displayThreadTask(
@@ -449,8 +450,7 @@ void displayThreadTask(
     cv::resizeWindow("Live Feed", width, height);
 
     int trackbarPos = 0;
-    cv::createTrackbar("Frame", "Live Feed", nullptr, bufferCount - 1, onTrackbar, &shared);
-    // cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
 
     auto updateDisplay = [&](const cv::Mat &originalImage, const cv::Mat &processedImage)
     {
@@ -616,7 +616,7 @@ void displayThreadTask(
     }
 
     cv::destroyAllWindows();
-    // std::cout << "Display thread interrupted." << std::endl;
+    std::cout << "Display thread interrupted." << std::endl;
 }
 
 void onTrackbar(int pos, void *userdata)
@@ -630,77 +630,128 @@ void updateScatterPlot(SharedResources &shared)
 {
     using namespace matplot;
 
-    // Create figure and axes only once
-    auto f = figure(true);
-    f->quiet_mode(true); // Reduce console output
-    auto ax = f->current_axes();
-
-    // Pre-allocate vectors with a reasonable capacity
-    std::vector<double> x, y;
-    x.reserve(1000);
-    y.reserve(1000);
-
-    auto sc = ax->scatter(x, y);
-    ax->xlabel("Area");
-    ax->ylabel("Deformability");
-    ax->title("Deformability vs Area");
-
-    // Reduce update frequency
-    const auto updateInterval = std::chrono::milliseconds(5000);
-    auto lastUpdateTime = std::chrono::steady_clock::now();
-
-    while (!shared.done)
+    try
     {
-        auto now = std::chrono::steady_clock::now();
-        if (now - lastUpdateTime < updateInterval)
+        auto f = figure(true);
+        if (!f)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
+            std::cerr << "Failed to create figure" << std::endl;
+            return;
+        }
+        f->quiet_mode(true);
+        auto ax = gca();
+        if (!ax)
+        {
+            std::cerr << "Failed to get current axes" << std::endl;
+            return;
         }
 
-        bool needsUpdate = false;
-        {
-            std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
-            if (shared.newScatterDataAvailable)
-            {
-                x.clear();
-                y.clear();
+        std::vector<double> x, y;
+        x.reserve(2000);
+        y.reserve(2000);
 
-                // Reserve exact capacity to avoid reallocations
-                size_t size = shared.deformabilityBuffer.size();
-                if (x.capacity() < size)
+        const auto updateInterval = std::chrono::milliseconds(5000);
+        auto lastUpdateTime = std::chrono::steady_clock::now();
+
+        while (!shared.done)
+        {
+            try
+            {
+                auto now = std::chrono::steady_clock::now();
+                if (now - lastUpdateTime < updateInterval)
                 {
-                    x.reserve(size);
-                    y.reserve(size);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
                 }
 
-                // Read from circular buffer
-                for (size_t i = 0; i < size; i++)
+                bool needsUpdate = false;
                 {
-                    const auto *metrics = reinterpret_cast<const std::tuple<double, double> *>(
-                        shared.deformabilityBuffer.getPointer(i));
-                    if (metrics)
+                    std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
+                    if (shared.newScatterDataAvailable && shared.deformabilityBuffer.size() > 0)
                     {
-                        x.push_back(std::get<1>(*metrics)); // area
-                        y.push_back(std::get<0>(*metrics)); // deformability
+                        x.clear();
+                        y.clear();
+
+                        size_t size = shared.deformabilityBuffer.size();
+                        if (x.capacity() < size)
+                        {
+                            x.reserve(size);
+                            y.reserve(size);
+                        }
+
+                        for (size_t i = 0; i < size; i++)
+                        {
+                            const auto *metrics = reinterpret_cast<const std::tuple<double, double> *>(
+                                shared.deformabilityBuffer.getPointer(i));
+                            if (metrics)
+                            {
+                                x.push_back(std::get<1>(*metrics)); // area
+                                y.push_back(std::get<0>(*metrics)); // deformability
+                            }
+                        }
+
+                        if (!x.empty() && !y.empty())
+                        {
+                            needsUpdate = true;
+                        }
+                        shared.newScatterDataAvailable = false;
                     }
                 }
 
-                shared.newScatterDataAvailable = false;
-                needsUpdate = true;
+                if (needsUpdate)
+                {
+                    try
+                    {
+                        ax->clear();
+
+                        // Check for invalid values
+                        bool hasInvalidValues = false;
+                        for (size_t i = 0; i < x.size(); ++i)
+                        {
+                            if (!std::isfinite(x[i]) || !std::isfinite(y[i]))
+                            {
+                                hasInvalidValues = true;
+                                break;
+                            }
+                        }
+
+                        if (!hasInvalidValues)
+                        {
+                            binscatter(x, y, bin_scatter_style::point_colormap);
+                            colormap(ax, palette::parula());
+
+                            ax->xlabel("Area");
+                            ax->ylabel("Deformability");
+                            ax->title("Deformability vs Area (Density)");
+
+                            f->draw();
+                        }
+                        else
+                        {
+                            std::cerr << "Invalid values detected in plot data" << std::endl;
+                        }
+
+                        lastUpdateTime = now;
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::cerr << "Error updating plot: " << e.what() << std::endl;
+                    }
+                }
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Error in plot loop: " << e.what() << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
             }
         }
-
-        if (needsUpdate)
-        {
-            sc->x_data(x);
-            sc->y_data(y);
-            f->draw();
-            lastUpdateTime = now;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Fatal error in scatter plot thread: " << e.what() << std::endl;
+    }
+
+    std::cout << "Scatter plot thread interrupted." << std::endl;
 }
 
 void keyboardHandlingThread(
@@ -815,7 +866,7 @@ void keyboardHandlingThread(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    // std::cout << "Keyboard handling thread interrupted." << std::endl;
+    std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
 
 void resultSavingThread(SharedResources &shared, const std::string &saveDirectory)
@@ -866,7 +917,7 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
         }
         shared.updated = true;
     }
-    // std::cout << "Result saving thread interrupted." << std::endl;
+    std::cout << "Result saving thread interrupted." << std::endl;
 }
 
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
@@ -896,12 +947,10 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
              << "// var g = grabbers[0];\n"
              << "// g.RemotePort.set(\"Width\", 512);\n"
              << "// g.RemotePort.set(\"Height\", 96);\n"
-             << "// g.RemotePort.set(\"ExposureTime\", 2);\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
              << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
              << "// var g = grabbers[0];\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
-             << "// g.RemotePort.set(\"ExposureTime\", 500);\n"
              << "// g.RemotePort.set(\"Width\", 1920);\n"
              << "// g.RemotePort.set(\"Height\", 1080);\n";
         file.close();
