@@ -9,8 +9,9 @@
 - [x] Intermediate processing view if error exist use differnet color
 - [x] Detailed rejection reasons
 - [ ] Saving stream doesn't have experiment name 
-- [ ] Hot config reload not reflected consistently across all places (reload on pause)
+- [x] Hot config reload not reflected consistently across all places (reload on pause)
 - [ ] Display important tunable metrics on dashboard
+- [-] Simplify should update display logic (problematic)
 ### Features
 - [ ] GUI offset field of view
 - [ ] Digital contrast as part of processing
