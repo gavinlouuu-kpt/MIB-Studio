@@ -179,7 +179,7 @@ void simulateCameraThread(
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
-void metricDisplayThread(SharedResources &shared, const ProcessingConfig &processingConfig)
+void metricDisplayThread(SharedResources &shared)
 {
     using namespace ftxui;
     std::this_thread::sleep_for(std::chrono::milliseconds(100)); // sleep for 1ms to allow other things to be printed first
@@ -260,7 +260,7 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                    hbox({text("Exposure Time: "),
                                                          text(std::to_string((int)shared.exposureTime.load()))}),
                                                    hbox({text("Binary Threshold: "),
-                                                         text(std::to_string(processingConfig.bg_subtract_threshold))}),
+                                                         text(std::to_string(shared.processingConfig.bg_subtract_threshold))}),
                                                    // display if valid display frame
                                                    hbox({text("Valid Display Frame: "),
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
@@ -269,9 +269,9 @@ void metricDisplayThread(SharedResources &shared, const ProcessingConfig &proces
                                                    hbox({text("Multiple Contours: "),
                                                          text(shared.hasMultipleContours.load() ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
-                                                         text(std::to_string(processingConfig.area_threshold_min))}),
+                                                         text(std::to_string(shared.processingConfig.area_threshold_min))}),
                                                    hbox({text("Area Max Threshold: "),
-                                                         text(std::to_string(processingConfig.area_threshold_max))})}));
+                                                         text(std::to_string(shared.processingConfig.area_threshold_max))})}));
     };
 
     auto render_status = [&]()
@@ -340,13 +340,13 @@ void processingThreadTask(
     std::condition_variable &processingQueueCondition,
     std::queue<size_t> &framesToProcess,
     const CircularBuffer &processingBuffer,
-    size_t width, size_t height, SharedResources &shared, const ProcessingConfig &processingConfig)
+    size_t width, size_t height, SharedResources &shared)
 {
     shared.currentBatchNumber = 0;
     // Pre-allocate memory for images
     cv::Mat inputImage(height, width, CV_8UC1);
     cv::Mat processedImage(height, width, CV_8UC1);
-    ThreadLocalMats mats = initializeThreadMats(height, width, processingConfig);
+    ThreadLocalMats mats = initializeThreadMats(height, width, shared);
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
     // const size_t area_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
@@ -375,8 +375,8 @@ void processingThreadTask(
             if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
             {
                 // Preprocess Image using the optimized processFrame function
-                processFrame(inputImage, shared, processedImage, mats, processingConfig);
-                auto filterResult = filterProcessedImage(processedImage, shared.roi, processingConfig);
+                processFrame(inputImage, shared, processedImage, mats);
+                auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
 
                 if (!filterResult.touchesBorder && filterResult.isValid)
                 {
@@ -442,14 +442,14 @@ void displayThreadTask(
     size_t width,
     size_t height,
     size_t bufferCount,
-    SharedResources &shared, const ProcessingConfig &processingConfig)
+    SharedResources &shared)
 {
     const double displayFPS = 60.0;
     const uint8_t processedColor = 255; // grey scaled cell color
 
     const std::chrono::duration<double> frameDuration(1.0 / displayFPS); // Increase to 60 FPS for smoother response
     auto nextFrameTime = std::chrono::steady_clock::now();
-    ThreadLocalMats mats = initializeThreadMats(height, width, processingConfig);
+    ThreadLocalMats mats = initializeThreadMats(height, width, shared);
 
     // Pre-allocate memory for images
     cv::Mat image(height, width, CV_8UC1);
@@ -558,7 +558,7 @@ void displayThreadTask(
 
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(height, width, CV_8UC1, imageData.data());
-                    processFrame(image, shared, processedImage, mats, processingConfig);
+                    processFrame(image, shared, processedImage, mats);
                     updateDisplay(image, processedImage);
                     shouldUpdate = true;
 
@@ -585,19 +585,16 @@ void displayThreadTask(
                     {
 
                         // read config to enable hot reloading of image processing parameters
-                        auto config = readConfig("config.json");
+                        json config = readConfig("config.json");
+                        ProcessingConfig newConfig = getProcessingConfig(config);
 
-                        ProcessingConfig newConfig{
-                            config["image_processing"]["gaussian_blur_size"],
-                            config["image_processing"]["bg_subtract_threshold"],
-                            config["image_processing"]["morph_kernel_size"],
-                            config["image_processing"]["morph_iterations"],
-                            config["image_processing"]["area_threshold_min"],
-                            config["image_processing"]["area_threshold_max"]};
+                        shared.processingConfigMutex.lock();
+                        shared.processingConfig = newConfig;
+                        shared.processingConfigMutex.unlock();
 
                         image = cv::Mat(height, width, CV_8UC1, imageData.data());
-                        processFrame(image, shared, processedImage, mats, newConfig);
-                        auto filterResult = filterProcessedImage(processedImage, shared.roi, newConfig);
+                        processFrame(image, shared, processedImage, mats);
+                        auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
                         shared.hasMultipleContours = filterResult.hasMultipleContours;
                         shared.displayFrameTouchedBorder = filterResult.touchesBorder;
 
@@ -954,7 +951,7 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
 }
 
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
-                       std::function<std::vector<std::thread>(SharedResources &, const std::string &, const ProcessingConfig &)> setupThreads)
+                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads)
 {
     shared.done = false;
     shared.paused = false;
@@ -1049,7 +1046,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     std::cout << "Using save directory: " << fullPath.string() << std::endl;
 
     // Call the setup function passed as parameter
-    std::vector<std::thread> threads = setupThreads(shared, fullPath.string(), processingConfig);
+    std::vector<std::thread> threads = setupThreads(shared, fullPath.string());
 
     // Wait for completion
     shared.displayQueueCondition.notify_all();
@@ -1064,23 +1061,23 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
-                        std::vector<std::thread> &threads, const ProcessingConfig &processingConfig)
+                        std::vector<std::thread> &threads)
 {
     // Create processing thread first and set its priority
     threads.emplace_back(processingThreadTask,
                          std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
                          std::ref(shared.framesToProcess), std::ref(processingBuffer),
-                         params.width, params.height, std::ref(shared), processingConfig);
+                         params.width, params.height, std::ref(shared));
     // Create remaining threads with normal priority
     threads.emplace_back(displayThreadTask, std::ref(shared.framesToDisplay),
                          std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
-                         params.width, params.height, params.bufferCount, std::ref(shared), processingConfig);
+                         params.width, params.height, params.bufferCount, std::ref(shared));
 
     threads.emplace_back(keyboardHandlingThread,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    threads.emplace_back(metricDisplayThread, std::ref(shared), processingConfig);
+    threads.emplace_back(metricDisplayThread, std::ref(shared));
 
     // Read from json to check if scatterplot is enabled
     json config = readConfig("config.json");
@@ -1094,10 +1091,10 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
-    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir, const ProcessingConfig &processingConfig)
+    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
                           std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads, processingConfig);
+                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
 
                           threads.emplace_back(simulateCameraThread,
                                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
@@ -1131,4 +1128,16 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                               }
                           }
                           return threads; });
+}
+
+ProcessingConfig parseConfigFromJson(const json &config)
+{
+    const auto &img_config = config["image_processing"];
+    return ProcessingConfig{
+        img_config.value("gaussian_blur_size", 0),
+        img_config.value("bg_subtract_threshold", 0),
+        img_config.value("morph_kernel_size", 0),
+        img_config.value("morph_iterations", 0),
+        img_config.value("area_threshold_min", 0),
+        img_config.value("area_threshold_max", 0)};
 }

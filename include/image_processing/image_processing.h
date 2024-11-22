@@ -39,6 +39,19 @@ struct QualifiedResult
 
 struct ProcessingConfig
 {
+    ProcessingConfig(
+        int gaussian = 3,
+        int threshold = 10,
+        int kernel = 3,
+        int iterations = 1,
+        int min_area = 100,
+        int max_area = 600) : gaussian_blur_size(gaussian),
+                              bg_subtract_threshold(threshold),
+                              morph_kernel_size(kernel),
+                              morph_iterations(iterations),
+                              area_threshold_min(min_area),
+                              area_threshold_max(max_area) {}
+
     int gaussian_blur_size;
     int bg_subtract_threshold;
     int morph_kernel_size;
@@ -122,6 +135,9 @@ struct SharedResources
     std::atomic<bool> displayFrameTouchedBorder{false};
     std::atomic<bool> hasMultipleContours{false};
     // std::atomic<double> linearProcessingTime;
+
+    ProcessingConfig processingConfig;
+    std::mutex processingConfigMutex;
 };
 
 // Function declarations
@@ -129,7 +145,7 @@ ImageParams initializeImageParams(const std::string &directory);
 void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder = false);
 void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
-                  cv::Mat &outputImage, ThreadLocalMats &mats, const ProcessingConfig &config); // if put it under shared we dont need a new signature
+                  cv::Mat &outputImage, ThreadLocalMats &mats);
 std::vector<std::vector<cv::Point>> findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 
@@ -141,15 +157,18 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
 json readConfig(const std::string &filename);
+ProcessingConfig getProcessingConfig(const json &config);
+
 bool updateConfig(const std::string &filename, const std::string &key, const json &value);
+
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared);
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
-                        std::vector<std::thread> &threads, const ProcessingConfig &processingConfig);
+                        std::vector<std::thread> &threads);
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
-                       std::function<std::vector<std::thread>(SharedResources &, const std::string &, const ProcessingConfig &)> setupThreads);
+                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
 
-ThreadLocalMats initializeThreadMats(int height, int width, const ProcessingConfig &processingConfig);
+ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared);
 
 void reviewSavedData();

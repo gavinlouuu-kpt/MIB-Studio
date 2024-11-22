@@ -1,8 +1,9 @@
 #include "image_processing/image_processing.h"
 #include "CircularBuffer/CircularBuffer.h"
 
-ThreadLocalMats initializeThreadMats(int height, int width, const ProcessingConfig &config)
+ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared)
 {
+    std::lock_guard<std::mutex> lock(shared.processingConfigMutex);
     ThreadLocalMats mats;
     mats.blurred_target = cv::Mat(height, width, CV_8UC1);
     mats.bg_sub = cv::Mat(height, width, CV_8UC1);
@@ -11,15 +12,16 @@ ThreadLocalMats initializeThreadMats(int height, int width, const ProcessingConf
     mats.erode1 = cv::Mat(height, width, CV_8UC1);
     mats.erode2 = cv::Mat(height, width, CV_8UC1);
     mats.kernel = cv::getStructuringElement(cv::MORPH_CROSS,
-                                            cv::Size(config.morph_kernel_size,
-                                                     config.morph_kernel_size));
+                                            cv::Size(shared.processingConfig.morph_kernel_size,
+                                                     shared.processingConfig.morph_kernel_size));
     mats.initialized = true;
     return mats;
 }
 
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
-                  cv::Mat &outputImage, ThreadLocalMats &mats, const ProcessingConfig &config)
+                  cv::Mat &outputImage, ThreadLocalMats &mats)
 {
+    std::lock_guard<std::mutex> lock(shared.processingConfigMutex);
     cv::Rect roi = shared.roi;
     // Ensure ROI is within image bounds
     roi &= cv::Rect(0, 0, inputImage.cols, inputImage.rows);
@@ -28,15 +30,17 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     // Process only ROI area
     auto roiArea = inputImage(roi);
     cv::GaussianBlur(roiArea, mats.blurred_target(roi),
-                     cv::Size(config.gaussian_blur_size, config.gaussian_blur_size), 0);
+                     cv::Size(shared.processingConfig.gaussian_blur_size,
+                              shared.processingConfig.gaussian_blur_size),
+                     0);
     cv::subtract(blurred_bg, mats.blurred_target(roi), mats.bg_sub(roi));
     cv::threshold(mats.bg_sub(roi), mats.binary(roi),
-                  config.bg_subtract_threshold, 255, cv::THRESH_BINARY);
+                  shared.processingConfig.bg_subtract_threshold, 255, cv::THRESH_BINARY);
     // Combine operations to reduce memory transfers
     cv::morphologyEx(mats.binary(roi), mats.dilate1(roi), cv::MORPH_CLOSE, mats.kernel,
-                     cv::Point(-1, -1), config.morph_iterations);
+                     cv::Point(-1, -1), shared.processingConfig.morph_iterations);
     cv::morphologyEx(mats.dilate1(roi), outputImage(roi), cv::MORPH_OPEN, mats.kernel,
-                     cv::Point(-1, -1), config.morph_iterations);
+                     cv::Point(-1, -1), shared.processingConfig.morph_iterations);
 
     if (roi.width != inputImage.cols || roi.height != inputImage.rows)
     {

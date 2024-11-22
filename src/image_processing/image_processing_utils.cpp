@@ -182,13 +182,21 @@ json readConfig(const std::string &filename)
 
     if (!std::filesystem::exists(filename))
     {
-        // Create default config
+        // Create default config with a more structured approach
+        json image_processing = {
+            {"gaussian_blur_size", 3},
+            {"bg_subtract_threshold", 10},
+            {"morph_kernel_size", 3},
+            {"morph_iterations", 1},
+            {"area_threshold_min", 100},
+            {"area_threshold_max", 600}};
+
         config = {
             {"save_directory", "updated_results"},
             {"buffer_threshold", 1000},
             {"target_fps", 5000},
             {"scatter_plot_enabled", false},
-            {"image_processing", {{"gaussian_blur_size", 3}, {"bg_subtract_threshold", 10}, {"morph_kernel_size", 3}, {"morph_iterations", 1}, {"area_threshold_min", 100}, {"area_threshold_max", 600}}}};
+            {"image_processing", image_processing}};
 
         // Write default config to file
         std::ofstream configFile(filename);
@@ -197,12 +205,50 @@ json readConfig(const std::string &filename)
     }
     else
     {
-        // Read existing config file
+        // Read existing config file and ensure all required fields exist
         std::ifstream configFile(filename);
         configFile >> config;
+
+        // Ensure image_processing section exists with all required fields
+        if (!config.contains("image_processing"))
+        {
+            config["image_processing"] = json::object();
+        }
+
+        auto &img_config = config["image_processing"];
+
+        // Set defaults for any missing fields
+        if (!img_config.contains("gaussian_blur_size"))
+            img_config["gaussian_blur_size"] = 3;
+        if (!img_config.contains("bg_subtract_threshold"))
+            img_config["bg_subtract_threshold"] = 10;
+        if (!img_config.contains("morph_kernel_size"))
+            img_config["morph_kernel_size"] = 3;
+        if (!img_config.contains("morph_iterations"))
+            img_config["morph_iterations"] = 1;
+        if (!img_config.contains("area_threshold_min"))
+            img_config["area_threshold_min"] = 100;
+        if (!img_config.contains("area_threshold_max"))
+            img_config["area_threshold_max"] = 600;
+
+        // Write back the complete config to ensure file has all fields
+        std::ofstream outFile(filename);
+        outFile << std::setw(4) << config << std::endl;
     }
 
     return config;
+}
+
+ProcessingConfig getProcessingConfig(const json &config)
+{
+    const auto &img_config = config["image_processing"];
+    return ProcessingConfig{
+        img_config["gaussian_blur_size"],
+        img_config["bg_subtract_threshold"],
+        img_config["morph_kernel_size"],
+        img_config["morph_iterations"],
+        img_config["area_threshold_min"],
+        img_config["area_threshold_max"]};
 }
 
 bool updateConfig(const std::string &filename, const std::string &key, const json &value)
@@ -287,7 +333,7 @@ void reviewSavedData()
     {
         // Load batch-specific processing config
         processingConfig = loadBatchConfig(batchPath);
-
+        shared.processingConfig = processingConfig;
         // Load background image
         cv::Mat backgroundClean = cv::imread((batchPath / "background_clean.png").string(), cv::IMREAD_GRAYSCALE);
         if (backgroundClean.empty())
@@ -327,7 +373,7 @@ void reviewSavedData()
 
     // Initial batch setup
     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
-    ThreadLocalMats mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, processingConfig);
+    ThreadLocalMats mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
 
     // Create display window
     cv::namedWindow("Data Review", cv::WINDOW_NORMAL);
@@ -392,7 +438,7 @@ void reviewSavedData()
                 cv::Mat processedImage = cv::Mat(images[currentImageIndex].rows,
                                                  images[currentImageIndex].cols,
                                                  CV_8UC1);
-                processFrame(images[currentImageIndex], shared, processedImage, mats, processingConfig);
+                processFrame(images[currentImageIndex], shared, processedImage, mats);
 
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
@@ -441,7 +487,7 @@ void reviewSavedData()
                     currentBatchIndex--;
                     currentImageIndex = 0;
                     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
-                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, processingConfig);
+                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
                     break;
                 }
                 break;
@@ -451,7 +497,7 @@ void reviewSavedData()
                     currentBatchIndex++;
                     currentImageIndex = 0;
                     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
-                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, processingConfig);
+                    mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
                     break;
                 }
                 break;

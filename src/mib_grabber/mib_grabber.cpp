@@ -121,10 +121,10 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
 
 void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
-    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir, const ProcessingConfig &processingConfig)
+    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
                           std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads, processingConfig);
+                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
                           grabber.start();
                           // egrabber request fps and exposure time load to shared.resources for metric display
                           uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
