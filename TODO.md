@@ -7,7 +7,10 @@
 - [x] Saving batch continues after each experiment when not quitting programme. (residual variables and occasional error from camera loading on the next trial)
 - [-] Consistency between preview with and without pausing
 - [x] Intermediate processing view if error exist use differnet color
-- [x] Detailed rejection reasons 
+- [x] Detailed rejection reasons
+- [ ] Saving stream doesn't have experiment name 
+- [ ] Hot config reload not reflected consistently across all places (reload on pause)
+- [ ] Display important tunable metrics on dashboard
 ### Features
 - [ ] GUI offset field of view
 - [ ] Digital contrast as part of processing
