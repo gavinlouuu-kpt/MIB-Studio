@@ -824,6 +824,7 @@ void keyboardHandlingThread(
         else if (key == 'p' || key == 'P')
         {
             shared.overlayMode = !shared.overlayMode;
+            shared.displayNeedsUpdate = true;
         }
         else if (key == 'q' || key == 'Q')
         {
@@ -872,7 +873,7 @@ void keyboardHandlingThread(
             {
                 std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
                 shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, backgroundImageData.data()).clone();
-                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
+                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(shared.processingConfig.gaussian_blur_size, shared.processingConfig.gaussian_blur_size), 0);
             }
             shared.displayNeedsUpdate = true;
         }
@@ -988,13 +989,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     // saving UI block
     json config = readConfig("config.json");
     // Initialize processing configuration
-    ProcessingConfig processingConfig = ProcessingConfig{
-        config["image_processing"]["gaussian_blur_size"],
-        config["image_processing"]["bg_subtract_threshold"],
-        config["image_processing"]["morph_kernel_size"],
-        config["image_processing"]["morph_iterations"],
-        config["image_processing"]["area_threshold_min"],
-        config["image_processing"]["area_threshold_max"]};
+    ProcessingConfig processingConfig = getProcessingConfig(config);
     std::string saveDir = config["save_directory"];
 
     std::cout << "Current save directory: " << saveDir << std::endl;
@@ -1128,16 +1123,4 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                               }
                           }
                           return threads; });
-}
-
-ProcessingConfig parseConfigFromJson(const json &config)
-{
-    const auto &img_config = config["image_processing"];
-    return ProcessingConfig{
-        img_config.value("gaussian_blur_size", 0),
-        img_config.value("bg_subtract_threshold", 0),
-        img_config.value("morph_kernel_size", 0),
-        img_config.value("morph_iterations", 0),
-        img_config.value("area_threshold_min", 0),
-        img_config.value("area_threshold_max", 0)};
 }
