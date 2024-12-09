@@ -15,7 +15,9 @@ ImageParams initializeImageParams(const std::string &directory)
 
     for (const auto &entry : std::filesystem::directory_iterator(directory))
     {
-        if (entry.path().extension() == ".tiff" || entry.path().extension() == ".tif")
+        if (entry.path().extension() == ".tiff" || entry.path().extension() == ".tif" ||
+            entry.path().extension() == ".png" || entry.path().extension() == ".jpg" ||
+            entry.path().extension() == ".jpeg")
         {
             cv::Mat image = cv::imread(entry.path().string(), cv::IMREAD_GRAYSCALE);
             if (!image.empty())
@@ -37,7 +39,9 @@ void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool
     std::vector<std::filesystem::path> imagePaths;
     for (const auto &entry : std::filesystem::directory_iterator(directory))
     {
-        if (entry.path().extension() == ".tiff" || entry.path().extension() == ".tif")
+        if (entry.path().extension() == ".tiff" || entry.path().extension() == ".tif" ||
+            entry.path().extension() == ".png" || entry.path().extension() == ".jpg" ||
+            entry.path().extension() == ".jpeg")
         {
             imagePaths.push_back(entry.path());
         }
