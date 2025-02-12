@@ -987,6 +987,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
              << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
              << "// g.RemotePort.set(\"Width\", 512);\n"
              << "// g.RemotePort.set(\"Height\", 96);\n"
+             << "// g.RemotePort.set(\"ExposureTime\", 2);\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
              << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
              << "// var g = grabbers[0];\n"
@@ -994,6 +995,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
              << "// g.InterfacePort.set(\"LineMode\", \"Output\");\n"
              << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
+             << "// g.RemotePort.set(\"ExposureTime\", 20);\n"
              << "// g.RemotePort.set(\"Width\", 1920);\n"
              << "// g.RemotePort.set(\"Height\", 1080);\n";
         file.close();
