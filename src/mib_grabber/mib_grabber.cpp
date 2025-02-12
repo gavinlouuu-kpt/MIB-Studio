@@ -154,6 +154,57 @@ void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared
     }
 }
 
+void processTriggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+{
+    while (!shared.done)
+    {
+        processTrigger(grabber, shared);
+    }
+}
+
+void hybrid_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
+{
+    commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
+                      {
+                          std::vector<std::thread> threads;
+                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
+                          threads.emplace_back(simulateCameraThread, std::ref(cameraBuffer), std::ref(shared), std::ref(params));
+                          threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
+                          threads.emplace_back(processTriggerThread, std::ref(grabber), std::ref(shared));
+
+                          grabber.start();
+                          size_t lastProcessedFrame = 0;
+                          while (!shared.done)
+                          {
+                              if (shared.paused)
+                              {
+                                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                  continue;
+                              }
+                              size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
+                              if (latestFrame != lastProcessedFrame)
+                              {
+                                  const uint8_t *imageData = cameraBuffer.getPointer(latestFrame);
+                                  if (imageData != nullptr)
+                                  {
+                                      circularBuffer.push(imageData);
+                                      processingBuffer.push(imageData);
+                                      {
+                                          std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+                                          std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+                                          shared.framesToProcess.push(latestFrame);
+                                          shared.framesToDisplay.push(latestFrame);
+                                      }
+                                      shared.displayQueueCondition.notify_one();
+                                      shared.processingQueueCondition.notify_one();
+                                      lastProcessedFrame = latestFrame;
+                                  }
+                              }
+                          }
+                          grabber.stop();
+                          return threads; });
+}
+
 void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
@@ -162,7 +213,7 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
                           // Add trigger thread before starting the grabber
                           threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
-                          threads.emplace_back(processTrigger, std::ref(grabber), std::ref(shared));
+                          threads.emplace_back(processTriggerThread, std::ref(grabber), std::ref(shared));
 
                           grabber.start();
                           // egrabber request fps and exposure time load to shared.resources for metric display
@@ -236,6 +287,65 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                           grabber.stop();
 
                           return threads; });
+}
+
+void runHybridSample()
+{
+    try
+    {
+        EGenTL genTL;
+        EGrabberDiscovery discovery(genTL);
+        std::cout << "Scanning for available eGrabbers and cameras..." << std::endl;
+        discovery.discover();
+
+        // Display available cameras
+        if (discovery.cameraCount() == 0)
+        {
+            throw std::runtime_error("No cameras detected in the system");
+        }
+
+        std::cout << "\nAvailable cameras:" << std::endl;
+        for (int i = 0; i < discovery.cameraCount(); ++i)
+        {
+            EGrabberCameraInfo info = discovery.cameras(i);
+            std::cout << i << ": " << info.grabbers[0].deviceModelName << std::endl;
+        }
+
+        // Let user select camera
+        std::cout << "\nSelect camera (0-" << discovery.cameraCount() - 1 << "): ";
+        int selectedCamera;
+        std::cin >> selectedCamera;
+
+        if (selectedCamera < 0 || selectedCamera >= discovery.cameraCount())
+        {
+            throw std::runtime_error("Invalid camera selection");
+        }
+
+        lastUsedCameraIndex = selectedCamera;
+        // Initialize grabber with selected camera
+        EGrabber<CallbackOnDemand> grabber(discovery.cameras(selectedCamera));
+        ImageParams cameraParams = initializeGrabber(grabber);
+
+        std::cout << "Select the image directory:\n";
+        std::string imageDirectory = MenuSystem::navigateAndSelectFolder();
+        ImageParams params = initializeImageParams(imageDirectory);
+        CircularBuffer cameraBuffer(params.bufferCount, params.imageSize);
+        CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
+        CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
+        loadImages(imageDirectory, cameraBuffer, true);
+
+        SharedResources shared;
+        initializeMockBackgroundFrame(shared, params, cameraBuffer);
+        shared.roi = cv::Rect(0, 0, static_cast<int>(params.width), static_cast<int>(params.height));
+
+        hybrid_sample(grabber, params, cameraBuffer, circularBuffer, processingBuffer, shared);
+
+        std::cout << "Hybrid sampling completed.\n";
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error: " << e.what() << std::endl;
+    }
 }
 
 int mib_grabber_main()

@@ -165,6 +165,7 @@ bool updateConfig(const std::string &filename, const std::string &key, const jso
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared);
 
+void simulateCameraThread(CircularBuffer &cameraBuffer, SharedResources &shared, const ImageParams &params);
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
                         std::vector<std::thread> &threads);

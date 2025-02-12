@@ -34,8 +34,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${OpenCV_INCLUDE_DIRS}
 )
 # Separately include the EGrabber folder for the nested files
-include_directories(${PROJECT_SOURCE_DIR}/include/EGrabber) # does not work with camera only for testing
-# include_directories("C:/Program Files/Euresys/eGrabber/include") # required for camera
+# include_directories(${PROJECT_SOURCE_DIR}/include/EGrabber) # does not work with camera only for testing
+include_directories("C:/Program Files/Euresys/eGrabber/include") # required for camera
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE 
     Matplot++::matplot

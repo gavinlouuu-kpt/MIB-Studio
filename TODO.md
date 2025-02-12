@@ -5,8 +5,10 @@
 - [ ] Tool to test how the opencv algo performs given an ROI and config
 - [ ] Tool to create standard data i.e., how many valid/gated/doublet in the image given an ROI. 
 ### Features
-- [ ] Include trigger of 1 microsecond upon valid image
+- [x] Include trigger of 1 microsecond upon valid image
+- [x] Hybrid sample for testing egrabber function with images from file to test trigger without samples
 
+Note: Short pulses to trigger signal generator is working but the waveform is degraded as the pulse width decreases. Further verification is needed. The egrabber outgoing pulse is set to 1 microsecond.
 
 ## 2024/11/21
 ### Issues

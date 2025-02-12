@@ -26,8 +26,11 @@ namespace MenuSystem
         std::cout << "\n=== Cell Analysis Menu ===\n";
         std::cout << "1. Run Mock Sample\n";
         std::cout << "2. Run Live Sample\n";
-        std::cout << "3. Convert Saved Images\n";
-        std::cout << "4. Exit\n";
+        std::cout << "3. Run Hybrid Sample\n";
+        std::cout << "4. Convert Saved Images\n";
+        std::cout << "5. EGrabber Config\n";
+        std::cout << "6. EGrabber Hot Reload\n";
+        std::cout << "7. Exit\n";
         std::cout << "Enter your choice: ";
     }
 
@@ -303,6 +306,7 @@ namespace MenuSystem
         std::vector<std::string> entries = {
             "Run Mock Sample",
             "Run Live Sample",
+            "Run Hybrid Sample",
             "Review Saved Data",
             "Convert Saved Images",
             "EGrabber Config",
@@ -344,18 +348,21 @@ namespace MenuSystem
                 runLiveSample();
                 break;
             case 2:
-                reviewSavedData();
+                runHybridSample();
                 break;
             case 3:
-                convertSavedImages();
+                reviewSavedData();
                 break;
             case 4:
-                egrabberConfig();
+                convertSavedImages();
                 break;
             case 5:
-                egrabberHotReload();
+                egrabberConfig();
                 break;
             case 6:
+                egrabberHotReload();
+                break;
+            case 7:
                 std::cout << "Exiting program.\n";
                 return 0;
             }
