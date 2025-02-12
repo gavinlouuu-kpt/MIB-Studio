@@ -355,6 +355,7 @@ void processingThreadTask(
 
     while (!shared.done)
     {
+        shared.triggerOut = false;
         std::unique_lock<std::mutex> lock(processingQueueMutex);
         processingQueueCondition.wait(lock, [&]()
                                       { return !framesToProcess.empty() || shared.done || shared.paused; });
@@ -383,6 +384,7 @@ void processingThreadTask(
                 if (!filterResult.touchesBorder && filterResult.isValid)
                 {
                     shared.validProcessingFrame = true;
+                    shared.triggerOut = true;
                     auto plotMetrics = std::make_tuple(filterResult.deformability, filterResult.area);
 
                     {

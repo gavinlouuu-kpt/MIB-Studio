@@ -1,4 +1,13 @@
 # TODO
+
+## 2025/2/12
+### Tests
+- [ ] Tool to test how the opencv algo performs given an ROI and config
+- [ ] Tool to create standard data i.e., how many valid/gated/doublet in the image given an ROI. 
+### Features
+- [ ] Include trigger of 1 microsecond upon valid image
+
+
 ## 2024/11/21
 ### Issues
 - [x] Fix scatter plot orientation due to area Ratio added
