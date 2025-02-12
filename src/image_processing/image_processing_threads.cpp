@@ -283,6 +283,8 @@ void metricDisplayThread(SharedResources &shared)
                                                 text(shared.paused.load() ? "Yes" : "No")}),
                                           hbox({text("Overlay Mode: "),
                                                 text(shared.overlayMode.load() ? "Yes" : "No")}),
+                                          hbox({text("Trigger Out: "),
+                                                text(shared.triggerOut.load() ? "Yes" : "No")}),
                                           hbox({text("Current Frame Index: "),
                                                 text(std::to_string(shared.currentFrameIndex.load()))}),
                                           hbox({text("Saving Speed: "),
@@ -831,7 +833,7 @@ void keyboardHandlingThread(
             // std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
             // shared.deformabilityBuffer.clear();
         }
-        else if (key == 's' || key == 'S')
+        else if (key == 'S')
         {
             std::filesystem::path outputDir = "stream_output";
             if (!std::filesystem::exists(outputDir))
@@ -876,6 +878,10 @@ void keyboardHandlingThread(
                 cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(shared.processingConfig.gaussian_blur_size, shared.processingConfig.gaussian_blur_size), 0);
             }
             shared.displayNeedsUpdate = true;
+        }
+        else if (key == 't' || key == 'T')
+        {
+            shared.triggerOut = !shared.triggerOut;
         }
         else if (key == 'r' || key == 'R')
         {
@@ -976,12 +982,20 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
         std::ofstream file(configFile);
         file << "// Decrease the resolution before increasing the frame rate\n\n"
              << "// var g = grabbers[0];\n"
+             << "// g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
+             << "// g.InterfacePort.set(\"LineMode\", \"Output\");\n"
+             << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
              << "// g.RemotePort.set(\"Width\", 512);\n"
              << "// g.RemotePort.set(\"Height\", 96);\n"
+             << "// g.RemotePort.set(\"ExposureTime\", 2);\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
              << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
              << "// var g = grabbers[0];\n"
+             << "// g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
+             << "// g.InterfacePort.set(\"LineMode\", \"Output\");\n"
+             << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
              << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
+             << "// g.RemotePort.set(\"ExposureTime\", 20);\n"
              << "// g.RemotePort.set(\"Width\", 1920);\n"
              << "// g.RemotePort.set(\"Height\", 1080);\n";
         file.close();

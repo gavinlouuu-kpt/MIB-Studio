@@ -138,6 +138,7 @@ struct SharedResources
 
     ProcessingConfig processingConfig;
     std::mutex processingConfigMutex;
+    std::atomic<bool> triggerOut{false};
 };
 
 // Function declarations

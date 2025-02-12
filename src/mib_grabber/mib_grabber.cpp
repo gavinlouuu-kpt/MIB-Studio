@@ -119,12 +119,31 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
+void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+{
+    grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+    grabber.setString<InterfaceModule>("LineMode", "Output");
+    grabber.setString<InterfaceModule>("LineSource", shared.triggerOut ? "High" : "Low");
+}
+
+void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+{
+    while (!shared.done)
+    {
+        triggerOut(grabber, shared);
+        // wait do not sleep
+    }
+}
+
 void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
                           std::vector<std::thread> threads;
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
+                          // Add trigger thread before starting the grabber
+                          threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
+                          
                           grabber.start();
                           // egrabber request fps and exposure time load to shared.resources for metric display
                           uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
