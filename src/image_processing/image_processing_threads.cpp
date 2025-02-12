@@ -246,6 +246,7 @@ void metricDisplayThread(SharedResources &shared)
                                                         hbox({text("High Latency (>200us): "), text(std::to_string(highLatencyPct) + "%")}),
                                                         hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
                                                         hbox({text("Deformability Buffer Size: "), text(std::to_string(shared.deformabilityBuffer.size()) + " sets")}),
+                                                        hbox({text("Processed Trigger: "), text(shared.processTrigger.load() ? "Yes" : "No")}),
                                                         hbox({text("Deformability: "), text(std::to_string(shared.frameDeformabilities.load()))}),
                                                         hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))}),
                                                         hbox({text("Area Ratio: "), text(std::to_string(shared.frameAreaRatios.load()))})}));
@@ -352,10 +353,10 @@ void processingThreadTask(
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
     // const size_t area_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
+    shared.processTrigger = false;
 
     while (!shared.done)
     {
-        shared.triggerOut = false;
         std::unique_lock<std::mutex> lock(processingQueueMutex);
         processingQueueCondition.wait(lock, [&]()
                                       { return !framesToProcess.empty() || shared.done || shared.paused; });
@@ -383,10 +384,9 @@ void processingThreadTask(
 
                 if (!filterResult.touchesBorder && filterResult.isValid)
                 {
+                    shared.processTrigger = true;
                     shared.validProcessingFrame = true;
-                    shared.triggerOut = true;
                     auto plotMetrics = std::make_tuple(filterResult.deformability, filterResult.area);
-
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
                         shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&plotMetrics));

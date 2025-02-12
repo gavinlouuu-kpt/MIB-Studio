@@ -135,6 +135,25 @@ void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
     }
 }
 
+void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+{
+    if (shared.processTrigger)
+    {
+        grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+        grabber.setString<InterfaceModule>("LineMode", "Output");
+        grabber.setString<InterfaceModule>("LineSource", "High");
+
+        // Busy-wait loop for approximately 1 microsecond
+        auto start = std::chrono::high_resolution_clock::now();
+        while (std::chrono::high_resolution_clock::now() - start < std::chrono::microseconds(1))
+        {
+            // Busy-wait
+        }
+        grabber.setString<InterfaceModule>("LineSource", "Low");
+        shared.processTrigger = false;
+    }
+}
+
 void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
@@ -143,7 +162,8 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
                           // Add trigger thread before starting the grabber
                           threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
-                          
+                          threads.emplace_back(processTrigger, std::ref(grabber), std::ref(shared));
+
                           grabber.start();
                           // egrabber request fps and exposure time load to shared.resources for metric display
                           uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
