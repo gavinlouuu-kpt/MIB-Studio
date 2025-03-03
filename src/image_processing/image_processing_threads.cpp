@@ -105,35 +105,93 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
         // Set hasNestedContours flag
         result.hasNestedContours = hasNestedContours;
 
-        // If we have inner contours, use them for metrics
+        // Find significant contours (those that are large enough to be considered for analysis)
+        std::vector<std::vector<cv::Point>> significantContours;
+        std::vector<double> contourAreas;
+
+        // Minimum area ratio compared to the largest contour to be considered significant
+        const double significanceThreshold = 0.2; // 20% of the largest contour's area
+
+        // Find the largest contour and its area
+        double largestArea = 0.0;
+        for (const auto &contour : contours)
+        {
+            double area = cv::contourArea(contour);
+            largestArea = std::max(largestArea, area);
+        }
+
+        // Filter contours based on significance
+        for (const auto &contour : contours)
+        {
+            double area = cv::contourArea(contour);
+            if (area >= largestArea * significanceThreshold)
+            {
+                significantContours.push_back(contour);
+                contourAreas.push_back(area);
+            }
+        }
+
+        // If we have more than one significant contour, check if we should reject
+        if (significantContours.size() > 1)
+        {
+            // Only set hasMultipleContours if we have multiple significant outer contours
+            // or multiple significant inner contours
+
+            // Count significant inner contours
+            int significantInnerCount = 0;
+            for (const auto &innerContour : innerContours)
+            {
+                double area = cv::contourArea(innerContour);
+                if (area >= largestArea * significanceThreshold)
+                {
+                    significantInnerCount++;
+                }
+            }
+
+            // If we have multiple significant inner contours, reject
+            if (significantInnerCount > 1)
+            {
+                result.hasMultipleContours = true;
+                return result;
+            }
+
+            // If we have multiple significant outer contours without inner contours, reject
+            if (!hasNestedContours && significantContours.size() > 1)
+            {
+                result.hasMultipleContours = true;
+                return result;
+            }
+        }
+
+        // If we have inner contours, use the largest one for metrics
         if (hasNestedContours && !innerContours.empty())
         {
-            // Find the largest inner contour by area
-            size_t largestInnerContourIdx = 0;
-            double largestArea = 0;
+            // Find the largest inner contour
+            size_t largestInnerIdx = 0;
+            double largestInnerArea = 0.0;
 
             for (size_t i = 0; i < innerContours.size(); i++)
             {
                 double area = cv::contourArea(innerContours[i]);
-                if (area > largestArea)
+                if (area > largestInnerArea)
                 {
-                    largestArea = area;
-                    largestInnerContourIdx = i;
+                    largestInnerArea = area;
+                    largestInnerIdx = i;
                 }
             }
 
             // Calculate contour area
-            double contourArea = cv::contourArea(innerContours[largestInnerContourIdx]);
+            double contourArea = cv::contourArea(innerContours[largestInnerIdx]);
 
             // Calculate convex hull
             std::vector<cv::Point> hull;
-            cv::convexHull(innerContours[largestInnerContourIdx], hull);
+            cv::convexHull(innerContours[largestInnerIdx], hull);
             double hullArea = cv::contourArea(hull);
 
             // Calculate area ratio (R = Ahull/Acontour)
             result.areaRatio = hullArea / contourArea;
 
-            auto [deformability, area] = calculateMetrics(innerContours[largestInnerContourIdx]);
+            auto [deformability, area] = calculateMetrics(innerContours[largestInnerIdx]);
             result.deformability = deformability;
             result.area = area;
 
@@ -143,25 +201,35 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
                 result.isValid = true;
             }
         }
-        // Set hasMultipleContours if there are multiple contours (separate from nested contours)
-        else if (contours.size() > 1)
+        // If no nested contours but we have contours, use the largest one
+        else if (!contours.empty())
         {
-            result.hasMultipleContours = true;
-        }
-        else if (contours.size() == 1)
-        {
+            // Find the largest contour
+            size_t largestIdx = 0;
+            double largestOuterArea = 0.0;
+
+            for (size_t i = 0; i < contours.size(); i++)
+            {
+                double area = cv::contourArea(contours[i]);
+                if (area > largestOuterArea)
+                {
+                    largestOuterArea = area;
+                    largestIdx = i;
+                }
+            }
+
             // Calculate contour area
-            double contourArea = cv::contourArea(contours[0]);
+            double contourArea = cv::contourArea(contours[largestIdx]);
 
             // Calculate convex hull
             std::vector<cv::Point> hull;
-            cv::convexHull(contours[0], hull);
+            cv::convexHull(contours[largestIdx], hull);
             double hullArea = cv::contourArea(hull);
 
             // Calculate area ratio (R = Ahull/Acontour)
             result.areaRatio = hullArea / contourArea;
 
-            auto [deformability, area] = calculateMetrics(contours[0]);
+            auto [deformability, area] = calculateMetrics(contours[largestIdx]);
             result.deformability = deformability;
             result.area = area;
 
@@ -291,6 +359,7 @@ void metricDisplayThread(SharedResources &shared)
                                                         hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
                                                         hbox({text("Deformability Buffer Size: "), text(std::to_string(shared.deformabilityBuffer.size()) + " sets")}),
                                                         hbox({text("Processed Trigger: "), text(shared.processTrigger.load() ? "Yes" : "No")}),
+                                                        hbox({text("Trigger Onset Duration: "), text(std::to_string(shared.triggerOnsetDuration.load()) + " us")}),
                                                         hbox({text("Deformability: "), text(std::to_string(shared.frameDeformabilities.load()))}),
                                                         hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))}),
                                                         hbox({text("Area Ratio: "), text(std::to_string(shared.frameAreaRatios.load()))})}));
@@ -311,7 +380,7 @@ void metricDisplayThread(SharedResources &shared)
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
                                                    hbox({text("Touched Border: "),
                                                          text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
-                                                   hbox({text("Multiple Contours: "),
+                                                   hbox({text("Multiple Significant Contours (Rejected): "),
                                                          text(shared.hasMultipleContours.load() ? "Yes" : "No")}),
                                                    hbox({text("Nested Contours: "),
                                                          text(shared.hasNestedContours.load() ? "Yes" : "No")}),
@@ -538,17 +607,17 @@ void displayThreadTask(
             }
             else if (shared.hasMultipleContours)
             {
-                // Blue for multiple contours (second priority)
+                // Blue for multiple significant contours (rejected frames)
                 overlayColor = cv::Scalar(255, 0, 0); // BGR: Blue
             }
             else if (shared.usingInnerContour)
             {
-                // Green for using inner contour (third priority)
+                // Green for using inner contour (valid frame with inner contour)
                 overlayColor = cv::Scalar(0, 255, 0); // BGR: Green
             }
             else if (shared.hasNestedContours)
             {
-                // Purple for nested contours (fourth priority)
+                // Purple for nested contours detected but not used
                 overlayColor = cv::Scalar(255, 0, 255); // BGR: Purple
             }
             else if (shared.validDisplayFrame)

@@ -1,10 +1,10 @@
 # TODO
 ## 2025/3/3
 - [ ] Record condition, 10 frames after detected object (variable)
-- [ ] Image processing target - background to get inner contour
+- [x] Image processing target - background to get inner contour
 - [x] Hierarchy contour finding the inner one
 - [ ] Consistent stream saving order with live pause preview
-- [ ] Remove trigger setup script from execution 
+- [x] Remove trigger setup script from execution 
 - [ ] Use .tiff format for saving images under all scenario 
 ## 2025/2/12
 ### Tests

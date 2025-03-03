@@ -137,6 +137,7 @@ struct SharedResources
     std::atomic<bool> hasNestedContours{false};
     std::atomic<bool> usingInnerContour{false};
     // std::atomic<double> linearProcessingTime;
+    std::atomic<int64_t> triggerOnsetDuration{0}; // Store the trigger onset duration in microseconds
 
     ProcessingConfig processingConfig;
     std::mutex processingConfigMutex;

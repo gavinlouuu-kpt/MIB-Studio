@@ -88,6 +88,8 @@ void configure_js(std::string config_path)
         // Run the configuration script
         grabber.runScript(config_path);
         std::cout << "Config script executed successfully on camera " << lastUsedCameraIndex << std::endl;
+        grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+        grabber.setString<InterfaceModule>("LineMode", "Output");
     }
     catch (const std::exception &e)
     {
@@ -121,8 +123,8 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
 
 void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
-    grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
-    grabber.setString<InterfaceModule>("LineMode", "Output");
+    // grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+    // grabber.setString<InterfaceModule>("LineMode", "Output");
     grabber.setString<InterfaceModule>("LineSource", shared.triggerOut ? "High" : "Low");
 }
 
@@ -139,9 +141,16 @@ void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared
 {
     if (shared.processTrigger)
     {
-        grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
-        grabber.setString<InterfaceModule>("LineMode", "Output");
+        // track how long it takes to set the line source high
+        auto trigger_start = std::chrono::high_resolution_clock::now();
+        // grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+        // grabber.setString<InterfaceModule>("LineMode", "Output");
         grabber.setString<InterfaceModule>("LineSource", "High");
+        auto trigger_end = std::chrono::high_resolution_clock::now();
+        auto trigger_onset_duration = std::chrono::duration_cast<std::chrono::microseconds>(trigger_end - trigger_start);
+
+        // Store the trigger onset duration in shared resources for dashboard display
+        shared.triggerOnsetDuration.store(trigger_onset_duration.count());
 
         // Busy-wait loop for approximately 1 microsecond
         auto start = std::chrono::high_resolution_clock::now();
