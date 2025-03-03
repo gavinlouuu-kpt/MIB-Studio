@@ -1,5 +1,6 @@
 #include "image_processing/image_processing.h"
 #include "CircularBuffer/CircularBuffer.h"
+#include <cmath>
 
 ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared)
 {
@@ -33,7 +34,7 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
                      cv::Size(shared.processingConfig.gaussian_blur_size,
                               shared.processingConfig.gaussian_blur_size),
                      0);
-    cv::subtract(blurred_bg, mats.blurred_target(roi), mats.bg_sub(roi));
+    cv::subtract(mats.blurred_target(roi), blurred_bg, mats.bg_sub(roi));
     cv::threshold(mats.bg_sub(roi), mats.binary(roi),
                   shared.processingConfig.bg_subtract_threshold, 255, cv::THRESH_BINARY);
     // Combine operations to reduce memory transfers
@@ -50,11 +51,28 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     }
 }
 
-std::vector<std::vector<cv::Point>> findContours(const cv::Mat &processedImage)
+std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>> findContours(const cv::Mat &processedImage)
 {
     std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(processedImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    return contours;
+    std::vector<cv::Vec4i> hierarchy;
+    cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+
+    // Check if there are nested contours by examining the hierarchy
+    bool hasNestedContours = false;
+    std::vector<std::vector<cv::Point>> innerContours;
+
+    // Process hierarchy to find inner contours
+    for (size_t i = 0; i < hierarchy.size(); i++)
+    {
+        // h[3] > -1 means this contour has a parent (it's an inner contour)
+        if (hierarchy[i][3] > -1)
+        {
+            hasNestedContours = true;
+            innerContours.push_back(contours[i]);
+        }
+    }
+
+    return std::make_tuple(contours, hasNestedContours, innerContours);
 }
 
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour)
@@ -62,7 +80,8 @@ std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contou
     cv::Moments m = cv::moments(contour);
     double area = m.m00;
     double perimeter = cv::arcLength(contour, true);
-    double circularity = (perimeter > 0) ? 4 * M_PI * area / (perimeter * perimeter) : 0.0;
+    // Updated formula: sqrt(4 * pi * area) / perimeter
+    double circularity = (perimeter > 0) ? std::sqrt(4 * M_PI * area) / perimeter : 0.0; // DO NOT CHANGE THIS FORMULA
     double deformability = 1.0 - circularity;
     return std::make_tuple(deformability, area);
 }

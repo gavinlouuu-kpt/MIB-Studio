@@ -31,6 +31,7 @@ struct FilterResult
     bool isValid;
     bool touchesBorder;
     bool hasMultipleContours;
+    bool hasNestedContours;
     bool inRange;
     double deformability;
     double area;
@@ -40,7 +41,7 @@ struct FilterResult
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                   const ProcessingConfig &config, const uint8_t processedColor = 255)
 {
-    FilterResult result = {false, false, 0.0, 0.0, 0.0};
+    FilterResult result = {false, false, false, false, false, 0.0, 0.0, 0.0};
 
     // Get ROI from processed image
     cv::Mat roiImage = processedImage(roi);
@@ -99,9 +100,51 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
     // Only proceed with contour detection if no border pixels were found
     if (!result.touchesBorder)
     {
-        auto contours = findContours(processedImage);
+        auto [contours, hasNestedContours, innerContours] = findContours(processedImage);
 
-        if (contours.size() > 1)
+        // Set hasNestedContours flag
+        result.hasNestedContours = hasNestedContours;
+
+        // If we have inner contours, use them for metrics
+        if (hasNestedContours && !innerContours.empty())
+        {
+            // Find the largest inner contour by area
+            size_t largestInnerContourIdx = 0;
+            double largestArea = 0;
+
+            for (size_t i = 0; i < innerContours.size(); i++)
+            {
+                double area = cv::contourArea(innerContours[i]);
+                if (area > largestArea)
+                {
+                    largestArea = area;
+                    largestInnerContourIdx = i;
+                }
+            }
+
+            // Calculate contour area
+            double contourArea = cv::contourArea(innerContours[largestInnerContourIdx]);
+
+            // Calculate convex hull
+            std::vector<cv::Point> hull;
+            cv::convexHull(innerContours[largestInnerContourIdx], hull);
+            double hullArea = cv::contourArea(hull);
+
+            // Calculate area ratio (R = Ahull/Acontour)
+            result.areaRatio = hullArea / contourArea;
+
+            auto [deformability, area] = calculateMetrics(innerContours[largestInnerContourIdx]);
+            result.deformability = deformability;
+            result.area = area;
+
+            if (area >= config.area_threshold_min && area <= config.area_threshold_max)
+            {
+                result.inRange = true;
+                result.isValid = true;
+            }
+        }
+        // Set hasMultipleContours if there are multiple contours (separate from nested contours)
+        else if (contours.size() > 1)
         {
             result.hasMultipleContours = true;
         }
@@ -124,6 +167,7 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 
             if (area >= config.area_threshold_min && area <= config.area_threshold_max)
             {
+                result.inRange = true;
                 result.isValid = true;
             }
         }
@@ -269,6 +313,10 @@ void metricDisplayThread(SharedResources &shared)
                                                          text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
                                                    hbox({text("Multiple Contours: "),
                                                          text(shared.hasMultipleContours.load() ? "Yes" : "No")}),
+                                                   hbox({text("Nested Contours: "),
+                                                         text(shared.hasNestedContours.load() ? "Yes" : "No")}),
+                                                   hbox({text("Using Inner Contour: "),
+                                                         text(shared.usingInnerContour.load() ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
                                                          text(std::to_string(shared.processingConfig.area_threshold_min))}),
                                                    hbox({text("Area Max Threshold: "),
@@ -493,6 +541,16 @@ void displayThreadTask(
                 // Blue for multiple contours (second priority)
                 overlayColor = cv::Scalar(255, 0, 0); // BGR: Blue
             }
+            else if (shared.usingInnerContour)
+            {
+                // Green for using inner contour (third priority)
+                overlayColor = cv::Scalar(0, 255, 0); // BGR: Green
+            }
+            else if (shared.hasNestedContours)
+            {
+                // Purple for nested contours (fourth priority)
+                overlayColor = cv::Scalar(255, 0, 255); // BGR: Purple
+            }
             else if (shared.validDisplayFrame)
             {
                 // Green for valid frames (that passed all filters)
@@ -584,6 +642,8 @@ void displayThreadTask(
                     shared.validDisplayFrame = false;
                     shared.displayFrameTouchedBorder = false;
                     shared.hasMultipleContours = false;
+                    shared.hasNestedContours = false;
+                    shared.usingInnerContour = false;
                     auto imageData = circularBuffer.get(index);
                     if (!imageData.empty())
                     {
@@ -600,6 +660,8 @@ void displayThreadTask(
                         processFrame(image, shared, processedImage, mats);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
                         shared.hasMultipleContours = filterResult.hasMultipleContours;
+                        shared.hasNestedContours = filterResult.hasNestedContours;
+                        shared.usingInnerContour = filterResult.hasNestedContours && filterResult.isValid;
                         shared.displayFrameTouchedBorder = filterResult.touchesBorder;
 
                         if (filterResult.isValid)

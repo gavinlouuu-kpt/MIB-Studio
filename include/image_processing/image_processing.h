@@ -134,6 +134,8 @@ struct SharedResources
     std::atomic<bool> validDisplayFrame{false};
     std::atomic<bool> displayFrameTouchedBorder{false};
     std::atomic<bool> hasMultipleContours{false};
+    std::atomic<bool> hasNestedContours{false};
+    std::atomic<bool> usingInnerContour{false};
     // std::atomic<double> linearProcessingTime;
 
     ProcessingConfig processingConfig;
@@ -148,7 +150,7 @@ void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool
 void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
                   cv::Mat &outputImage, ThreadLocalMats &mats);
-std::vector<std::vector<cv::Point>> findContours(const cv::Mat &processedImage);
+std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>> findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 
 void onTrackbar(int pos, void *userdata);
