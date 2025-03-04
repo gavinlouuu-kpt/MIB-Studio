@@ -28,35 +28,11 @@ cv::Mat backgroundFrame;
 
 using namespace Euresys;
 
-// struct GrabberParams
-// {
-//     size_t width;
-//     size_t height;
-//     uint64_t pixelFormat;
-//     size_t imageSize;
-//     size_t bufferCount;
-// };
-
-// void configure(EGrabber<CallbackOnDemand> &grabber)
-// {
-//     grabber.setInteger<RemoteModule>("Width", 512);
-//     grabber.setInteger<RemoteModule>("Height", 96);
-//     grabber.setInteger<RemoteModule>("AcquisitionFrameRate", 4700);
-//     // ... (other configuration settings)
-// }
-
 static int lastUsedCameraIndex = -1;
 
 void configure_js(std::string config_path)
 {
-    // Euresys::EGenTL gentl;
-    // Euresys::EGrabber<> grabber(gentl);
-    // if (config_path.substr(config_path.size() - 3) != ".js")
-    // {
-    //     throw std::runtime_error("Config path must end with .js");
-    // }
-    // grabber.runScript(config_path);
-    // std::cout << "Config script executed successfully" << std::endl;
+
     try
     {
         Euresys::EGenTL gentl;
@@ -88,8 +64,6 @@ void configure_js(std::string config_path)
         // Run the configuration script
         grabber.runScript(config_path);
         std::cout << "Config script executed successfully on camera " << lastUsedCameraIndex << std::endl;
-        grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
-        grabber.setString<InterfaceModule>("LineMode", "Output");
     }
     catch (const std::exception &e)
     {
@@ -165,6 +139,8 @@ void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared
 
 void processTriggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
+    grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+    grabber.setString<InterfaceModule>("LineMode", "Output");
     while (!shared.done)
     {
         processTrigger(grabber, shared);
@@ -394,26 +370,6 @@ int mib_grabber_main()
         lastUsedCameraIndex = selectedCamera;
         // Initialize grabber with selected camera
         EGrabber<CallbackOnDemand> grabber(discovery.cameras(selectedCamera));
-
-        // // Optional: Load configuration script
-        // std::string configPath;
-        // std::cout << "Enter configuration script path (or press Enter to skip): ";
-        // std::cin.ignore();
-        // std::getline(std::cin, configPath);
-
-        // if (!configPath.empty())
-        // {
-        //     try
-        //     {
-        //         grabber.runScript(configPath);
-        //         std::cout << "Configuration script loaded successfully" << std::endl;
-        //     }
-        //     catch (const std::exception &e)
-        //     {
-        //         std::cout << "Warning: Failed to load configuration script: " << e.what() << std::endl;
-        //     }
-        // }
-
         // Continue with your existing initialization and grabbing logic
         ImageParams params = initializeGrabber(grabber);
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
@@ -431,32 +387,3 @@ int mib_grabber_main()
     }
     return 0;
 }
-
-// int mib_grabber_main()
-// {
-//     try
-//     {
-
-//         EGenTL genTL;
-//         // EGrabberDiscovery egrabberDiscovery(genTL);
-//         // egrabberDiscovery.discover();
-//         EGrabber<CallbackOnDemand> grabber(genTL);
-//         // grabber.runScript("check-config.js"); // figureout how to load config script
-
-//         // configure(grabber);
-//         ImageParams params = initializeGrabber(grabber);
-
-//         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
-//         CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
-//         SharedResources shared;
-//         initializeBackgroundFrame(shared, params);
-//         shared.roi = cv::Rect(0, 0, params.width, params.height);
-
-//         temp_sample(grabber, params, circularBuffer, processingBuffer, shared);
-//     }
-//     catch (const std::exception &e)
-//     {
-//         std::cout << "error: " << e.what() << std::endl;
-//     }
-//     return 0;
-// }

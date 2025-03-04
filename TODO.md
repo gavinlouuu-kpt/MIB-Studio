@@ -6,6 +6,7 @@
 - [ ] Consistent stream saving order with live pause preview
 - [x] Remove trigger setup script from execution 
 - [ ] Use .tiff format for saving images under all scenario 
+- [ ] Fix trigger condition
 ## 2025/2/12
 ### Tests
 - [ ] Tool to test how the opencv algo performs given an ROI and config
