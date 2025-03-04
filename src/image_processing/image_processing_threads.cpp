@@ -989,7 +989,8 @@ void keyboardHandlingThread(
 
             for (size_t i = 0; i < frameCount; ++i)
             {
-                auto imageData = circularBuffer.get(frameCount - 1 - i); // Start from oldest frame
+                // Use the same indexing as the trackbar to maintain consistency
+                auto imageData = circularBuffer.get(i);
                 cv::Mat image(height, width, CV_8UC1, imageData.data());
 
                 std::ostringstream oss;
