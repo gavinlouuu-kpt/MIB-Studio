@@ -113,7 +113,7 @@ void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 
 void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
-    if (shared.processTrigger)
+    if (shared.processTrigger && shared.validProcessingFrame)
     {
         // track how long it takes to set the line source high
         auto trigger_start = std::chrono::high_resolution_clock::now();
