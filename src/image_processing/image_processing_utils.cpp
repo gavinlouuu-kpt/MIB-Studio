@@ -120,7 +120,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     if (!results.empty())
     {
         // Save clean background
-        cv::imwrite(batchDir + "/background_clean.png", shared.backgroundFrame);
+        cv::imwrite(batchDir + "/background_clean.tiff", shared.backgroundFrame);
 
         // Save ROI coordinates to CSV
         std::ofstream roiFile(batchDir + "/roi.csv");
@@ -190,11 +190,11 @@ void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, cons
         cv::Mat image(rows, cols, type);
         imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
 
-        std::string outputPath = outputDirectory + "/image_" + std::to_string(imageCount++) + ".png";
+        std::string outputPath = outputDirectory + "/image_" + std::to_string(imageCount++) + ".tiff";
         cv::imwrite(outputPath, image);
     }
 
-    std::cout << "Converted " << imageCount << " images to PNG format in " << outputDirectory << std::endl;
+    std::cout << "Converted " << imageCount << " images to TIFF format in " << outputDirectory << std::endl;
 }
 
 json readConfig(const std::string &filename)
@@ -468,7 +468,7 @@ void reviewSavedData()
         processingConfig = loadBatchConfig(batchPath);
         shared.processingConfig = processingConfig;
         // Load background image
-        cv::Mat backgroundClean = cv::imread((batchPath / "background_clean.png").string(), cv::IMREAD_GRAYSCALE);
+        cv::Mat backgroundClean = cv::imread((batchPath / "background_clean.tiff").string(), cv::IMREAD_GRAYSCALE);
         if (backgroundClean.empty())
         {
             throw std::runtime_error("Failed to load background image from: " + batchPath.string());

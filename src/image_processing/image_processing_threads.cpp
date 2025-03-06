@@ -786,7 +786,7 @@ void keyboardHandlingThread(
                 cv::Mat image(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
 
                 std::ostringstream oss;
-                oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".png";
+                oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".tiff";
                 std::string filename = oss.str();
 
                 std::filesystem::path fullPath = currentSaveDir / filename;
