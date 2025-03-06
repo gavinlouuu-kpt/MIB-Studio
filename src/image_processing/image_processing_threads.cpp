@@ -26,224 +26,6 @@ using json = nlohmann::json;
 
 namespace fs = std::filesystem;
 
-struct FilterResult
-{
-    bool isValid;
-    bool touchesBorder;
-    bool hasMultipleContours;
-    bool hasNestedContours;
-    bool inRange;
-    double deformability;
-    double area;
-    double areaRatio;
-};
-
-FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
-                                  const ProcessingConfig &config, const uint8_t processedColor = 255)
-{
-    FilterResult result = {false, false, false, false, false, 0.0, 0.0, 0.0};
-
-    // Get ROI from processed image
-    cv::Mat roiImage = processedImage(roi);
-
-    // Check borders
-    const int borderThreshold = 2;
-
-    // Check left and right borders
-    for (int y = 0; y < roiImage.rows && !result.touchesBorder; y++)
-    {
-        // Check left border region
-        for (int x = 0; x < borderThreshold; x++)
-        {
-            if (roiImage.at<uint8_t>(y, x) == processedColor)
-            {
-                result.touchesBorder = true;
-                break;
-            }
-        }
-
-        // Check right border region
-        for (int x = roiImage.cols - borderThreshold; x < roiImage.cols && !result.touchesBorder; x++)
-        {
-            if (roiImage.at<uint8_t>(y, x) == processedColor)
-            {
-                result.touchesBorder = true;
-                break;
-            }
-        }
-    }
-
-    // Check top and bottom borders
-    for (int x = 0; x < roiImage.cols && !result.touchesBorder; x++)
-    {
-        // Check top border region
-        for (int y = 0; y < borderThreshold; y++)
-        {
-            if (roiImage.at<uint8_t>(y, x) == processedColor)
-            {
-                result.touchesBorder = true;
-                break;
-            }
-        }
-
-        // Check bottom border region
-        for (int y = roiImage.rows - borderThreshold; y < roiImage.rows && !result.touchesBorder; y++)
-        {
-            if (roiImage.at<uint8_t>(y, x) == processedColor)
-            {
-                result.touchesBorder = true;
-                break;
-            }
-        }
-    }
-
-    // Only proceed with contour detection if no border pixels were found
-    if (!result.touchesBorder)
-    {
-        auto [contours, hasNestedContours, innerContours] = findContours(processedImage);
-
-        // Set hasNestedContours flag
-        result.hasNestedContours = hasNestedContours;
-
-        // Find significant contours (those that are large enough to be considered for analysis)
-        std::vector<std::vector<cv::Point>> significantContours;
-        std::vector<double> contourAreas;
-
-        // Minimum area ratio compared to the largest contour to be considered significant
-        const double significanceThreshold = 0.2; // 20% of the largest contour's area
-
-        // Find the largest contour and its area
-        double largestArea = 0.0;
-        for (const auto &contour : contours)
-        {
-            double area = cv::contourArea(contour);
-            largestArea = std::max(largestArea, area);
-        }
-
-        // Filter contours based on significance
-        for (const auto &contour : contours)
-        {
-            double area = cv::contourArea(contour);
-            if (area >= largestArea * significanceThreshold)
-            {
-                significantContours.push_back(contour);
-                contourAreas.push_back(area);
-            }
-        }
-
-        // If we have more than one significant contour, check if we should reject
-        if (significantContours.size() > 1)
-        {
-            // Only set hasMultipleContours if we have multiple significant outer contours
-            // or multiple significant inner contours
-
-            // Count significant inner contours
-            int significantInnerCount = 0;
-            for (const auto &innerContour : innerContours)
-            {
-                double area = cv::contourArea(innerContour);
-                if (area >= largestArea * significanceThreshold)
-                {
-                    significantInnerCount++;
-                }
-            }
-
-            // If we have multiple significant inner contours, reject
-            if (significantInnerCount > 1)
-            {
-                result.hasMultipleContours = true;
-                return result;
-            }
-
-            // If we have multiple significant outer contours without inner contours, reject
-            if (!hasNestedContours && significantContours.size() > 1)
-            {
-                result.hasMultipleContours = true;
-                return result;
-            }
-        }
-
-        // If we have inner contours, use the largest one for metrics
-        if (hasNestedContours && !innerContours.empty())
-        {
-            // Find the largest inner contour
-            size_t largestInnerIdx = 0;
-            double largestInnerArea = 0.0;
-
-            for (size_t i = 0; i < innerContours.size(); i++)
-            {
-                double area = cv::contourArea(innerContours[i]);
-                if (area > largestInnerArea)
-                {
-                    largestInnerArea = area;
-                    largestInnerIdx = i;
-                }
-            }
-
-            // Calculate contour area
-            double contourArea = cv::contourArea(innerContours[largestInnerIdx]);
-
-            // Calculate convex hull
-            std::vector<cv::Point> hull;
-            cv::convexHull(innerContours[largestInnerIdx], hull);
-            double hullArea = cv::contourArea(hull);
-
-            // Calculate area ratio (R = Ahull/Acontour)
-            result.areaRatio = hullArea / contourArea;
-
-            auto [deformability, area] = calculateMetrics(innerContours[largestInnerIdx]);
-            result.deformability = deformability;
-            result.area = area;
-
-            if (area >= config.area_threshold_min && area <= config.area_threshold_max)
-            {
-                result.inRange = true;
-                result.isValid = true;
-            }
-        }
-        // If no nested contours but we have contours, use the largest one
-        else if (!contours.empty())
-        {
-            // Find the largest contour
-            size_t largestIdx = 0;
-            double largestOuterArea = 0.0;
-
-            for (size_t i = 0; i < contours.size(); i++)
-            {
-                double area = cv::contourArea(contours[i]);
-                if (area > largestOuterArea)
-                {
-                    largestOuterArea = area;
-                    largestIdx = i;
-                }
-            }
-
-            // Calculate contour area
-            double contourArea = cv::contourArea(contours[largestIdx]);
-
-            // Calculate convex hull
-            std::vector<cv::Point> hull;
-            cv::convexHull(contours[largestIdx], hull);
-            double hullArea = cv::contourArea(hull);
-
-            // Calculate area ratio (R = Ahull/Acontour)
-            result.areaRatio = hullArea / contourArea;
-
-            auto [deformability, area] = calculateMetrics(contours[largestIdx]);
-            result.deformability = deformability;
-            result.area = area;
-
-            if (area >= config.area_threshold_min && area <= config.area_threshold_max)
-            {
-                result.inRange = true;
-                result.isValid = true;
-            }
-        }
-    }
-
-    return result;
-}
-
 void simulateCameraThread(
     CircularBuffer &cameraBuffer, SharedResources &shared,
     const ImageParams &params)
@@ -499,7 +281,8 @@ void processingThreadTask(
                 processFrame(inputImage, shared, processedImage, mats);
                 auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
 
-                if (!filterResult.touchesBorder && filterResult.isValid)
+                // Use the isValid flag directly from filterResult without creating a redundant local variable
+                if (filterResult.isValid)
                 {
                     shared.processTrigger = true;
                     shared.validProcessingFrame = true;
@@ -583,7 +366,7 @@ void displayThreadTask(
     int trackbarPos = 0;
     cv::createTrackbar("Frame", "Live Feed", &trackbarPos, static_cast<int>(bufferCount - 1), onTrackbar, &shared);
 
-    auto updateDisplay = [&](const cv::Mat &originalImage, const cv::Mat &processedImage)
+    auto updateDisplay = [&](const cv::Mat &originalImage, const cv::Mat &processedImage, const FilterResult &filterResult)
     {
         // Convert original image to color
         cv::cvtColor(originalImage, displayImage, cv::COLOR_GRAY2BGR);
@@ -597,39 +380,9 @@ void displayThreadTask(
             cv::Mat overlay = cv::Mat::zeros(displayImage.size(), CV_8UC3);
 
             const double opacity = 0.3; // Reduced opacity for better blending
-            cv::Scalar overlayColor;
 
-            // Hierarchical condition checking
-            if (shared.displayFrameTouchedBorder)
-            {
-                // Red for border touching (highest priority)
-                overlayColor = cv::Scalar(0, 0, 255); // BGR: Red
-            }
-            else if (shared.hasMultipleContours)
-            {
-                // Blue for multiple significant contours (rejected frames)
-                overlayColor = cv::Scalar(255, 0, 0); // BGR: Blue
-            }
-            else if (shared.usingInnerContour)
-            {
-                // Green for using inner contour (valid frame with inner contour)
-                overlayColor = cv::Scalar(0, 255, 0); // BGR: Green
-            }
-            else if (shared.hasNestedContours)
-            {
-                // Purple for nested contours detected but not used
-                overlayColor = cv::Scalar(255, 0, 255); // BGR: Purple
-            }
-            else if (shared.validDisplayFrame)
-            {
-                // Green for valid frames (that passed all filters)
-                overlayColor = cv::Scalar(0, 255, 0); // BGR: Green
-            }
-            else
-            {
-                // Yellow for frames filtered out due to being out of range
-                overlayColor = cv::Scalar(0, 255, 255); // BGR: Yellow
-            }
+            // Use the determineOverlayColor function to get the overlay color directly from filterResult
+            cv::Scalar overlayColor = determineOverlayColor(filterResult, filterResult.isValid);
 
             // Create semi-transparent overlay
             overlay.setTo(overlayColor, mask);
@@ -690,7 +443,28 @@ void displayThreadTask(
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                     processFrame(image, shared, processedImage, mats);
-                    updateDisplay(image, processedImage);
+                    auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
+
+                    // Update shared state variables
+                    shared.hasMultipleContours = filterResult.hasMultipleContours;
+                    shared.hasNestedContours = filterResult.hasNestedContours;
+                    shared.usingInnerContour = filterResult.hasNestedContours && filterResult.isValid;
+                    shared.displayFrameTouchedBorder = filterResult.touchesBorder;
+                    shared.validDisplayFrame = filterResult.isValid;
+
+                    if (filterResult.isValid)
+                    {
+                        shared.frameDeformabilities.store(filterResult.deformability);
+                        shared.frameAreas.store(filterResult.area);
+                    }
+                    else
+                    {
+                        // Store negative values of the metrics to indicate invalid frames
+                        shared.frameDeformabilities.store(-filterResult.deformability);
+                        shared.frameAreas.store(-filterResult.area);
+                    }
+
+                    updateDisplay(image, processedImage, filterResult);
                     shouldUpdate = true;
 
                     nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameDuration);
@@ -708,16 +482,17 @@ void displayThreadTask(
                 int index = shared.currentFrameIndex;
                 if (index >= 0 && index < circularBuffer.size())
                 {
+                    // Reset state variables before processing
                     shared.validDisplayFrame = false;
                     shared.displayFrameTouchedBorder = false;
                     shared.hasMultipleContours = false;
                     shared.hasNestedContours = false;
                     shared.usingInnerContour = false;
+
                     auto imageData = circularBuffer.get(index);
                     if (!imageData.empty())
                     {
-
-                        // read config to enable hot reloading of image processing parameters
+                        // Read config to enable hot reloading of image processing parameters
                         json config = readConfig("config.json");
                         ProcessingConfig newConfig = getProcessingConfig(config);
 
@@ -728,26 +503,27 @@ void displayThreadTask(
                         image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
+
+                        // Update shared state variables
                         shared.hasMultipleContours = filterResult.hasMultipleContours;
                         shared.hasNestedContours = filterResult.hasNestedContours;
                         shared.usingInnerContour = filterResult.hasNestedContours && filterResult.isValid;
                         shared.displayFrameTouchedBorder = filterResult.touchesBorder;
+                        shared.validDisplayFrame = filterResult.isValid;
 
                         if (filterResult.isValid)
                         {
-                            shared.validDisplayFrame = true;
                             shared.frameDeformabilities.store(filterResult.deformability);
                             shared.frameAreas.store(filterResult.area);
                         }
                         else
                         {
-                            // store negative values of the metrics to indicate invalid frames
+                            // Store negative values of the metrics to indicate invalid frames
                             shared.frameDeformabilities.store(-filterResult.deformability);
                             shared.frameAreas.store(-filterResult.area);
-                            // processedImage = cv::Mat::zeros(processedImage.size(), CV_8UC1);
                         }
 
-                        updateDisplay(image, processedImage);
+                        updateDisplay(image, processedImage, filterResult);
                         cv::setTrackbarPos("Frame", "Live Feed", index);
                         shouldUpdate = true;
                     }

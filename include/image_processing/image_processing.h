@@ -45,12 +45,20 @@ struct ProcessingConfig
         int kernel = 3,
         int iterations = 1,
         int min_area = 100,
-        int max_area = 600) : gaussian_blur_size(gaussian),
-                              bg_subtract_threshold(threshold),
-                              morph_kernel_size(kernel),
-                              morph_iterations(iterations),
-                              area_threshold_min(min_area),
-                              area_threshold_max(max_area) {}
+        int max_area = 600,
+        bool check_borders = true,
+        bool check_multiple_contours = true,
+        bool check_nested_contours = true,
+        bool check_area_range = true) : gaussian_blur_size(gaussian),
+                                        bg_subtract_threshold(threshold),
+                                        morph_kernel_size(kernel),
+                                        morph_iterations(iterations),
+                                        area_threshold_min(min_area),
+                                        area_threshold_max(max_area),
+                                        enable_border_check(check_borders),
+                                        enable_multiple_contours_check(check_multiple_contours),
+                                        enable_nested_contours_check(check_nested_contours),
+                                        enable_area_range_check(check_area_range) {}
 
     int gaussian_blur_size;
     int bg_subtract_threshold;
@@ -58,6 +66,12 @@ struct ProcessingConfig
     int morph_iterations;
     int area_threshold_min;
     int area_threshold_max;
+
+    // Filter flags
+    bool enable_border_check;
+    bool enable_multiple_contours_check;
+    bool enable_nested_contours_check;
+    bool enable_area_range_check;
 };
 
 struct ThreadLocalMats
@@ -71,6 +85,18 @@ struct ThreadLocalMats
     cv::Mat erode2;
     cv::Mat kernel;
     bool initialized = false;
+};
+
+struct FilterResult
+{
+    bool isValid;
+    bool touchesBorder;
+    bool hasMultipleContours;
+    bool hasNestedContours;
+    bool inRange;
+    double deformability;
+    double area;
+    double areaRatio;
 };
 
 struct SharedResources
@@ -178,3 +204,9 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared);
 
 void reviewSavedData();
+
+FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
+                                  const ProcessingConfig &config, const uint8_t processedColor = 255);
+
+// Function to determine overlay color based on FilterResult
+cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);

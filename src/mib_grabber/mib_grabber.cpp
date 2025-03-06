@@ -35,8 +35,8 @@ void configure_js(std::string config_path)
 
     try
     {
-        Euresys::EGenTL gentl;
-        Euresys::EGrabberDiscovery discovery(gentl);
+        EGenTL gentl;
+        EGrabberDiscovery discovery(gentl);
 
         // Verify file extension
         if (config_path.substr(config_path.size() - 3) != ".js")
@@ -206,8 +206,8 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                           uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
                           // Get exposure time
                           uint64_t exposureTime = grabber.getInteger<RemoteModule>("ExposureTime");
-                          shared.currentFPS = fr;
-                          shared.dataRate = dr;
+                          shared.currentFPS = static_cast<double>(fr);
+                          shared.dataRate = static_cast<double>(dr);
                           shared.exposureTime = exposureTime;
                           size_t frameCount = 0;
                           uint64_t lastFrameId = 0;
@@ -227,8 +227,8 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                                   uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
                                   uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
                                   uint64_t exposureTime = grabber.getInteger<RemoteModule>("ExposureTime");
-                                  shared.currentFPS = fr;
-                                  shared.dataRate = dr;
+                                  shared.currentFPS = static_cast<double>(fr);
+                                  shared.dataRate = static_cast<double>(dr);
                                   shared.exposureTime = exposureTime;
                                   shared.updated = true;
                               }
@@ -376,7 +376,7 @@ int mib_grabber_main()
         CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
         SharedResources shared;
         initializeBackgroundFrame(shared, params);
-        shared.roi = cv::Rect(0, 0, params.width, params.height);
+        shared.roi = cv::Rect(0, 0, static_cast<int>(params.width), static_cast<int>(params.height));
 
         temp_sample(grabber, params, circularBuffer, processingBuffer, shared);
     }

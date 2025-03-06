@@ -105,3 +105,254 @@ std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contou
     double deformability = 1.0 - circularity;
     return std::make_tuple(deformability, area);
 }
+
+FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
+                                  const ProcessingConfig &config, const uint8_t processedColor)
+{
+    FilterResult result = {false, false, false, false, false, 0.0, 0.0, 0.0};
+
+    // Get ROI from processed image
+    cv::Mat roiImage = processedImage(roi);
+
+    // Check borders only if border check is enabled
+    if (config.enable_border_check)
+    {
+        const int borderThreshold = 2;
+
+        // Check left and right borders
+        for (int y = 0; y < roiImage.rows && !result.touchesBorder; y++)
+        {
+            // Check left border region
+            for (int x = 0; x < borderThreshold; x++)
+            {
+                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                {
+                    result.touchesBorder = true;
+                    break;
+                }
+            }
+
+            // Check right border region
+            for (int x = roiImage.cols - borderThreshold; x < roiImage.cols && !result.touchesBorder; x++)
+            {
+                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                {
+                    result.touchesBorder = true;
+                    break;
+                }
+            }
+        }
+
+        // Check top and bottom borders
+        for (int x = 0; x < roiImage.cols && !result.touchesBorder; x++)
+        {
+            // Check top border region
+            for (int y = 0; y < borderThreshold; y++)
+            {
+                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                {
+                    result.touchesBorder = true;
+                    break;
+                }
+            }
+
+            // Check bottom border region
+            for (int y = roiImage.rows - borderThreshold; y < roiImage.rows && !result.touchesBorder; y++)
+            {
+                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                {
+                    result.touchesBorder = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Only proceed with contour detection if no border pixels were found or border check is disabled
+    if (!result.touchesBorder || !config.enable_border_check)
+    {
+        auto [contours, hasNestedContours, innerContours] = findContours(processedImage);
+
+        // Set hasNestedContours flag if nested contours check is enabled
+        if (config.enable_nested_contours_check)
+        {
+            result.hasNestedContours = hasNestedContours;
+        }
+
+        // Find significant contours (those that are large enough to be considered for analysis)
+        std::vector<std::vector<cv::Point>> significantContours;
+        std::vector<double> contourAreas;
+
+        // Minimum area ratio compared to the largest contour to be considered significant
+        const double significanceThreshold = 0.2; // 20% of the largest contour's area
+
+        // Find the largest contour and its area
+        double largestArea = 0.0;
+        for (const auto &contour : contours)
+        {
+            double area = cv::contourArea(contour);
+            largestArea = std::max(largestArea, area);
+        }
+
+        // Filter contours based on significance
+        for (const auto &contour : contours)
+        {
+            double area = cv::contourArea(contour);
+            if (area >= largestArea * significanceThreshold)
+            {
+                significantContours.push_back(contour);
+                contourAreas.push_back(area);
+            }
+        }
+
+        // Check for multiple contours only if that check is enabled
+        if (config.enable_multiple_contours_check && significantContours.size() > 1)
+        {
+            // Only set hasMultipleContours if we have multiple significant outer contours
+            // or multiple significant inner contours
+
+            // Count significant inner contours
+            int significantInnerCount = 0;
+            for (const auto &innerContour : innerContours)
+            {
+                double area = cv::contourArea(innerContour);
+                if (area >= largestArea * significanceThreshold)
+                {
+                    significantInnerCount++;
+                }
+            }
+
+            // If we have multiple significant inner contours, reject
+            if (significantInnerCount > 1)
+            {
+                result.hasMultipleContours = true;
+                return result;
+            }
+
+            // If we have multiple significant outer contours without inner contours, reject
+            if (!hasNestedContours && significantContours.size() > 1)
+            {
+                result.hasMultipleContours = true;
+                return result;
+            }
+        }
+
+        // If we have inner contours, use the largest one for metrics
+        if (hasNestedContours && !innerContours.empty())
+        {
+            // Find the largest inner contour
+            size_t largestInnerIdx = 0;
+            double largestInnerArea = 0.0;
+
+            for (size_t i = 0; i < innerContours.size(); i++)
+            {
+                double area = cv::contourArea(innerContours[i]);
+                if (area > largestInnerArea)
+                {
+                    largestInnerArea = area;
+                    largestInnerIdx = i;
+                }
+            }
+
+            // Calculate contour area
+            double contourArea = cv::contourArea(innerContours[largestInnerIdx]);
+
+            // Calculate convex hull
+            std::vector<cv::Point> hull;
+            cv::convexHull(innerContours[largestInnerIdx], hull);
+            double hullArea = cv::contourArea(hull);
+
+            // Calculate area ratio (R = Ahull/Acontour)
+            result.areaRatio = hullArea / contourArea;
+
+            auto [deformability, area] = calculateMetrics(innerContours[largestInnerIdx]);
+            result.deformability = deformability;
+            result.area = area;
+
+            // Check area range only if that check is enabled
+            if (!config.enable_area_range_check ||
+                (area >= config.area_threshold_min && area <= config.area_threshold_max))
+            {
+                result.inRange = true;
+                result.isValid = true;
+            }
+        }
+        // If no nested contours but we have contours, use the largest one
+        else if (!contours.empty())
+        {
+            // Find the largest contour
+            size_t largestIdx = 0;
+            double largestOuterArea = 0.0;
+
+            for (size_t i = 0; i < contours.size(); i++)
+            {
+                double area = cv::contourArea(contours[i]);
+                if (area > largestOuterArea)
+                {
+                    largestOuterArea = area;
+                    largestIdx = i;
+                }
+            }
+
+            // Calculate contour area
+            double contourArea = cv::contourArea(contours[largestIdx]);
+
+            // Calculate convex hull
+            std::vector<cv::Point> hull;
+            cv::convexHull(contours[largestIdx], hull);
+            double hullArea = cv::contourArea(hull);
+
+            // Calculate area ratio (R = Ahull/Acontour)
+            result.areaRatio = hullArea / contourArea;
+
+            auto [deformability, area] = calculateMetrics(contours[largestIdx]);
+            result.deformability = deformability;
+            result.area = area;
+
+            // Check area range only if that check is enabled
+            if (!config.enable_area_range_check ||
+                (area >= config.area_threshold_min && area <= config.area_threshold_max))
+            {
+                result.inRange = true;
+                result.isValid = true;
+            }
+        }
+    }
+
+    return result;
+}
+
+cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid)
+{
+    // Hierarchical condition checking based solely on FilterResult
+    if (result.touchesBorder)
+    {
+        // Red for border touching (highest priority)
+        return cv::Scalar(0, 0, 255); // BGR: Red
+    }
+    else if (result.hasMultipleContours)
+    {
+        // Blue for multiple significant contours (rejected frames)
+        return cv::Scalar(255, 0, 0); // BGR: Blue
+    }
+    else if (result.hasNestedContours && isValid)
+    {
+        // Green for using inner contour (valid frame with inner contour)
+        return cv::Scalar(0, 255, 0); // BGR: Green
+    }
+    else if (result.hasNestedContours)
+    {
+        // Purple for nested contours detected but not used
+        return cv::Scalar(255, 0, 255); // BGR: Purple
+    }
+    else if (isValid)
+    {
+        // Green for valid frames (that passed all filters)
+        return cv::Scalar(0, 255, 0); // BGR: Green
+    }
+    else
+    {
+        // Yellow for frames filtered out due to being out of range
+        return cv::Scalar(0, 255, 255); // BGR: Yellow
+    }
+}

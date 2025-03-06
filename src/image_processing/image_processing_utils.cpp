@@ -193,7 +193,8 @@ json readConfig(const std::string &filename)
             {"morph_kernel_size", 3},
             {"morph_iterations", 1},
             {"area_threshold_min", 100},
-            {"area_threshold_max", 600}};
+            {"area_threshold_max", 600},
+            {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_nested_contours_check", true}, {"enable_area_range_check", true}}}};
 
         config = {
             {"save_directory", "updated_results"},
@@ -235,6 +236,24 @@ json readConfig(const std::string &filename)
         if (!img_config.contains("area_threshold_max"))
             img_config["area_threshold_max"] = 600;
 
+        // Ensure filters section exists
+        if (!img_config.contains("filters"))
+        {
+            img_config["filters"] = json::object();
+        }
+
+        auto &filters = img_config["filters"];
+
+        // Set defaults for filter flags
+        if (!filters.contains("enable_border_check"))
+            filters["enable_border_check"] = true;
+        if (!filters.contains("enable_multiple_contours_check"))
+            filters["enable_multiple_contours_check"] = true;
+        if (!filters.contains("enable_nested_contours_check"))
+            filters["enable_nested_contours_check"] = true;
+        if (!filters.contains("enable_area_range_check"))
+            filters["enable_area_range_check"] = true;
+
         // Write back the complete config to ensure file has all fields
         std::ofstream outFile(filename);
         outFile << std::setw(4) << config << std::endl;
@@ -246,13 +265,25 @@ json readConfig(const std::string &filename)
 ProcessingConfig getProcessingConfig(const json &config)
 {
     const auto &img_config = config["image_processing"];
+    const auto &filters = img_config.contains("filters") ? img_config["filters"] : json::object();
+
+    // Get filter flags with defaults if not present
+    bool enable_border_check = filters.contains("enable_border_check") ? filters["enable_border_check"].get<bool>() : true;
+    bool enable_multiple_contours_check = filters.contains("enable_multiple_contours_check") ? filters["enable_multiple_contours_check"].get<bool>() : true;
+    bool enable_nested_contours_check = filters.contains("enable_nested_contours_check") ? filters["enable_nested_contours_check"].get<bool>() : true;
+    bool enable_area_range_check = filters.contains("enable_area_range_check") ? filters["enable_area_range_check"].get<bool>() : true;
+
     return ProcessingConfig{
         img_config["gaussian_blur_size"],
         img_config["bg_subtract_threshold"],
         img_config["morph_kernel_size"],
         img_config["morph_iterations"],
         img_config["area_threshold_min"],
-        img_config["area_threshold_max"]};
+        img_config["area_threshold_max"],
+        enable_border_check,
+        enable_multiple_contours_check,
+        enable_nested_contours_check,
+        enable_area_range_check};
 }
 
 bool updateConfig(const std::string &filename, const std::string &key, const json &value)
