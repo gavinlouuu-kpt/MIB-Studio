@@ -48,17 +48,22 @@ struct ProcessingConfig
         int max_area = 600,
         bool check_borders = true,
         bool check_multiple_contours = true,
-        bool check_nested_contours = true,
-        bool check_area_range = true) : gaussian_blur_size(gaussian),
-                                        bg_subtract_threshold(threshold),
-                                        morph_kernel_size(kernel),
-                                        morph_iterations(iterations),
-                                        area_threshold_min(min_area),
-                                        area_threshold_max(max_area),
-                                        enable_border_check(check_borders),
-                                        enable_multiple_contours_check(check_multiple_contours),
-                                        enable_nested_contours_check(check_nested_contours),
-                                        enable_area_range_check(check_area_range) {}
+        bool check_area_range = true,
+        bool require_single_inner = true,
+        bool enable_contrast = true,
+        double alpha = 1.2,
+        int beta = 10) : gaussian_blur_size(gaussian),
+                         bg_subtract_threshold(threshold),
+                         morph_kernel_size(kernel),
+                         morph_iterations(iterations),
+                         area_threshold_min(min_area),
+                         area_threshold_max(max_area),
+                         enable_border_check(check_borders),
+                         enable_area_range_check(check_area_range),
+                         require_single_inner_contour(require_single_inner),
+                         enable_contrast_enhancement(enable_contrast),
+                         contrast_alpha(alpha),
+                         contrast_beta(beta) {}
 
     int gaussian_blur_size;
     int bg_subtract_threshold;
@@ -70,14 +75,20 @@ struct ProcessingConfig
     // Filter flags
     bool enable_border_check;
     bool enable_multiple_contours_check;
-    bool enable_nested_contours_check;
     bool enable_area_range_check;
+    bool require_single_inner_contour; // Require exactly one inner contour
+
+    // Contrast enhancement parameters
+    bool enable_contrast_enhancement; // Toggle for contrast enhancement
+    double contrast_alpha;            // Contrast multiplier (1.0 = no change, >1.0 = increase contrast)
+    int contrast_beta;                // Brightness adjustment (0 = no change, >0 = increase brightness)
 };
 
 struct ThreadLocalMats
 {
     cv::Mat original;
     cv::Mat blurred_target;
+    cv::Mat enhanced;
     cv::Mat bg_sub;
     cv::Mat binary;
     cv::Mat dilate1;
@@ -91,9 +102,9 @@ struct FilterResult
 {
     bool isValid;
     bool touchesBorder;
-    bool hasMultipleContours;
-    bool hasNestedContours;
+    bool hasSingleInnerContour; // Specifically indicates exactly one inner contour
     bool inRange;
+    int innerContourCount; // Number of inner contours detected
     double deformability;
     double area;
     double areaRatio;
@@ -159,8 +170,8 @@ struct SharedResources
     std::atomic<bool> validProcessingFrame{false};
     std::atomic<bool> validDisplayFrame{false};
     std::atomic<bool> displayFrameTouchedBorder{false};
-    std::atomic<bool> hasMultipleContours{false};
-    std::atomic<bool> hasNestedContours{false};
+    std::atomic<bool> hasSingleInnerContour{false};
+    std::atomic<int> innerContourCount{0};
     std::atomic<bool> usingInnerContour{false};
     // std::atomic<double> linearProcessingTime;
     std::atomic<int64_t> triggerOnsetDuration{0}; // Store the trigger onset duration in microseconds
@@ -191,6 +202,8 @@ json readConfig(const std::string &filename);
 ProcessingConfig getProcessingConfig(const json &config);
 
 bool updateConfig(const std::string &filename, const std::string &key, const json &value);
+
+void updateBackgroundWithCurrentSettings(SharedResources &shared);
 
 void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared);
 

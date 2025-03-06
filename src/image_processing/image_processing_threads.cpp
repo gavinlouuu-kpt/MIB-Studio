@@ -162,16 +162,25 @@ void metricDisplayThread(SharedResources &shared)
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
                                                    hbox({text("Touched Border: "),
                                                          text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
-                                                   hbox({text("Multiple Significant Contours (Rejected): "),
-                                                         text(shared.hasMultipleContours.load() ? "Yes" : "No")}),
-                                                   hbox({text("Nested Contours: "),
-                                                         text(shared.hasNestedContours.load() ? "Yes" : "No")}),
+                                                   hbox({text("Single Inner Contour: "),
+                                                         text(shared.hasSingleInnerContour.load() ? "Yes" : "No")}),
+                                                   hbox({text("Inner Contour Count: "),
+                                                         text(std::to_string(shared.innerContourCount.load()))}),
                                                    hbox({text("Using Inner Contour: "),
                                                          text(shared.usingInnerContour.load() ? "Yes" : "No")}),
+                                                   hbox({text("Require Single Inner Contour: "),
+                                                         text(shared.processingConfig.require_single_inner_contour ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
                                                          text(std::to_string(shared.processingConfig.area_threshold_min))}),
                                                    hbox({text("Area Max Threshold: "),
-                                                         text(std::to_string(shared.processingConfig.area_threshold_max))})}));
+                                                         text(std::to_string(shared.processingConfig.area_threshold_max))}),
+                                                   // Contrast enhancement parameters
+                                                   hbox({text("Contrast Enhancement: "),
+                                                         text(shared.processingConfig.enable_contrast_enhancement ? "Enabled" : "Disabled")}),
+                                                   hbox({text("Contrast Alpha: "),
+                                                         text(std::to_string(shared.processingConfig.contrast_alpha))}),
+                                                   hbox({text("Brightness Beta: "),
+                                                         text(std::to_string(shared.processingConfig.contrast_beta))})}));
     };
 
     auto render_status = [&]()
@@ -446,9 +455,9 @@ void displayThreadTask(
                     auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
 
                     // Update shared state variables
-                    shared.hasMultipleContours = filterResult.hasMultipleContours;
-                    shared.hasNestedContours = filterResult.hasNestedContours;
-                    shared.usingInnerContour = filterResult.hasNestedContours && filterResult.isValid;
+                    shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
+                    shared.innerContourCount = filterResult.innerContourCount;
+                    shared.usingInnerContour = filterResult.hasSingleInnerContour && filterResult.isValid;
                     shared.displayFrameTouchedBorder = filterResult.touchesBorder;
                     shared.validDisplayFrame = filterResult.isValid;
 
@@ -485,8 +494,8 @@ void displayThreadTask(
                     // Reset state variables before processing
                     shared.validDisplayFrame = false;
                     shared.displayFrameTouchedBorder = false;
-                    shared.hasMultipleContours = false;
-                    shared.hasNestedContours = false;
+                    shared.hasSingleInnerContour = false;
+                    shared.innerContourCount = 0;
                     shared.usingInnerContour = false;
 
                     auto imageData = circularBuffer.get(index);
@@ -496,18 +505,31 @@ void displayThreadTask(
                         json config = readConfig("config.json");
                         ProcessingConfig newConfig = getProcessingConfig(config);
 
+                        // Check if contrast settings have changed
+                        bool contrastSettingsChanged =
+                            (shared.processingConfig.enable_contrast_enhancement != newConfig.enable_contrast_enhancement) ||
+                            (shared.processingConfig.contrast_alpha != newConfig.contrast_alpha) ||
+                            (shared.processingConfig.contrast_beta != newConfig.contrast_beta) ||
+                            (shared.processingConfig.gaussian_blur_size != newConfig.gaussian_blur_size);
+
                         shared.processingConfigMutex.lock();
                         shared.processingConfig = newConfig;
                         shared.processingConfigMutex.unlock();
+
+                        // If contrast settings changed, update the background
+                        if (contrastSettingsChanged && !shared.backgroundFrame.empty())
+                        {
+                            updateBackgroundWithCurrentSettings(shared);
+                        }
 
                         image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
 
                         // Update shared state variables
-                        shared.hasMultipleContours = filterResult.hasMultipleContours;
-                        shared.hasNestedContours = filterResult.hasNestedContours;
-                        shared.usingInnerContour = filterResult.hasNestedContours && filterResult.isValid;
+                        shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
+                        shared.innerContourCount = filterResult.innerContourCount;
+                        shared.usingInnerContour = filterResult.hasSingleInnerContour && filterResult.isValid;
                         shared.displayFrameTouchedBorder = filterResult.touchesBorder;
                         shared.validDisplayFrame = filterResult.isValid;
 
@@ -785,7 +807,28 @@ void keyboardHandlingThread(
             {
                 std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
                 shared.backgroundFrame = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, backgroundImageData.data()).clone();
-                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(shared.processingConfig.gaussian_blur_size, shared.processingConfig.gaussian_blur_size), 0);
+
+                // Apply Gaussian blur to the background frame
+                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                                 cv::Size(shared.processingConfig.gaussian_blur_size,
+                                          shared.processingConfig.gaussian_blur_size),
+                                 0);
+
+                // Apply simple contrast enhancement to the background if enabled
+                if (shared.processingConfig.enable_contrast_enhancement)
+                {
+                    // Use the formula: new_pixel = alpha * old_pixel + beta
+                    // alpha > 1 increases contrast, beta increases brightness
+                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                                       shared.processingConfig.contrast_alpha,
+                                                       shared.processingConfig.contrast_beta);
+
+                    // std::cout << "Background set with contrast enhancement applied." << std::endl;
+                }
+                else
+                {
+                    // std::cout << "Background set." << std::endl;
+                }
             }
             shared.displayNeedsUpdate = true;
         }

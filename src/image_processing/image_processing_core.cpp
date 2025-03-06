@@ -7,6 +7,7 @@ ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &sha
     std::lock_guard<std::mutex> lock(shared.processingConfigMutex);
     ThreadLocalMats mats;
     mats.blurred_target = cv::Mat(height, width, CV_8UC1);
+    mats.enhanced = cv::Mat(height, width, CV_8UC1);
     mats.bg_sub = cv::Mat(height, width, CV_8UC1);
     mats.binary = cv::Mat(height, width, CV_8UC1);
     mats.dilate1 = cv::Mat(height, width, CV_8UC1);
@@ -26,17 +27,42 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     cv::Rect roi = shared.roi;
     // Ensure ROI is within image bounds
     roi &= cv::Rect(0, 0, inputImage.cols, inputImage.rows);
-    // Direct access to background
+
+    // Get ROI from the background
+    // Note: The background is already blurred and contrast-enhanced with the same parameters
     cv::Mat blurred_bg = shared.blurredBackground(roi);
+
     // Process only ROI area
     auto roiArea = inputImage(roi);
+
+    // Apply Gaussian blur to reduce noise - same as applied to background
     cv::GaussianBlur(roiArea, mats.blurred_target(roi),
                      cv::Size(shared.processingConfig.gaussian_blur_size,
                               shared.processingConfig.gaussian_blur_size),
                      0);
-    cv::subtract(mats.blurred_target(roi), blurred_bg, mats.bg_sub(roi));
+
+    // Apply simple contrast enhancement if enabled
+    if (shared.processingConfig.enable_contrast_enhancement)
+    {
+        // Use the formula: new_pixel = alpha * old_pixel + beta
+        // alpha > 1 increases contrast, beta increases brightness
+        mats.blurred_target(roi).convertTo(mats.enhanced(roi), -1,
+                                           shared.processingConfig.contrast_alpha,
+                                           shared.processingConfig.contrast_beta);
+
+        // Perform background subtraction with the enhanced image
+        cv::subtract(mats.enhanced(roi), blurred_bg, mats.bg_sub(roi));
+    }
+    else
+    {
+        // Simple background subtraction without contrast enhancement
+        cv::subtract(mats.blurred_target(roi), blurred_bg, mats.bg_sub(roi));
+    }
+
+    // Apply threshold to create binary image
     cv::threshold(mats.bg_sub(roi), mats.binary(roi),
                   shared.processingConfig.bg_subtract_threshold, 255, cv::THRESH_BINARY);
+
     // Combine operations to reduce memory transfers
     cv::morphologyEx(mats.binary(roi), mats.dilate1(roi), cv::MORPH_CLOSE, mats.kernel,
                      cv::Point(-1, -1), shared.processingConfig.morph_iterations);
@@ -57,25 +83,9 @@ std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv
     std::vector<cv::Vec4i> hierarchy;
     cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
 
-    // Filter out small noise contours
-    std::vector<std::vector<cv::Point>> filteredContours;
-    std::vector<cv::Vec4i> filteredHierarchy;
-
-    // Minimum area threshold to filter out noise (adjust as needed)
-    const double minNoiseArea = 10.0;
-
-    for (size_t i = 0; i < contours.size(); i++)
-    {
-        double area = cv::contourArea(contours[i]);
-        if (area >= minNoiseArea)
-        {
-            filteredContours.push_back(contours[i]);
-            if (i < hierarchy.size())
-            {
-                filteredHierarchy.push_back(hierarchy[i]);
-            }
-        }
-    }
+    // No longer filtering out small noise contours
+    std::vector<std::vector<cv::Point>> filteredContours = contours;
+    std::vector<cv::Vec4i> filteredHierarchy = hierarchy;
 
     // Check if there are nested contours by examining the hierarchy
     bool hasNestedContours = false;
@@ -109,163 +119,122 @@ std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contou
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                   const ProcessingConfig &config, const uint8_t processedColor)
 {
-    FilterResult result = {false, false, false, false, false, 0.0, 0.0, 0.0};
+    // Initialize result with default values
+    // isValid is now false by default, will be set to true if criteria are met
+    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0};
 
     // Get ROI from processed image
     cv::Mat roiImage = processedImage(roi);
 
-    // Check borders only if border check is enabled
+    // First, find contours in the entire processed image
+    auto [contours, hasNestedContours, innerContours] = findContours(processedImage);
+
+    // Update inner contour information
+    result.innerContourCount = static_cast<int>(innerContours.size());
+    result.hasSingleInnerContour = (innerContours.size() == 1);
+
+    // If we require a single inner contour and don't have exactly one, return early
+    if (config.require_single_inner_contour && !result.hasSingleInnerContour)
+    {
+        // For simplicity, we only process objects with exactly one inner contour
+        return result;
+    }
+
+    // Border check using contours instead of raw pixels
     if (config.enable_border_check)
     {
-        const int borderThreshold = 2;
+        const int borderThreshold = 2; // Pixels from border to consider as "touching"
 
-        // Check left and right borders
-        for (int y = 0; y < roiImage.rows && !result.touchesBorder; y++)
+        // If we have inner contours, check if the inner contour touches the border
+        if (!innerContours.empty())
         {
-            // Check left border region
-            for (int x = 0; x < borderThreshold; x++)
-            {
-                if (roiImage.at<uint8_t>(y, x) == processedColor)
-                {
-                    result.touchesBorder = true;
-                    break;
-                }
-            }
+            // We only care about the first inner contour (we've already checked for single inner contour above)
+            const auto &innerContour = innerContours[0];
 
-            // Check right border region
-            for (int x = roiImage.cols - borderThreshold; x < roiImage.cols && !result.touchesBorder; x++)
+            // Check if any point of the inner contour is too close to the border
+            for (const auto &point : innerContour)
             {
-                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                // Convert point to ROI coordinates
+                int x = point.x - roi.x;
+                int y = point.y - roi.y;
+
+                // Check if point is within the ROI (safety check)
+                if (x >= 0 && x < roi.width && y >= 0 && y < roi.height)
                 {
+                    // Check if point is too close to any border
+                    if (x < borderThreshold || x >= roi.width - borderThreshold ||
+                        y < borderThreshold || y >= roi.height - borderThreshold)
+                    {
+                        result.touchesBorder = true;
+                        break;
+                    }
+                }
+                else
+                {
+                    // Point is outside ROI, definitely touching border
                     result.touchesBorder = true;
                     break;
                 }
             }
         }
-
-        // Check top and bottom borders
-        for (int x = 0; x < roiImage.cols && !result.touchesBorder; x++)
+        else if (!contours.empty())
         {
-            // Check top border region
-            for (int y = 0; y < borderThreshold; y++)
+            // If no inner contours, check outer contours
+            for (const auto &contour : contours)
             {
-                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                // Check if any point of the contour is too close to the border
+                for (const auto &point : contour)
                 {
-                    result.touchesBorder = true;
-                    break;
-                }
-            }
+                    // Convert point to ROI coordinates
+                    int x = point.x - roi.x;
+                    int y = point.y - roi.y;
 
-            // Check bottom border region
-            for (int y = roiImage.rows - borderThreshold; y < roiImage.rows && !result.touchesBorder; y++)
-            {
-                if (roiImage.at<uint8_t>(y, x) == processedColor)
+                    // Check if point is within the ROI (safety check)
+                    if (x >= 0 && x < roi.width && y >= 0 && y < roi.height)
+                    {
+                        // Check if point is too close to any border
+                        if (x < borderThreshold || x >= roi.width - borderThreshold ||
+                            y < borderThreshold || y >= roi.height - borderThreshold)
+                        {
+                            result.touchesBorder = true;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        // Point is outside ROI, definitely touching border
+                        result.touchesBorder = true;
+                        break;
+                    }
+                }
+
+                if (result.touchesBorder)
                 {
-                    result.touchesBorder = true;
-                    break;
+                    break; // No need to check other contours
                 }
             }
         }
     }
 
-    // Only proceed with contour detection if no border pixels were found or border check is disabled
+    // Only proceed with contour analysis if no border pixels were found or border check is disabled
     if (!result.touchesBorder || !config.enable_border_check)
     {
-        auto [contours, hasNestedContours, innerContours] = findContours(processedImage);
-
-        // Set hasNestedContours flag if nested contours check is enabled
-        if (config.enable_nested_contours_check)
+        // If we have a single inner contour, use it for metrics
+        if (result.hasSingleInnerContour)
         {
-            result.hasNestedContours = hasNestedContours;
-        }
-
-        // Find significant contours (those that are large enough to be considered for analysis)
-        std::vector<std::vector<cv::Point>> significantContours;
-        std::vector<double> contourAreas;
-
-        // Minimum area ratio compared to the largest contour to be considered significant
-        const double significanceThreshold = 0.2; // 20% of the largest contour's area
-
-        // Find the largest contour and its area
-        double largestArea = 0.0;
-        for (const auto &contour : contours)
-        {
-            double area = cv::contourArea(contour);
-            largestArea = std::max(largestArea, area);
-        }
-
-        // Filter contours based on significance
-        for (const auto &contour : contours)
-        {
-            double area = cv::contourArea(contour);
-            if (area >= largestArea * significanceThreshold)
-            {
-                significantContours.push_back(contour);
-                contourAreas.push_back(area);
-            }
-        }
-
-        // Check for multiple contours only if that check is enabled
-        if (config.enable_multiple_contours_check && significantContours.size() > 1)
-        {
-            // Only set hasMultipleContours if we have multiple significant outer contours
-            // or multiple significant inner contours
-
-            // Count significant inner contours
-            int significantInnerCount = 0;
-            for (const auto &innerContour : innerContours)
-            {
-                double area = cv::contourArea(innerContour);
-                if (area >= largestArea * significanceThreshold)
-                {
-                    significantInnerCount++;
-                }
-            }
-
-            // If we have multiple significant inner contours, reject
-            if (significantInnerCount > 1)
-            {
-                result.hasMultipleContours = true;
-                return result;
-            }
-
-            // If we have multiple significant outer contours without inner contours, reject
-            if (!hasNestedContours && significantContours.size() > 1)
-            {
-                result.hasMultipleContours = true;
-                return result;
-            }
-        }
-
-        // If we have inner contours, use the largest one for metrics
-        if (hasNestedContours && !innerContours.empty())
-        {
-            // Find the largest inner contour
-            size_t largestInnerIdx = 0;
-            double largestInnerArea = 0.0;
-
-            for (size_t i = 0; i < innerContours.size(); i++)
-            {
-                double area = cv::contourArea(innerContours[i]);
-                if (area > largestInnerArea)
-                {
-                    largestInnerArea = area;
-                    largestInnerIdx = i;
-                }
-            }
-
+            // We have exactly one inner contour - use it for metrics
             // Calculate contour area
-            double contourArea = cv::contourArea(innerContours[largestInnerIdx]);
+            double contourArea = cv::contourArea(innerContours[0]);
 
             // Calculate convex hull
             std::vector<cv::Point> hull;
-            cv::convexHull(innerContours[largestInnerIdx], hull);
+            cv::convexHull(innerContours[0], hull);
             double hullArea = cv::contourArea(hull);
 
             // Calculate area ratio (R = Ahull/Acontour)
             result.areaRatio = hullArea / contourArea;
 
-            auto [deformability, area] = calculateMetrics(innerContours[largestInnerIdx]);
+            auto [deformability, area] = calculateMetrics(innerContours[0]);
             result.deformability = deformability;
             result.area = area;
 
@@ -274,11 +243,12 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
                 (area >= config.area_threshold_min && area <= config.area_threshold_max))
             {
                 result.inRange = true;
+                // Set isValid to true for frames with exactly one inner contour
                 result.isValid = true;
             }
         }
-        // If no nested contours but we have contours, use the largest one
-        else if (!contours.empty())
+        // If no inner contours but we have contours, use the largest one
+        else if (!contours.empty() && !config.require_single_inner_contour)
         {
             // Find the largest contour
             size_t largestIdx = 0;
@@ -327,32 +297,24 @@ cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid)
     // Hierarchical condition checking based solely on FilterResult
     if (result.touchesBorder)
     {
-        // Red for border touching (highest priority)
+        // Red for border touching (highest priority rejection reason)
         return cv::Scalar(0, 0, 255); // BGR: Red
     }
-    else if (result.hasMultipleContours)
+    else if (result.hasSingleInnerContour && isValid)
     {
-        // Blue for multiple significant contours (rejected frames)
-        return cv::Scalar(255, 0, 0); // BGR: Blue
-    }
-    else if (result.hasNestedContours && isValid)
-    {
-        // Green for using inner contour (valid frame with inner contour)
-        return cv::Scalar(0, 255, 0); // BGR: Green
-    }
-    else if (result.hasNestedContours)
-    {
-        // Purple for nested contours detected but not used
-        return cv::Scalar(255, 0, 255); // BGR: Purple
+        // Bright Green for valid frames with exactly one inner contour (highest priority for keeping)
+        // These are the frames we want to keep - using the single inner contour for metrics
+        return cv::Scalar(0, 255, 0); // BGR: Bright Green
     }
     else if (isValid)
     {
-        // Green for valid frames (that passed all filters)
-        return cv::Scalar(0, 255, 0); // BGR: Green
+        // Yellow for valid frames without inner contours (lower priority)
+        // These are acceptable but not ideal - we prefer frames with exactly one inner contour
+        return cv::Scalar(0, 255, 255); // BGR: Yellow
     }
     else
     {
-        // Yellow for frames filtered out due to being out of range
-        return cv::Scalar(0, 255, 255); // BGR: Yellow
+        // Gray for invalid frames without inner contours (lowest priority)
+        return cv::Scalar(128, 128, 128); // BGR: Gray
     }
 }

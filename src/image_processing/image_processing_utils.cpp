@@ -81,9 +81,26 @@ void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &p
     shared.backgroundFrame = selectedImage.clone();
 
     // Apply Gaussian blur to the background frame
-    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
+    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                     cv::Size(shared.processingConfig.gaussian_blur_size,
+                              shared.processingConfig.gaussian_blur_size),
+                     0);
 
-    std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
+    // Apply simple contrast enhancement to the background if enabled
+    if (shared.processingConfig.enable_contrast_enhancement)
+    {
+        // Use the formula: new_pixel = alpha * old_pixel + beta
+        // alpha > 1 increases contrast, beta increases brightness
+        shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                           shared.processingConfig.contrast_alpha,
+                                           shared.processingConfig.contrast_beta);
+
+        std::cout << "Background frame initialized with contrast enhancement applied." << std::endl;
+    }
+    else
+    {
+        std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
+    }
 }
 
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared)
@@ -194,7 +211,8 @@ json readConfig(const std::string &filename)
             {"morph_iterations", 1},
             {"area_threshold_min", 100},
             {"area_threshold_max", 600},
-            {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_nested_contours_check", true}, {"enable_area_range_check", true}}}};
+            {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_area_range_check", true}, {"require_single_inner_contour", true}}},
+            {"contrast_enhancement", {{"enable_contrast", true}, {"alpha", 1.2}, {"beta", 10}}}};
 
         config = {
             {"save_directory", "updated_results"},
@@ -249,10 +267,26 @@ json readConfig(const std::string &filename)
             filters["enable_border_check"] = true;
         if (!filters.contains("enable_multiple_contours_check"))
             filters["enable_multiple_contours_check"] = true;
-        if (!filters.contains("enable_nested_contours_check"))
-            filters["enable_nested_contours_check"] = true;
         if (!filters.contains("enable_area_range_check"))
             filters["enable_area_range_check"] = true;
+        if (!filters.contains("require_single_inner_contour"))
+            filters["require_single_inner_contour"] = true;
+
+        // Ensure contrast_enhancement section exists
+        if (!img_config.contains("contrast_enhancement"))
+        {
+            img_config["contrast_enhancement"] = json::object();
+        }
+
+        auto &contrast = img_config["contrast_enhancement"];
+
+        // Set defaults for contrast enhancement parameters
+        if (!contrast.contains("enable_contrast"))
+            contrast["enable_contrast"] = true;
+        if (!contrast.contains("alpha"))
+            contrast["alpha"] = 1.2;
+        if (!contrast.contains("beta"))
+            contrast["beta"] = 10;
 
         // Write back the complete config to ensure file has all fields
         std::ofstream outFile(filename);
@@ -266,12 +300,18 @@ ProcessingConfig getProcessingConfig(const json &config)
 {
     const auto &img_config = config["image_processing"];
     const auto &filters = img_config.contains("filters") ? img_config["filters"] : json::object();
+    const auto &contrast = img_config.contains("contrast_enhancement") ? img_config["contrast_enhancement"] : json::object();
 
     // Get filter flags with defaults if not present
     bool enable_border_check = filters.contains("enable_border_check") ? filters["enable_border_check"].get<bool>() : true;
     bool enable_multiple_contours_check = filters.contains("enable_multiple_contours_check") ? filters["enable_multiple_contours_check"].get<bool>() : true;
-    bool enable_nested_contours_check = filters.contains("enable_nested_contours_check") ? filters["enable_nested_contours_check"].get<bool>() : true;
     bool enable_area_range_check = filters.contains("enable_area_range_check") ? filters["enable_area_range_check"].get<bool>() : true;
+    bool require_single_inner_contour = filters.contains("require_single_inner_contour") ? filters["require_single_inner_contour"].get<bool>() : true;
+
+    // Get contrast enhancement parameters with defaults if not present
+    bool enable_contrast = contrast.contains("enable_contrast") ? contrast["enable_contrast"].get<bool>() : true;
+    double alpha = contrast.contains("alpha") ? contrast["alpha"].get<double>() : 1.2;
+    int beta = contrast.contains("beta") ? contrast["beta"].get<int>() : 10;
 
     return ProcessingConfig{
         img_config["gaussian_blur_size"],
@@ -282,8 +322,38 @@ ProcessingConfig getProcessingConfig(const json &config)
         img_config["area_threshold_max"],
         enable_border_check,
         enable_multiple_contours_check,
-        enable_nested_contours_check,
-        enable_area_range_check};
+        enable_area_range_check,
+        require_single_inner_contour,
+        enable_contrast,
+        alpha,
+        beta};
+}
+
+// Function to update the background with current contrast settings
+void updateBackgroundWithCurrentSettings(SharedResources &shared)
+{
+    if (shared.backgroundFrame.empty())
+    {
+        return; // No background to update
+    }
+
+    std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+
+    // Re-apply Gaussian blur to the original background frame
+    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                     cv::Size(shared.processingConfig.gaussian_blur_size,
+                              shared.processingConfig.gaussian_blur_size),
+                     0);
+
+    // Apply simple contrast enhancement to the background if enabled
+    if (shared.processingConfig.enable_contrast_enhancement)
+    {
+        // Use the formula: new_pixel = alpha * old_pixel + beta
+        // alpha > 1 increases contrast, beta increases brightness
+        shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                           shared.processingConfig.contrast_alpha,
+                                           shared.processingConfig.contrast_beta);
+    }
 }
 
 bool updateConfig(const std::string &filename, const std::string &key, const json &value)
@@ -301,20 +371,48 @@ bool updateConfig(const std::string &filename, const std::string &key, const jso
         input_file >> config;
         input_file.close();
 
-        // Update the value
-        config[key] = value;
+        // Update the specified key
+        if (key.find('.') != std::string::npos)
+        {
+            // Handle nested keys (e.g., "image_processing.gaussian_blur_size")
+            std::istringstream ss(key);
+            std::string token;
+            std::vector<std::string> keys;
+            while (std::getline(ss, token, '.'))
+            {
+                keys.push_back(token);
+            }
+
+            // Navigate to the nested object
+            json *current = &config;
+            for (size_t i = 0; i < keys.size() - 1; i++)
+            {
+                if (!current->contains(keys[i]))
+                {
+                    (*current)[keys[i]] = json::object();
+                }
+                current = &(*current)[keys[i]];
+            }
+
+            // Update the value
+            (*current)[keys.back()] = value;
+        }
+        else
+        {
+            // Simple key
+            config[key] = value;
+        }
 
         // Write updated config back to file
         std::ofstream output_file(filename);
         if (!output_file.is_open())
         {
-            std::cerr << "Unable to open config file for writing: " << filename << std::endl;
+            std::cerr << "Unable to write to config file: " << filename << std::endl;
             return false;
         }
         output_file << std::setw(4) << config << std::endl;
         output_file.close();
 
-        std::cout << "Config updated successfully. Key: " << key << ", New value: " << value << std::endl;
         return true;
     }
     catch (const std::exception &e)
