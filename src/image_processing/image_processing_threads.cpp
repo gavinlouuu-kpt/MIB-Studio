@@ -464,9 +464,9 @@ void processingThreadTask(
 {
     shared.currentBatchNumber = 0;
     // Pre-allocate memory for images
-    cv::Mat inputImage(height, width, CV_8UC1);
-    cv::Mat processedImage(height, width, CV_8UC1);
-    ThreadLocalMats mats = initializeThreadMats(height, width, shared);
+    cv::Mat inputImage(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+    cv::Mat processedImage(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+    ThreadLocalMats mats = initializeThreadMats(static_cast<int>(height), static_cast<int>(width), shared);
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
     // const size_t area_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
@@ -490,7 +490,7 @@ void processingThreadTask(
             auto startTime = std::chrono::high_resolution_clock::now();
             shared.validProcessingFrame = false;
             auto imageData = processingBuffer.get(0);
-            inputImage = cv::Mat(height, width, CV_8UC1, imageData.data());
+            inputImage = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
 
             // Check if ROI is the same as the full image
             if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
@@ -542,7 +542,7 @@ void processingThreadTask(
 
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
-            double processingTime = duration.count();
+            double processingTime = static_cast<double>(duration.count());
 
             // Just store the processing time
             shared.processingTimes.push(reinterpret_cast<const uint8_t *>(&processingTime));
@@ -570,18 +570,18 @@ void displayThreadTask(
 
     const std::chrono::duration<double> frameDuration(1.0 / displayFPS); // Increase to 60 FPS for smoother response
     auto nextFrameTime = std::chrono::steady_clock::now();
-    ThreadLocalMats mats = initializeThreadMats(height, width, shared);
+    ThreadLocalMats mats = initializeThreadMats(static_cast<int>(height), static_cast<int>(width), shared);
 
     // Pre-allocate memory for images
-    cv::Mat image(height, width, CV_8UC1);
-    cv::Mat processedImage(height, width, CV_8UC1);
-    cv::Mat displayImage(height, width, CV_8UC3);
+    cv::Mat image(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+    cv::Mat processedImage(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+    cv::Mat displayImage(static_cast<int>(height), static_cast<int>(width), CV_8UC3);
 
     cv::namedWindow("Live Feed", cv::WINDOW_AUTOSIZE);
-    cv::resizeWindow("Live Feed", width, height);
+    cv::resizeWindow("Live Feed", static_cast<int>(width), static_cast<int>(height));
 
     int trackbarPos = 0;
-    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, bufferCount - 1, onTrackbar, &shared);
+    cv::createTrackbar("Frame", "Live Feed", &trackbarPos, static_cast<int>(bufferCount - 1), onTrackbar, &shared);
 
     auto updateDisplay = [&](const cv::Mat &originalImage, const cv::Mat &processedImage)
     {
@@ -688,7 +688,7 @@ void displayThreadTask(
                     lock.unlock();
 
                     auto imageData = circularBuffer.get(0);
-                    image = cv::Mat(height, width, CV_8UC1, imageData.data());
+                    image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                     processFrame(image, shared, processedImage, mats);
                     updateDisplay(image, processedImage);
                     shouldUpdate = true;
@@ -725,7 +725,7 @@ void displayThreadTask(
                         shared.processingConfig = newConfig;
                         shared.processingConfigMutex.unlock();
 
-                        image = cv::Mat(height, width, CV_8UC1, imageData.data());
+                        image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
                         shared.hasMultipleContours = filterResult.hasMultipleContours;
@@ -938,11 +938,11 @@ void keyboardHandlingThread(
             shared.paused = !shared.paused;
             if (shared.paused)
             {
-                shared.currentFrameIndex = circularBuffer.size() - 1;
+                shared.currentFrameIndex = static_cast<int>(circularBuffer.size() - 1);
                 shared.displayNeedsUpdate = true;
             }
         }
-        else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < circularBuffer.size() - 1)
+        else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < static_cast<int>(circularBuffer.size() - 1))
         {
             shared.currentFrameIndex++;
             shared.displayNeedsUpdate = true;
@@ -991,7 +991,7 @@ void keyboardHandlingThread(
             {
                 // Use the same indexing as the trackbar to maintain consistency
                 auto imageData = circularBuffer.get(i);
-                cv::Mat image(height, width, CV_8UC1, imageData.data());
+                cv::Mat image(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
 
                 std::ostringstream oss;
                 oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".png";
@@ -1008,7 +1008,7 @@ void keyboardHandlingThread(
             auto backgroundImageData = circularBuffer.get(shared.currentFrameIndex);
             {
                 std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-                shared.backgroundFrame = cv::Mat(height, width, CV_8UC1, backgroundImageData.data()).clone();
+                shared.backgroundFrame = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, backgroundImageData.data()).clone();
                 cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(shared.processingConfig.gaussian_blur_size, shared.processingConfig.gaussian_blur_size), 0);
             }
             shared.displayNeedsUpdate = true;
@@ -1071,7 +1071,7 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
             saveQualifiedResultsToDisk(bufferToSave, saveDirectory, shared);
             auto end = std::chrono::steady_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            shared.diskSaveTime = duration.count();
+            shared.diskSaveTime = static_cast<double>(duration.count());
 
             shared.totalSavedResults += bufferToSave.size();
             shared.lastSaveTime = end;
