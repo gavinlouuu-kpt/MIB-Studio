@@ -83,9 +83,25 @@ std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv
     std::vector<cv::Vec4i> hierarchy;
     cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
 
-    // No longer filtering out small noise contours
-    std::vector<std::vector<cv::Point>> filteredContours = contours;
-    std::vector<cv::Vec4i> filteredHierarchy = hierarchy;
+    // Filter out small noise contours
+    std::vector<std::vector<cv::Point>> filteredContours;
+    std::vector<cv::Vec4i> filteredHierarchy;
+
+    // Minimum area threshold to filter out noise (adjust as needed)
+    const double minNoiseArea = 10.0;
+
+    for (size_t i = 0; i < contours.size(); i++)
+    {
+        double area = cv::contourArea(contours[i]);
+        if (area >= minNoiseArea)
+        {
+            filteredContours.push_back(contours[i]);
+            if (i < hierarchy.size())
+            {
+                filteredHierarchy.push_back(hierarchy[i]);
+            }
+        }
+    }
 
     // Check if there are nested contours by examining the hierarchy
     bool hasNestedContours = false;

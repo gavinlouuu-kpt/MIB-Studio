@@ -162,12 +162,6 @@ void metricDisplayThread(SharedResources &shared)
                                                          text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
                                                    hbox({text("Touched Border: "),
                                                          text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
-                                                   hbox({text("Single Inner Contour: "),
-                                                         text(shared.hasSingleInnerContour.load() ? "Yes" : "No")}),
-                                                   hbox({text("Inner Contour Count: "),
-                                                         text(std::to_string(shared.innerContourCount.load()))}),
-                                                   hbox({text("Using Inner Contour: "),
-                                                         text(shared.usingInnerContour.load() ? "Yes" : "No")}),
                                                    hbox({text("Require Single Inner Contour: "),
                                                          text(shared.processingConfig.require_single_inner_contour ? "Yes" : "No")}),
                                                    hbox({text("Area Min Threshold: "),
@@ -300,7 +294,7 @@ void processingThreadTask(
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
                         shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&plotMetrics));
                         shared.frameAreaRatios.store(filterResult.areaRatio);
-                        // apply sorting function to give signal to EGrabber
+
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
 
