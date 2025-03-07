@@ -1,12 +1,17 @@
 # TODO
+## 2025/3/7
+- [ ] Mark on preview trackbar where there is a trigger for easier viewing
+- [ ] Create a meta data file when saving file stream to annotate which frame contains a trigger
 ## 2025/3/3
-- [ ] Record condition, 10 frames after detected object (variable)
+- [-] Record condition, 10 frames after detected object (variable)
+Not needed as we only need to see the 10 frames in testing mode
 - [x] Image processing target - background to get inner contour
 - [x] Hierarchy contour finding the inner one
-- [ ] Consistent stream saving order with live pause preview
+- [x] Consistent stream saving order with live pause preview
+Now that it is consistent but we want image zero to be the oldest image and th largest number to be the latest image
 - [x] Remove trigger setup script from execution 
-- [ ] Use .tiff format for saving images under all scenario 
-- [ ] Fix trigger condition
+- [x] Use .tiff format for saving images under all scenario 
+- [x] Fix trigger condition
 ## 2025/2/12
 ### Tests
 - [ ] Tool to test how the opencv algo performs given an ROI and config
