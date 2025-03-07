@@ -1,5 +1,4 @@
 #include "image_processing/image_processing.h"
-#include "CircularBuffer/CircularBuffer.h"
 #include <cmath>
 
 ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared)

@@ -1,5 +1,4 @@
 #include "image_processing/image_processing.h"
-#include "CircularBuffer/CircularBuffer.h"
 #include <filesystem>
 #include <iostream>
 #include <fstream>
@@ -7,6 +6,10 @@
 #include <future>
 #include <vector>
 #include "menu_system/menu_system.h"
+#include <nlohmann/json.hpp>
+#include <boost/circular_buffer.hpp>
+
+using json = nlohmann::json;
 
 ImageParams initializeImageParams(const std::string &directory)
 {
@@ -34,73 +37,64 @@ ImageParams initializeImageParams(const std::string &directory)
     throw std::runtime_error("No valid TIFF images found in the directory");
 }
 
-void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder)
+void loadImages(const std::string &directory, boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, bool reverseOrder)
 {
     std::vector<std::filesystem::path> imagePaths;
     for (const auto &entry : std::filesystem::directory_iterator(directory))
     {
-        if (entry.path().extension() == ".tiff" || entry.path().extension() == ".tif" ||
-            entry.path().extension() == ".png" || entry.path().extension() == ".jpg" ||
-            entry.path().extension() == ".jpeg")
+        if (entry.is_regular_file() && (entry.path().extension() == ".tiff" || entry.path().extension() == ".tif" || entry.path().extension() == ".png" || entry.path().extension() == ".jpg"))
         {
             imagePaths.push_back(entry.path());
         }
     }
 
-    std::sort(imagePaths.begin(), imagePaths.end());
+    if (imagePaths.empty())
+    {
+        throw std::runtime_error("No image files found in the directory");
+    }
 
+    // Sort the image paths
+    std::sort(imagePaths.begin(), imagePaths.end());
     if (reverseOrder)
     {
         std::reverse(imagePaths.begin(), imagePaths.end());
     }
 
+    // Load the images into the buffer
     for (const auto &path : imagePaths)
     {
         cv::Mat image = cv::imread(path.string(), cv::IMREAD_GRAYSCALE);
-        if (!image.empty())
+        if (image.empty())
         {
-            cameraBuffer.push(image.data);
+            std::cerr << "Warning: Failed to load image: " << path << std::endl;
+            continue;
         }
+
+        // Convert the image to a vector of bytes
+        std::vector<uint8_t> imageData(image.data, image.data + image.total() * image.elemSize());
+        cameraBuffer.push_back(imageData);
     }
 
-    std::cout << "Loaded " << cameraBuffer.size() << " images into camera buffer." << std::endl;
+    std::cout << "Loaded " << cameraBuffer.size() << " images from " << directory << std::endl;
 }
 
-void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer)
+void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer)
 {
     std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-
-    // Select an image from the middle of the buffer as the background
-    size_t selectedIndex = 0;
-    std::vector<uchar> imageData = cameraBuffer.get(selectedIndex);
-
-    // Create a cv::Mat from the image data
-    cv::Mat selectedImage(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, imageData.data());
-
-    // Clone the selected image to create the background frame
-    shared.backgroundFrame = selectedImage.clone();
-
-    // Apply Gaussian blur to the background frame
-    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
-                     cv::Size(shared.processingConfig.gaussian_blur_size,
-                              shared.processingConfig.gaussian_blur_size),
-                     0);
-
-    // Apply simple contrast enhancement to the background if enabled
-    if (shared.processingConfig.enable_contrast_enhancement)
+    if (cameraBuffer.size() > 0)
     {
-        // Use the formula: new_pixel = alpha * old_pixel + beta
-        // alpha > 1 increases contrast, beta increases brightness
-        shared.blurredBackground.convertTo(shared.blurredBackground, -1,
-                                           shared.processingConfig.contrast_alpha,
-                                           shared.processingConfig.contrast_beta);
-
-        std::cout << "Background frame initialized with contrast enhancement applied." << std::endl;
+        // Use the first image as the background
+        const std::vector<uint8_t> &imageData = cameraBuffer[0];
+        shared.backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, const_cast<uint8_t *>(imageData.data())).clone();
     }
     else
     {
-        std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
+        // Create a blank background if no images are available
+        shared.backgroundFrame = cv::Mat(static_cast<int>(params.height), static_cast<int>(params.width), CV_8UC1, cv::Scalar(255));
     }
+
+    // Apply Gaussian blur to the background frame
+    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared)

@@ -2,7 +2,6 @@
 #include <string>
 #include <limits>
 #include "image_processing/image_processing.h"
-#include "CircularBuffer/CircularBuffer.h"
 #include "menu_system/menu_system.h"
 #include <EGrabber.h>
 #include <ftxui/dom/elements.hpp>
@@ -11,6 +10,10 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <filesystem>
 #include "mib_grabber/mib_grabber.h"
+#include <boost/circular_buffer.hpp>
+
+using namespace ftxui;
+using namespace Euresys;
 
 namespace MenuSystem
 {
@@ -216,9 +219,9 @@ namespace MenuSystem
         try
         {
             ImageParams params = initializeImageParams(imageDirectory);
-            CircularBuffer cameraBuffer(params.bufferCount, params.imageSize);
-            CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
-            CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
+            boost::circular_buffer<std::vector<uint8_t>> cameraBuffer(params.bufferCount);
+            boost::circular_buffer<std::vector<uint8_t>> circularBuffer(params.bufferCount);
+            boost::circular_buffer<std::vector<uint8_t>> processingBuffer(params.bufferCount);
             loadImages(imageDirectory, cameraBuffer, true);
 
             SharedResources shared;

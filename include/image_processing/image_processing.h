@@ -9,13 +9,13 @@
 #include <opencv2/opencv.hpp>
 #include <chrono>
 #include <nlohmann/json.hpp>
-#include "CircularBuffer/CircularBuffer.h"
+#include <boost/circular_buffer.hpp>
 
 #define M_PI 3.14159265358979323846 // pi
 
 using json = nlohmann::json;
 
-class CircularBuffer;
+// No need for forward declarations since we're including the header directly
 
 struct ImageParams
 {
@@ -112,7 +112,6 @@ struct FilterResult
 
 struct SharedResources
 {
-
     std::atomic<bool> done{false};
     std::atomic<bool> paused{false};
     std::function<void(int)> keyboardCallback;
@@ -130,8 +129,7 @@ struct SharedResources
     std::mutex processingQueueMutex;
     std::condition_variable displayQueueCondition;
     std::condition_variable processingQueueCondition;
-    // std::vector<std::tuple<double, double>> deformabilities;
-    // std::mutex deformabilitiesMutex;
+
     std::atomic<bool> newScatterDataAvailable{false};
     std::condition_variable scatterDataCondition;
     cv::Mat backgroundFrame;
@@ -152,10 +150,12 @@ struct SharedResources
     std::chrono::steady_clock::time_point lastSaveTime;
     std::atomic<double> diskSaveTime;
     std::string saveDirectory;
+
     // metrics
-    CircularBuffer processingTimes{1000, sizeof(double)};                          // Buffer to store last 1000 processing times
-    CircularBuffer deformabilityBuffer{10000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
+    boost::circular_buffer<double> processingTimes{1000};                          // Buffer to store last 1000 processing times
+    boost::circular_buffer<std::tuple<double, double>> deformabilityBuffer{10000}; // Buffer for last 1000 deformability measurements
     std::mutex deformabilityBufferMutex;
+
     std::atomic<double> currentFPS;
     std::atomic<double> dataRate;
     std::atomic<uint64_t> exposureTime;
@@ -184,8 +184,8 @@ struct SharedResources
 
 // Function declarations
 ImageParams initializeImageParams(const std::string &directory);
-void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool reverseOrder = false);
-void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
+void loadImages(const std::string &directory, boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, bool reverseOrder = false);
+void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer);
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
                   cv::Mat &outputImage, ThreadLocalMats &mats);
 std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>> findContours(const cv::Mat &processedImage);
@@ -205,11 +205,11 @@ bool updateConfig(const std::string &filename, const std::string &key, const jso
 
 void updateBackgroundWithCurrentSettings(SharedResources &shared);
 
-void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared);
+void temp_mockSample(const ImageParams &params, boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, SharedResources &shared);
 
-void simulateCameraThread(CircularBuffer &cameraBuffer, SharedResources &shared, const ImageParams &params);
+void simulateCameraThread(boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, SharedResources &shared, const ImageParams &params);
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
-                        const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
+                        const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, const ImageParams &params,
                         std::vector<std::thread> &threads);
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
                        std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
@@ -221,5 +221,4 @@ void reviewSavedData();
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                   const ProcessingConfig &config, const uint8_t processedColor = 255);
 
-// Function to determine overlay color based on FilterResult
 cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);

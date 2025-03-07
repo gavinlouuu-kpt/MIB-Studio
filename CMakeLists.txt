@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Matplot++ CONFIG REQUIRED)
 find_package(ftxui CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(Boost REQUIRED)
 
 # Set OpenCV_DIR to the correct location
 set(OpenCV_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
@@ -19,7 +20,6 @@ set(SOURCES
     src/image_processing/image_processing_utils.cpp
     src/image_processing/image_processing_threads.cpp
     src/menu_system/menu_system.cpp
-    src/CircularBuffer/CircularBuffer.cpp
     src/mib_grabber/mib_grabber.cpp
     # Add other source files here
 )
@@ -32,6 +32,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${OpenCV_INCLUDE_DIRS}
+    ${Boost_INCLUDE_DIRS}
 )
 # Separately include the EGrabber folder for the nested files
 include_directories(${PROJECT_SOURCE_DIR}/include/EGrabber) # does not work with camera only for testing
@@ -44,6 +45,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ftxui::component
     nlohmann_json::nlohmann_json
     ${OpenCV_LIBS}
+    ${Boost_LIBRARIES}
 )
 
 # Build test executables
@@ -55,9 +57,7 @@ foreach(test_source ${TEST_SOURCES})
         src/image_processing/image_processing_utils.cpp
         src/image_processing/image_processing_threads.cpp
         src/menu_system/menu_system.cpp
-        src/CircularBuffer/CircularBuffer.cpp
         src/mib_grabber/mib_grabber.cpp
-
     )
     target_include_directories(${test_name} PRIVATE 
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -65,6 +65,7 @@ foreach(test_source ${TEST_SOURCES})
         ${CMAKE_CURRENT_SOURCE_DIR}/include/EGrabber
         # "C:/Program Files/Euresys/eGrabber/include"
         ${OpenCV_INCLUDE_DIRS}
+        ${Boost_INCLUDE_DIRS}
     )
     target_link_libraries(${test_name} PRIVATE 
         Matplot++::matplot
@@ -73,5 +74,6 @@ foreach(test_source ${TEST_SOURCES})
         ftxui::component
         nlohmann_json::nlohmann_json
         ${OpenCV_LIBS}
+        ${Boost_LIBRARIES}
     )
 endforeach()

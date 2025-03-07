@@ -76,6 +76,27 @@
         "functional": "cpp",
         "future": "cpp",
         "unordered_map": "cpp",
-        "xhash": "cpp"
+        "xhash": "cpp",
+        "any": "cpp",
+        "array": "cpp",
+        "bitset": "cpp",
+        "cinttypes": "cpp",
+        "codecvt": "cpp",
+        "complex": "cpp",
+        "cstdarg": "cpp",
+        "execution": "cpp",
+        "memory_resource": "cpp",
+        "random": "cpp",
+        "ranges": "cpp",
+        "set": "cpp",
+        "shared_mutex": "cpp",
+        "source_location": "cpp",
+        "span": "cpp",
+        "stack": "cpp",
+        "stdfloat": "cpp",
+        "typeindex": "cpp",
+        "unordered_set": "cpp",
+        "valarray": "cpp",
+        "variant": "cpp"
     }
 }

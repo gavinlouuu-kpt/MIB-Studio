@@ -1,5 +1,4 @@
 #include "image_processing/image_processing.h"
-#include "CircularBuffer/CircularBuffer.h"
 #include "mib_grabber/mib_grabber.h"
 #include <chrono>
 #include <iostream>
@@ -21,13 +20,14 @@
 #include <pthread.h>
 #include <sched.h>
 #endif
+#include <boost/circular_buffer.hpp>
 
 using json = nlohmann::json;
 
 namespace fs = std::filesystem;
 
 void simulateCameraThread(
-    CircularBuffer &cameraBuffer, SharedResources &shared,
+    boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, SharedResources &shared,
     const ImageParams &params)
 {
     using clock = std::chrono::high_resolution_clock;
@@ -45,7 +45,7 @@ void simulateCameraThread(
         auto now = clock::now();
         if (!shared.paused && (now - lastFrameTime) >= frameInterval)
         {
-            const uint8_t *imageData = cameraBuffer.getPointer(currentIndex);
+            const uint8_t *imageData = cameraBuffer[currentIndex].data();
             if (imageData != nullptr)
             {
                 shared.latestCameraFrame.store(currentIndex, std::memory_order_release);
@@ -78,7 +78,7 @@ void metricDisplayThread(SharedResources &shared)
     using namespace ftxui;
     std::this_thread::sleep_for(std::chrono::milliseconds(100)); // sleep for 1ms to allow other things to be printed first
 
-    auto calculateProcessingMetrics = [](const CircularBuffer &processingTimes)
+    auto calculateProcessingMetrics = [](const boost::circular_buffer<double> &processingTimes)
     {
         double avgTime = 0.0, maxTime = 0.0, minTime = std::numeric_limits<double>::max();
         double instantTime = 0.0;
@@ -89,13 +89,12 @@ void metricDisplayThread(SharedResources &shared)
         if (count > 0)
         {
             // Get latest value for instant time
-            instantTime = *reinterpret_cast<const double *>(processingTimes.getPointer(0));
+            instantTime = processingTimes[0];
 
             // Calculate statistics
             for (size_t i = 0; i < count; i++)
             {
-                const double *timePtr = reinterpret_cast<const double *>(processingTimes.getPointer(i));
-                double time = *timePtr;
+                double time = processingTimes[i];
                 avgTime += time;
                 maxTime = std::max(maxTime, time);
                 minTime = std::min(minTime, time);
@@ -203,8 +202,8 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("Space: Pause/Resume live feed"),
                                                          text("When Paused:"),
                                                          text("  B: Set current frame as background"),
-                                                         text("  A: Next frame"),
-                                                         text("  D: Previous frame"),
+                                                         text("  D: Next frame (newer)"),
+                                                         text("  A: Previous frame (older)"),
                                                          text("Display Options:"),
                                                          text("  P: Toggle processed image overlay"),
                                                          text("  Q: Clear deformability buffer"),
@@ -244,7 +243,7 @@ void processingThreadTask(
     std::mutex &processingQueueMutex,
     std::condition_variable &processingQueueCondition,
     std::queue<size_t> &framesToProcess,
-    const CircularBuffer &processingBuffer,
+    const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer,
     size_t width, size_t height, SharedResources &shared)
 {
     shared.currentBatchNumber = 0;
@@ -274,7 +273,7 @@ void processingThreadTask(
 
             auto startTime = std::chrono::high_resolution_clock::now();
             shared.validProcessingFrame = false;
-            auto imageData = processingBuffer.get(0);
+            auto imageData = processingBuffer[0];
             inputImage = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
 
             // Check if ROI is the same as the full image
@@ -292,7 +291,7 @@ void processingThreadTask(
                     auto plotMetrics = std::make_tuple(filterResult.deformability, filterResult.area);
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
-                        shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&plotMetrics));
+                        shared.deformabilityBuffer.push_back(plotMetrics);
                         shared.frameAreaRatios.store(filterResult.areaRatio);
 
                         shared.newScatterDataAvailable = true;
@@ -331,7 +330,7 @@ void processingThreadTask(
             double processingTime = static_cast<double>(duration.count());
 
             // Just store the processing time
-            shared.processingTimes.push(reinterpret_cast<const uint8_t *>(&processingTime));
+            shared.processingTimes.push_back(processingTime);
             shared.updated = true;
         }
         else
@@ -345,7 +344,7 @@ void processingThreadTask(
 void displayThreadTask(
     std::queue<size_t> &framesToDisplay,
     std::mutex &displayQueueMutex,
-    const CircularBuffer &circularBuffer,
+    const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
     size_t width,
     size_t height,
     size_t bufferCount,
@@ -443,7 +442,7 @@ void displayThreadTask(
                     framesToDisplay.pop();
                     lock.unlock();
 
-                    auto imageData = circularBuffer.get(0);
+                    auto imageData = circularBuffer[0];
                     image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                     processFrame(image, shared, processedImage, mats);
                     auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
@@ -478,73 +477,71 @@ void displayThreadTask(
                 }
             }
         }
-        else
+        else if (shared.paused && shared.displayNeedsUpdate)
         {
-            if (shared.displayNeedsUpdate)
+            int index = shared.currentFrameIndex;
+            if (index >= 0 && index < static_cast<int>(circularBuffer.size()))
             {
-                int index = shared.currentFrameIndex;
-                if (index >= 0 && index < circularBuffer.size())
+                // Reset state variables before processing
+                shared.validDisplayFrame = false;
+                shared.displayFrameTouchedBorder = false;
+                shared.hasSingleInnerContour = false;
+                shared.innerContourCount = 0;
+                shared.usingInnerContour = false;
+
+                // With the new CircularBuffer implementation, index 0 is the oldest frame
+                // and the highest index is the newest frame
+                auto imageData = circularBuffer[index];
+                if (!imageData.empty())
                 {
-                    // Reset state variables before processing
-                    shared.validDisplayFrame = false;
-                    shared.displayFrameTouchedBorder = false;
-                    shared.hasSingleInnerContour = false;
-                    shared.innerContourCount = 0;
-                    shared.usingInnerContour = false;
+                    // Read config to enable hot reloading of image processing parameters
+                    json config = readConfig("config.json");
+                    ProcessingConfig newConfig = getProcessingConfig(config);
 
-                    auto imageData = circularBuffer.get(index);
-                    if (!imageData.empty())
+                    // Check if contrast settings have changed
+                    bool contrastSettingsChanged =
+                        (shared.processingConfig.enable_contrast_enhancement != newConfig.enable_contrast_enhancement) ||
+                        (shared.processingConfig.contrast_alpha != newConfig.contrast_alpha) ||
+                        (shared.processingConfig.contrast_beta != newConfig.contrast_beta) ||
+                        (shared.processingConfig.gaussian_blur_size != newConfig.gaussian_blur_size);
+
+                    shared.processingConfigMutex.lock();
+                    shared.processingConfig = newConfig;
+                    shared.processingConfigMutex.unlock();
+
+                    // If contrast settings changed, update the background
+                    if (contrastSettingsChanged && !shared.backgroundFrame.empty())
                     {
-                        // Read config to enable hot reloading of image processing parameters
-                        json config = readConfig("config.json");
-                        ProcessingConfig newConfig = getProcessingConfig(config);
-
-                        // Check if contrast settings have changed
-                        bool contrastSettingsChanged =
-                            (shared.processingConfig.enable_contrast_enhancement != newConfig.enable_contrast_enhancement) ||
-                            (shared.processingConfig.contrast_alpha != newConfig.contrast_alpha) ||
-                            (shared.processingConfig.contrast_beta != newConfig.contrast_beta) ||
-                            (shared.processingConfig.gaussian_blur_size != newConfig.gaussian_blur_size);
-
-                        shared.processingConfigMutex.lock();
-                        shared.processingConfig = newConfig;
-                        shared.processingConfigMutex.unlock();
-
-                        // If contrast settings changed, update the background
-                        if (contrastSettingsChanged && !shared.backgroundFrame.empty())
-                        {
-                            updateBackgroundWithCurrentSettings(shared);
-                        }
-
-                        image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
-                        processFrame(image, shared, processedImage, mats);
-                        auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
-
-                        // Update shared state variables
-                        shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
-                        shared.innerContourCount = filterResult.innerContourCount;
-                        shared.usingInnerContour = filterResult.hasSingleInnerContour && filterResult.isValid;
-                        shared.displayFrameTouchedBorder = filterResult.touchesBorder;
-                        shared.validDisplayFrame = filterResult.isValid;
-
-                        if (filterResult.isValid)
-                        {
-                            shared.frameDeformabilities.store(filterResult.deformability);
-                            shared.frameAreas.store(filterResult.area);
-                        }
-                        else
-                        {
-                            // Store negative values of the metrics to indicate invalid frames
-                            shared.frameDeformabilities.store(-filterResult.deformability);
-                            shared.frameAreas.store(-filterResult.area);
-                        }
-
-                        updateDisplay(image, processedImage, filterResult);
-                        cv::setTrackbarPos("Frame", "Live Feed", index);
-                        shouldUpdate = true;
+                        updateBackgroundWithCurrentSettings(shared);
                     }
+
+                    image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
+                    processFrame(image, shared, processedImage, mats);
+                    auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
+
+                    // Update shared state variables
+                    shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
+                    shared.innerContourCount = filterResult.innerContourCount;
+                    shared.usingInnerContour = filterResult.hasSingleInnerContour && filterResult.isValid;
+                    shared.displayFrameTouchedBorder = filterResult.touchesBorder;
+                    shared.validDisplayFrame = filterResult.isValid;
+
+                    if (filterResult.isValid)
+                    {
+                        shared.frameDeformabilities.store(filterResult.deformability);
+                        shared.frameAreas.store(filterResult.area);
+                    }
+                    else
+                    {
+                        // Store negative values of the metrics to indicate invalid frames
+                        shared.frameDeformabilities.store(-filterResult.deformability);
+                        shared.frameAreas.store(-filterResult.area);
+                    }
+
+                    updateDisplay(image, processedImage, filterResult);
+                    cv::setTrackbarPos("Frame", "Live Feed", index);
+                    shouldUpdate = true;
                 }
-                shared.displayNeedsUpdate = false;
             }
         }
 
@@ -579,6 +576,8 @@ void displayThreadTask(
 void onTrackbar(int pos, void *userdata)
 {
     auto *shared = static_cast<SharedResources *>(userdata);
+    // With the new CircularBuffer implementation, the trackbar position directly corresponds
+    // to the frame index (0 = oldest, max = newest)
     shared->currentFrameIndex = pos;
     shared->displayNeedsUpdate = true;
 }
@@ -638,13 +637,9 @@ void updateScatterPlot(SharedResources &shared)
 
                         for (size_t i = 0; i < size; i++)
                         {
-                            const auto *metrics = reinterpret_cast<const std::tuple<double, double> *>(
-                                shared.deformabilityBuffer.getPointer(i));
-                            if (metrics)
-                            {
-                                x.push_back(std::get<1>(*metrics)); // area
-                                y.push_back(std::get<0>(*metrics)); // deformability
-                            }
+                            const auto &metrics = shared.deformabilityBuffer[i];
+                            x.push_back(std::get<1>(metrics)); // area
+                            y.push_back(std::get<0>(metrics)); // deformability
                         }
 
                         if (!x.empty() && !y.empty())
@@ -712,7 +707,7 @@ void updateScatterPlot(SharedResources &shared)
 }
 
 void keyboardHandlingThread(
-    const CircularBuffer &circularBuffer,
+    const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
     size_t bufferCount, size_t width, size_t height,
     SharedResources &shared)
 {
@@ -730,17 +725,20 @@ void keyboardHandlingThread(
             shared.paused = !shared.paused;
             if (shared.paused)
             {
-                shared.currentFrameIndex = static_cast<int>(circularBuffer.size() - 1);
+                // Set to the oldest frame (index 0) when paused
+                shared.currentFrameIndex = 0;
                 shared.displayNeedsUpdate = true;
             }
         }
         else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < static_cast<int>(circularBuffer.size() - 1))
         {
+            // Move right to newer frames
             shared.currentFrameIndex++;
             shared.displayNeedsUpdate = true;
         }
         else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex > 0)
         {
+            // Move left to older frames
             shared.currentFrameIndex--;
             shared.displayNeedsUpdate = true;
         }
@@ -781,8 +779,8 @@ void keyboardHandlingThread(
 
             for (size_t i = 0; i < frameCount; ++i)
             {
-                // Use the same indexing as the trackbar to maintain consistency
-                auto imageData = circularBuffer.get(i);
+                // With the new CircularBuffer implementation, index 0 is the oldest frame
+                auto imageData = circularBuffer[i];
                 cv::Mat image(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
 
                 std::ostringstream oss;
@@ -797,7 +795,7 @@ void keyboardHandlingThread(
         }
         else if ((key == 'b' || key == 'B') && shared.paused)
         {
-            auto backgroundImageData = circularBuffer.get(shared.currentFrameIndex);
+            auto backgroundImageData = circularBuffer[shared.currentFrameIndex];
             {
                 std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
                 shared.backgroundFrame = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, backgroundImageData.data()).clone();
@@ -1016,7 +1014,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 }
 
 void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
-                        const CircularBuffer &circularBuffer, const CircularBuffer &processingBuffer, const ImageParams &params,
+                        const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, const ImageParams &params,
                         std::vector<std::thread> &threads)
 {
     // Create processing thread first and set its priority
@@ -1045,7 +1043,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     }
 }
 
-void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
+void temp_mockSample(const ImageParams &params, boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
@@ -1066,11 +1064,12 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                               size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
                               if (latestFrame != lastProcessedFrame)
                               {
-                                  const uint8_t *imageData = cameraBuffer.getPointer(latestFrame);
+                                  const uint8_t *imageData = cameraBuffer[latestFrame].data();
                                   if (imageData != nullptr)
                                   {
-                                      circularBuffer.push(imageData);
-                                      processingBuffer.push(imageData);
+                                      std::vector<uint8_t> imageVector(imageData, imageData + params.imageSize);
+                                      circularBuffer.push_back(imageVector);
+                                      processingBuffer.push_back(imageVector);
                                       {
                                           std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
                                           std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
