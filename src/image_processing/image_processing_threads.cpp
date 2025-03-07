@@ -26,50 +26,94 @@ using json = nlohmann::json;
 
 namespace fs = std::filesystem;
 
+/**
+ * Calculate and update FPS statistics
+ *
+ * @param frameCount Current frame count
+ * @param fpsStartTime Start time for FPS calculation
+ * @param shared Shared resources to update
+ * @return Updated frame count
+ */
+size_t updateFpsStatistics(
+    size_t frameCount,
+    std::chrono::high_resolution_clock::time_point &fpsStartTime,
+    SharedResources &shared)
+{
+    auto now = std::chrono::high_resolution_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - fpsStartTime).count() >= 5)
+    {
+        double fps = frameCount / std::chrono::duration<double>(now - fpsStartTime).count();
+        shared.currentFPS.store(fps, std::memory_order_release);
+        frameCount = 0;
+        fpsStartTime = now;
+    }
+    return frameCount;
+}
+
+/**
+ * Process a single camera frame
+ *
+ * @param currentIndex Current frame index
+ * @param cameraBuffer Buffer containing camera frames
+ * @param shared Shared resources to update
+ * @return Updated frame index
+ */
+size_t processNextCameraFrame(
+    size_t currentIndex,
+    const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer,
+    SharedResources &shared)
+{
+    const uint8_t *imageData = cameraBuffer[currentIndex].data();
+    if (imageData != nullptr)
+    {
+        shared.latestCameraFrame.store(currentIndex, std::memory_order_release);
+        currentIndex = (currentIndex + 1) % cameraBuffer.size();
+    }
+    else
+    {
+        std::cout << "Invalid frame at index: " << currentIndex << std::endl;
+    }
+
+    return currentIndex;
+}
+
 void simulateCameraThread(
-    boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, SharedResources &shared,
+    boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer,
+    SharedResources &shared,
     const ImageParams &params)
 {
     using clock = std::chrono::high_resolution_clock;
 
+    // Initialize variables
     size_t currentIndex = 0;
-    size_t totalFrames = cameraBuffer.size();
-    auto lastFrameTime = clock::now();
-    auto fpsStartTime = clock::now();
     size_t frameCount = 0;
+    auto fpsStartTime = clock::now();
+    auto lastFrameTime = clock::now();
+
+    // Configure frame rate
     const int simCameraTargetFPS = 5000;
     const std::chrono::nanoseconds frameInterval(1000000000 / simCameraTargetFPS);
 
+    // Main simulation loop
     while (!shared.done)
     {
         auto now = clock::now();
+
+        // Process next frame if not paused and enough time has elapsed
         if (!shared.paused && (now - lastFrameTime) >= frameInterval)
         {
-            const uint8_t *imageData = cameraBuffer[currentIndex].data();
-            if (imageData != nullptr)
-            {
-                shared.latestCameraFrame.store(currentIndex, std::memory_order_release);
-                currentIndex = (currentIndex + 1) % totalFrames;
-                lastFrameTime = now;
-                if (++frameCount % 5000 == 0)
-                {
-                }
-            }
-            else
-            {
-                std::cout << "Invalid frame at index: " << currentIndex << std::endl;
-            }
+            currentIndex = processNextCameraFrame(currentIndex, cameraBuffer, shared);
+            lastFrameTime = now;
+            frameCount++;
         }
 
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - fpsStartTime).count() >= 5)
-        {
-            double fps = frameCount / std::chrono::duration<double>(now - fpsStartTime).count();
-            shared.currentFPS.store(fps, std::memory_order_release);
-            frameCount = 0;
-            fpsStartTime = now;
-        }
+        // Update FPS statistics periodically
+        frameCount = updateFpsStatistics(frameCount, fpsStartTime, shared);
+
+        // Mark as updated
         shared.updated = true;
     }
+
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
@@ -902,8 +946,12 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
     std::cout << "Result saving thread interrupted." << std::endl;
 }
 
-void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
-                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads)
+/**
+ * Initialize the environment for sample processing
+ *
+ * @param shared Shared resources to initialize
+ */
+void initializeEnvironment(SharedResources &shared)
 {
     shared.done = false;
     shared.paused = false;
@@ -912,14 +960,26 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.deformabilityBuffer.clear();
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
+}
 
+/**
+ * Ensure required directories exist
+ */
+void ensureDirectoriesExist()
+{
     // Create output directory if it doesn't exist
     std::filesystem::path outputDir("output");
     if (!std::filesystem::exists(outputDir))
     {
         std::filesystem::create_directory(outputDir);
     }
+}
 
+/**
+ * Create default configuration file if it doesn't exist
+ */
+void createDefaultConfigIfNeeded()
+{
     // Create egrabberConfig.js if it doesn't exist
     std::filesystem::path configFile("egrabberConfig.js");
     if (!std::filesystem::exists(configFile))
@@ -945,95 +1005,176 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
              << "// g.RemotePort.set(\"Height\", 1080);\n";
         file.close();
     }
-    // saving UI block
+}
+
+/**
+ * Load processing configuration from config file
+ *
+ * @return The save directory from config
+ */
+std::string loadProcessingConfig(SharedResources &shared)
+{
     json config = readConfig("config.json");
+
     // Initialize processing configuration
     ProcessingConfig processingConfig = getProcessingConfig(config);
+    shared.processingConfig = processingConfig;
+
+    // Get save directory
     std::string saveDir = config["save_directory"];
 
-    std::cout << "Current save directory: " << saveDir << std::endl;
+    return saveDir;
+}
+
+/**
+ * Handle user input for save directory selection
+ *
+ * @param defaultSaveDir The default save directory
+ * @param configSaveDir The save directory from config
+ * @return The selected save directory
+ */
+std::string handleSaveDirectorySelection(const std::string &defaultSaveDir, const std::string &configSaveDir)
+{
+    std::cout << "Current save directory: " << configSaveDir << std::endl;
     std::cout << "Choose save directory option:\n";
-    std::cout << "1: Use current directory\n";
-    std::cout << "2: Enter new directory\n";
-    std::cout << "3: Use testing directory (will overwrite existing)\n";
-    std::cout << "Choice: ";
+    std::cout << "1. Use default directory: " << defaultSaveDir << "\n";
+    std::cout << "2. Use config directory: " << configSaveDir << "\n";
+    std::cout << "3. Enter custom directory\n";
+    std::cout << "Enter choice (1-3): ";
+
     int choice;
     std::cin >> choice;
 
-    if (choice == 2)
+    std::string saveDir;
+
+    switch (choice)
     {
-        std::cout << "Enter new save directory name: ";
+    case 1:
+        saveDir = defaultSaveDir;
+        break;
+    case 2:
+        saveDir = configSaveDir;
+        break;
+    case 3:
+        std::cout << "Enter custom directory: ";
         std::cin >> saveDir;
-
-        // Update the config file with the new base directory
-        updateConfig("config.json", "save_directory", saveDir);
+        break;
+    default:
+        std::cout << "Invalid choice. Using default directory.\n";
+        saveDir = defaultSaveDir;
+        break;
     }
-    else if (choice == 3)
+
+    // Create the directory if it doesn't exist
+    if (!std::filesystem::exists(saveDir))
     {
-        saveDir = "testing";
-        // Remove existing testing directory if it exists
-        std::filesystem::path testPath = outputDir / saveDir;
-        if (std::filesystem::exists(testPath))
-        {
-            std::filesystem::remove_all(testPath);
-        }
-        // Update the config file with the testing directory
-        updateConfig("config.json", "save_directory", saveDir);
+        std::filesystem::create_directory(saveDir);
     }
 
-    // Create full path within output directory
-    std::filesystem::path fullPath = outputDir / saveDir;
-    std::string basePath = fullPath.string();
-    shared.saveDirectory = basePath;
+    return saveDir;
+}
 
-    // Automatically increment the directory name if it already exists
-    int suffix = 1;
-    while (std::filesystem::exists(fullPath))
-    {
-        fullPath = outputDir / (saveDir + "_" + std::to_string(suffix));
-        suffix++;
-    }
+void commonSampleLogic(
+    SharedResources &shared,
+    const std::string &defaultSaveDir,
+    std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads)
+{
+    // Initialize environment
+    initializeEnvironment(shared);
 
-    // Create the subdirectory
-    std::filesystem::create_directories(fullPath);
+    // Ensure required directories exist
+    ensureDirectoriesExist();
 
-    std::cout << "Using save directory: " << fullPath.string() << std::endl;
+    // Create default configuration file if needed
+    createDefaultConfigIfNeeded();
 
-    // Call the setup function passed as parameter
-    std::vector<std::thread> threads = setupThreads(shared, fullPath.string());
+    // Load processing configuration
+    std::string configSaveDir = loadProcessingConfig(shared);
 
-    // Wait for completion
-    shared.displayQueueCondition.notify_all();
-    shared.processingQueueCondition.notify_all();
-    shared.savingCondition.notify_all();
-    std::cout << "Joining threads..." << std::endl;
+    // Handle save directory selection
+    std::string saveDir = handleSaveDirectorySelection(defaultSaveDir, configSaveDir);
+
+    // Setup threads using the provided function
+    std::vector<std::thread> threads = setupThreads(shared, saveDir);
+
+    // Wait for all threads to complete
     for (auto &thread : threads)
     {
-        thread.join();
+        if (thread.joinable())
+        {
+            thread.join();
+        }
     }
 }
 
-void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
-                        const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, const ImageParams &params,
-                        std::vector<std::thread> &threads)
+/**
+ * Create and add the processing thread to the thread vector
+ */
+void addProcessingThread(
+    std::vector<std::thread> &threads,
+    SharedResources &shared,
+    const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer,
+    size_t width,
+    size_t height)
 {
-    // Create processing thread first and set its priority
     threads.emplace_back(processingThreadTask,
-                         std::ref(shared.processingQueueMutex), std::ref(shared.processingQueueCondition),
-                         std::ref(shared.framesToProcess), std::ref(processingBuffer),
-                         params.width, params.height, std::ref(shared));
-    // Create remaining threads with normal priority
-    threads.emplace_back(displayThreadTask, std::ref(shared.framesToDisplay),
-                         std::ref(shared.displayQueueMutex), std::ref(circularBuffer),
-                         params.width, params.height, params.bufferCount, std::ref(shared));
+                         std::ref(shared.processingQueueMutex),
+                         std::ref(shared.processingQueueCondition),
+                         std::ref(shared.framesToProcess),
+                         std::ref(processingBuffer),
+                         width, height, std::ref(shared));
+}
 
+/**
+ * Create and add the display thread to the thread vector
+ */
+void addDisplayThread(
+    std::vector<std::thread> &threads,
+    SharedResources &shared,
+    const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
+    size_t width,
+    size_t height,
+    size_t bufferCount)
+{
+    threads.emplace_back(displayThreadTask,
+                         std::ref(shared.framesToDisplay),
+                         std::ref(shared.displayQueueMutex),
+                         std::ref(circularBuffer),
+                         width, height, bufferCount, std::ref(shared));
+}
+
+/**
+ * Create and add the keyboard handling thread to the thread vector
+ */
+void addKeyboardHandlingThread(
+    std::vector<std::thread> &threads,
+    SharedResources &shared,
+    const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
+    size_t bufferCount,
+    size_t width,
+    size_t height)
+{
     threads.emplace_back(keyboardHandlingThread,
-                         std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
+                         std::ref(circularBuffer),
+                         bufferCount, width, height,
+                         std::ref(shared));
+}
 
+/**
+ * Create and add utility threads (result saving, metrics display, etc.)
+ */
+void addUtilityThreads(
+    std::vector<std::thread> &threads,
+    SharedResources &shared,
+    const std::string &saveDir)
+{
+    // Add result saving thread
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
+
+    // Add metrics display thread
     threads.emplace_back(metricDisplayThread, std::ref(shared));
 
-    // Read from json to check if scatterplot is enabled
+    // Check if scatter plot is enabled in config
     json config = readConfig("config.json");
     bool scatterPlotEnabled = config.value("scatter_plot_enabled", false);
 
@@ -1043,44 +1184,164 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     }
 }
 
-void temp_mockSample(const ImageParams &params, boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, SharedResources &shared)
+void setupCommonThreads(
+    SharedResources &shared,
+    const std::string &saveDir,
+    const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
+    const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer,
+    const ImageParams &params,
+    std::vector<std::thread> &threads)
+{
+    // Create processing thread (high priority)
+    addProcessingThread(threads, shared, processingBuffer, params.width, params.height);
+
+    // Create display thread
+    addDisplayThread(threads, shared, circularBuffer, params.width, params.height, params.bufferCount);
+
+    // Create keyboard handling thread
+    addKeyboardHandlingThread(threads, shared, circularBuffer, params.bufferCount, params.width, params.height);
+
+    // Create utility threads (result saving, metrics display, etc.)
+    addUtilityThreads(threads, shared, saveDir);
+}
+
+/**
+ * Process a single frame from the camera buffer and add it to the processing pipeline
+ *
+ * @param frame The frame index to process
+ * @param cameraBuffer The buffer containing camera frames
+ * @param circularBuffer The circular buffer for display
+ * @param processingBuffer The buffer for processing
+ * @param params Image parameters
+ * @param shared Shared resources
+ * @return True if frame was processed successfully, false otherwise
+ */
+bool processFrameFromCamera(
+    size_t frame,
+    const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &processingBuffer,
+    const ImageParams &params,
+    SharedResources &shared)
+{
+    const uint8_t *imageData = cameraBuffer[frame].data();
+    if (imageData == nullptr)
+    {
+        return false;
+    }
+
+    // Create a copy of the image data
+    std::vector<uint8_t> imageVector(imageData, imageData + params.imageSize);
+
+    // Add to both buffers
+    circularBuffer.push_back(imageVector);
+    processingBuffer.push_back(imageVector);
+
+    // Add frame to processing and display queues
+    {
+        std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+        std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+        shared.framesToProcess.push(frame);
+        shared.framesToDisplay.push(frame);
+    }
+
+    // Notify waiting threads
+    shared.displayQueueCondition.notify_one();
+    shared.processingQueueCondition.notify_one();
+
+    return true;
+}
+
+/**
+ * Frame monitoring function that processes new frames as they become available
+ *
+ * @param cameraBuffer The buffer containing camera frames
+ * @param circularBuffer The circular buffer for display
+ * @param processingBuffer The buffer for processing
+ * @param params Image parameters
+ * @param shared Shared resources
+ */
+void monitorAndProcessFrames(
+    const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &processingBuffer,
+    const ImageParams &params,
+    SharedResources &shared)
+{
+    size_t lastProcessedFrame = 0;
+
+    while (!shared.done)
+    {
+        // Skip processing if paused
+        if (shared.paused)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
+        // Check for new frames
+        size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
+        if (latestFrame != lastProcessedFrame)
+        {
+            if (processFrameFromCamera(latestFrame, cameraBuffer, circularBuffer,
+                                       processingBuffer, params, shared))
+            {
+                lastProcessedFrame = latestFrame;
+            }
+        }
+
+        // Small sleep to prevent CPU hogging
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+}
+
+/**
+ * Run a simulated camera sample processing pipeline
+ *
+ * This function sets up and runs a complete image processing pipeline using
+ * simulated camera input. It handles initialization, thread setup, and
+ * frame processing.
+ *
+ * @param params Image parameters for the simulation
+ * @param cameraBuffer Buffer containing camera frames
+ * @param circularBuffer Circular buffer for display
+ * @param processingBuffer Buffer for processing
+ * @param shared Shared resources
+ */
+void runSimulatedCameraPipeline(
+    const ImageParams &params,
+    boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &processingBuffer,
+    SharedResources &shared)
 {
     commonSampleLogic(shared, "default_save_directory", [&](SharedResources &shared, const std::string &saveDir)
                       {
-                          std::vector<std::thread> threads;
-                          setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
+        std::vector<std::thread> threads;
+        
+        // Setup common processing threads
+        setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
+        
+        // Add camera simulation thread
+        threads.emplace_back(simulateCameraThread,
+                            std::ref(cameraBuffer), 
+                            std::ref(shared), 
+                            std::ref(params));
+        
+        // Monitor and process frames
+        monitorAndProcessFrames(cameraBuffer, circularBuffer, processingBuffer, params, shared);
+        
+        return threads; });
+}
 
-                          threads.emplace_back(simulateCameraThread,
-                                               std::ref(cameraBuffer), std::ref(shared), std::ref(params));
-
-                          size_t lastProcessedFrame = 0;
-                          while (!shared.done)
-                          {
-                              if (shared.paused)
-                              {
-                                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                  continue;
-                              }
-                              size_t latestFrame = shared.latestCameraFrame.load(std::memory_order_acquire);
-                              if (latestFrame != lastProcessedFrame)
-                              {
-                                  const uint8_t *imageData = cameraBuffer[latestFrame].data();
-                                  if (imageData != nullptr)
-                                  {
-                                      std::vector<uint8_t> imageVector(imageData, imageData + params.imageSize);
-                                      circularBuffer.push_back(imageVector);
-                                      processingBuffer.push_back(imageVector);
-                                      {
-                                          std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
-                                          std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
-                                          shared.framesToProcess.push(latestFrame);
-                                          shared.framesToDisplay.push(latestFrame);
-                                      }
-                                      shared.displayQueueCondition.notify_one();
-                                      shared.processingQueueCondition.notify_one();
-                                      lastProcessedFrame = latestFrame;
-                                  }
-                              }
-                          }
-                          return threads; });
+// Maintain backward compatibility with the old function name
+void temp_mockSample(
+    const ImageParams &params,
+    boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &circularBuffer,
+    boost::circular_buffer<std::vector<uint8_t>> &processingBuffer,
+    SharedResources &shared)
+{
+    // Call the new function with the same parameters
+    runSimulatedCameraPipeline(params, cameraBuffer, circularBuffer, processingBuffer, shared);
 }

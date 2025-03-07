@@ -205,14 +205,33 @@ bool updateConfig(const std::string &filename, const std::string &key, const jso
 
 void updateBackgroundWithCurrentSettings(SharedResources &shared);
 
+// Thread management functions
 void temp_mockSample(const ImageParams &params, boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, SharedResources &shared);
-
+void runSimulatedCameraPipeline(const ImageParams &params, boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, SharedResources &shared);
 void simulateCameraThread(boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, SharedResources &shared, const ImageParams &params);
-void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
-                        const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, const ImageParams &params,
-                        std::vector<std::thread> &threads);
-void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
-                       std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
+void setupCommonThreads(SharedResources &shared, const std::string &saveDir, const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, const ImageParams &params, std::vector<std::thread> &threads);
+void commonSampleLogic(SharedResources &shared, const std::string &defaultSaveDir, std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
+
+// Helper functions for thread management
+void initializeEnvironment(SharedResources &shared);
+void ensureDirectoriesExist();
+void createDefaultConfigIfNeeded();
+std::string loadProcessingConfig(SharedResources &shared);
+std::string handleSaveDirectorySelection(const std::string &defaultSaveDir, const std::string &configSaveDir);
+
+// Thread creation helpers
+void addProcessingThread(std::vector<std::thread> &threads, SharedResources &shared, const boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, size_t width, size_t height);
+void addDisplayThread(std::vector<std::thread> &threads, SharedResources &shared, const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, size_t width, size_t height, size_t bufferCount);
+void addKeyboardHandlingThread(std::vector<std::thread> &threads, SharedResources &shared, const boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, size_t bufferCount, size_t width, size_t height);
+void addUtilityThreads(std::vector<std::thread> &threads, SharedResources &shared, const std::string &saveDir);
+
+// Camera simulation helpers
+size_t updateFpsStatistics(size_t frameCount, std::chrono::high_resolution_clock::time_point &fpsStartTime, SharedResources &shared);
+size_t processNextCameraFrame(size_t currentIndex, const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, SharedResources &shared);
+
+// Frame processing helpers
+bool processFrameFromCamera(size_t frame, const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, const ImageParams &params, SharedResources &shared);
+void monitorAndProcessFrames(const boost::circular_buffer<std::vector<uint8_t>> &cameraBuffer, boost::circular_buffer<std::vector<uint8_t>> &circularBuffer, boost::circular_buffer<std::vector<uint8_t>> &processingBuffer, const ImageParams &params, SharedResources &shared);
 
 ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared);
 
