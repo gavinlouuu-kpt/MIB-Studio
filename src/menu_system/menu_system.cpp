@@ -298,6 +298,48 @@ namespace MenuSystem
         std::cout << "Finished processing all batches." << std::endl;
     }
 
+    int selectCamera()
+    {
+        try
+        {
+            EGenTL genTL;
+            EGrabberDiscovery discovery(genTL);
+            std::cout << "Scanning for available eGrabbers and cameras..." << std::endl;
+            discovery.discover();
+
+            // Display available cameras
+            if (discovery.cameraCount() == 0)
+            {
+                throw std::runtime_error("No cameras detected in the system");
+            }
+
+            std::cout << "\nAvailable cameras:" << std::endl;
+            for (int i = 0; i < discovery.cameraCount(); ++i)
+            {
+                EGrabberCameraInfo info = discovery.cameras(i);
+                std::cout << i << ": " << info.grabbers[0].deviceModelName << std::endl;
+            }
+
+            // Let user select camera
+            std::cout << "\nSelect camera (0-" << discovery.cameraCount() - 1 << "): ";
+            int selectedCamera;
+            std::cin >> selectedCamera;
+            clearInputBuffer();
+
+            if (selectedCamera < 0 || selectedCamera >= discovery.cameraCount())
+            {
+                throw std::runtime_error("Invalid camera selection");
+            }
+
+            return selectedCamera;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return -1;
+        }
+    }
+
     int runMenu()
     {
         using namespace ftxui;

@@ -278,37 +278,20 @@ void runHybridSample()
 {
     try
     {
-        EGenTL genTL;
-        EGrabberDiscovery discovery(genTL);
-        std::cout << "Scanning for available eGrabbers and cameras..." << std::endl;
-        discovery.discover();
-
-        // Display available cameras
-        if (discovery.cameraCount() == 0)
+        int selectedCamera = MenuSystem::selectCamera();
+        if (selectedCamera < 0)
         {
-            throw std::runtime_error("No cameras detected in the system");
-        }
-
-        std::cout << "\nAvailable cameras:" << std::endl;
-        for (int i = 0; i < discovery.cameraCount(); ++i)
-        {
-            EGrabberCameraInfo info = discovery.cameras(i);
-            std::cout << i << ": " << info.grabbers[0].deviceModelName << std::endl;
-        }
-
-        // Let user select camera
-        std::cout << "\nSelect camera (0-" << discovery.cameraCount() - 1 << "): ";
-        int selectedCamera;
-        std::cin >> selectedCamera;
-
-        if (selectedCamera < 0 || selectedCamera >= discovery.cameraCount())
-        {
-            throw std::runtime_error("Invalid camera selection");
+            return;
         }
 
         lastUsedCameraIndex = selectedCamera;
+
         // Initialize grabber with selected camera
+        EGenTL genTL;
+        EGrabberDiscovery discovery(genTL);
+        discovery.discover();
         EGrabber<CallbackOnDemand> grabber(discovery.cameras(selectedCamera));
+
         ImageParams cameraParams = initializeGrabber(grabber);
 
         std::cout << "Select the image directory:\n";
@@ -337,39 +320,20 @@ int mib_grabber_main()
 {
     try
     {
-        EGenTL genTL;
-        EGrabberDiscovery discovery(genTL);
-
-        // Discover available cameras and grabbers
-        std::cout << "Scanning for available eGrabbers and cameras..." << std::endl;
-        discovery.discover();
-
-        // Display available cameras
-        if (discovery.cameraCount() == 0)
+        int selectedCamera = MenuSystem::selectCamera();
+        if (selectedCamera < 0)
         {
-            throw std::runtime_error("No cameras detected in the system");
-        }
-
-        std::cout << "\nAvailable cameras:" << std::endl;
-        for (int i = 0; i < discovery.cameraCount(); ++i)
-        {
-            EGrabberCameraInfo info = discovery.cameras(i);
-            std::cout << i << ": " << info.grabbers[0].deviceModelName << std::endl;
-        }
-
-        // Let user select camera
-        std::cout << "\nSelect camera (0-" << discovery.cameraCount() - 1 << "): ";
-        int selectedCamera;
-        std::cin >> selectedCamera;
-
-        if (selectedCamera < 0 || selectedCamera >= discovery.cameraCount())
-        {
-            throw std::runtime_error("Invalid camera selection");
+            return 1;
         }
 
         lastUsedCameraIndex = selectedCamera;
+
         // Initialize grabber with selected camera
+        EGenTL genTL;
+        EGrabberDiscovery discovery(genTL);
+        discovery.discover();
         EGrabber<CallbackOnDemand> grabber(discovery.cameras(selectedCamera));
+
         // Continue with your existing initialization and grabbing logic
         ImageParams params = initializeGrabber(grabber);
         CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
