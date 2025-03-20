@@ -75,38 +75,34 @@ int selectCamera()
 
 void configure_js(std::string config_path)
 {
-
     try
     {
-        EGenTL gentl;
-        EGrabberDiscovery discovery(gentl);
-
         // Verify file extension
         if (config_path.substr(config_path.size() - 3) != ".js")
         {
             throw std::runtime_error("Config path must end with .js");
         }
 
-        // Discover available cameras
+        // Always select a camera for configuration
+        int selectedCamera = selectCamera();
+        if (selectedCamera < 0)
+        {
+            // Selection failed or was canceled
+            return;
+        }
+
+        // Update the last used camera index for other functions
+        lastUsedCameraIndex = selectedCamera;
+
+        // Initialize grabber with the selected camera
+        EGenTL gentl;
+        EGrabberDiscovery discovery(gentl);
         discovery.discover();
-
-        if (discovery.cameraCount() == 0)
-        {
-            throw std::runtime_error("No cameras detected");
-        }
-
-        // If no camera was previously selected, use the first one
-        if (lastUsedCameraIndex < 0 || lastUsedCameraIndex >= discovery.cameraCount())
-        {
-            lastUsedCameraIndex = 0;
-        }
-
-        // Initialize grabber with the last used camera
-        Euresys::EGrabber<> grabber(discovery.cameras(lastUsedCameraIndex));
+        Euresys::EGrabber<> grabber(discovery.cameras(selectedCamera));
 
         // Run the configuration script
         grabber.runScript(config_path);
-        std::cout << "Config script executed successfully on camera " << lastUsedCameraIndex << std::endl;
+        std::cout << "Config script executed successfully on camera " << selectedCamera << std::endl;
     }
     catch (const std::exception &e)
     {
