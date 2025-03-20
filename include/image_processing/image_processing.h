@@ -223,3 +223,6 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 
 // Function to determine overlay color based on FilterResult
 cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);
+
+void createDefaultConfigIfMissing(const std::filesystem::path &configPath);
+std::string selectSaveDirectory(const std::string &configPath);

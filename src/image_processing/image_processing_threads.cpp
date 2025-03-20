@@ -915,94 +915,15 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
 
-    // Create output directory if it doesn't exist
-    std::filesystem::path outputDir("output");
-    if (!std::filesystem::exists(outputDir))
-    {
-        std::filesystem::create_directory(outputDir);
-    }
-
     // Create egrabberConfig.js if it doesn't exist
-    std::filesystem::path configFile("egrabberConfig.js");
-    if (!std::filesystem::exists(configFile))
-    {
-        std::ofstream file(configFile);
-        file << "// Decrease the resolution before increasing the frame rate\n\n"
-             << "// var g = grabbers[0];\n"
-             << "// g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
-             << "// g.InterfacePort.set(\"LineMode\", \"Output\");\n"
-             << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
-             << "// g.RemotePort.set(\"Width\", 512);\n"
-             << "// g.RemotePort.set(\"Height\", 96);\n"
-             << "// g.RemotePort.set(\"ExposureTime\", 2);\n"
-             << "// g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
-             << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
-             << "// var g = grabbers[0];\n"
-             << "// g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
-             << "// g.InterfacePort.set(\"LineMode\", \"Output\");\n"
-             << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
-             << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
-             << "// g.RemotePort.set(\"ExposureTime\", 20);\n"
-             << "// g.RemotePort.set(\"Width\", 1920);\n"
-             << "// g.RemotePort.set(\"Height\", 1080);\n";
-        file.close();
-    }
-    // saving UI block
-    json config = readConfig("config.json");
-    // Initialize processing configuration
-    ProcessingConfig processingConfig = getProcessingConfig(config);
-    std::string saveDir = config["save_directory"];
+    createDefaultConfigIfMissing("egrabberConfig.js");
 
-    std::cout << "Current save directory: " << saveDir << std::endl;
-    std::cout << "Choose save directory option:\n";
-    std::cout << "1: Use current directory\n";
-    std::cout << "2: Enter new directory\n";
-    std::cout << "3: Use testing directory (will overwrite existing)\n";
-    std::cout << "Choice: ";
-    int choice;
-    std::cin >> choice;
-
-    if (choice == 2)
-    {
-        std::cout << "Enter new save directory name: ";
-        std::cin >> saveDir;
-
-        // Update the config file with the new base directory
-        updateConfig("config.json", "save_directory", saveDir);
-    }
-    else if (choice == 3)
-    {
-        saveDir = "testing";
-        // Remove existing testing directory if it exists
-        std::filesystem::path testPath = outputDir / saveDir;
-        if (std::filesystem::exists(testPath))
-        {
-            std::filesystem::remove_all(testPath);
-        }
-        // Update the config file with the testing directory
-        updateConfig("config.json", "save_directory", saveDir);
-    }
-
-    // Create full path within output directory
-    std::filesystem::path fullPath = outputDir / saveDir;
-    std::string basePath = fullPath.string();
-    shared.saveDirectory = basePath;
-
-    // Automatically increment the directory name if it already exists
-    int suffix = 1;
-    while (std::filesystem::exists(fullPath))
-    {
-        fullPath = outputDir / (saveDir + "_" + std::to_string(suffix));
-        suffix++;
-    }
-
-    // Create the subdirectory
-    std::filesystem::create_directories(fullPath);
-
-    std::cout << "Using save directory: " << fullPath.string() << std::endl;
+    // Select save directory
+    std::string saveDir = selectSaveDirectory("config.json");
+    shared.saveDirectory = saveDir;
 
     // Call the setup function passed as parameter
-    std::vector<std::thread> threads = setupThreads(shared, fullPath.string());
+    std::vector<std::thread> threads = setupThreads(shared, saveDir);
 
     // Wait for completion
     shared.displayQueueCondition.notify_all();
