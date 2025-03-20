@@ -15,5 +15,3 @@ namespace MenuSystem
     void processAllBatches(const std::string &saveDirectory);
     std::string navigateAndSelectFolder();
 } // namespace MenuSystem
-
-int selectCamera();

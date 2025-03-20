@@ -21,3 +21,4 @@ void temp_sample(Euresys::EGrabber<Euresys::CallbackOnDemand> &grabber, const Im
 void hybrid_sample(Euresys::EGrabber<Euresys::CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared);
 void runHybridSample();
 int mib_grabber_main();
+int selectCamera();
