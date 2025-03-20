@@ -100,9 +100,17 @@ void configure_js(std::string config_path)
         discovery.discover();
         Euresys::EGrabber<> grabber(discovery.cameras(selectedCamera));
 
-        // Run the configuration script
-        grabber.runScript(config_path);
-        std::cout << "Config script executed successfully on camera " << selectedCamera << std::endl;
+        try
+        {
+            // Run the configuration script
+            std::cout << "Attempting to execute config script: " << config_path << std::endl;
+            grabber.runScript(config_path);
+            std::cout << "Config script executed successfully on camera " << selectedCamera << std::endl;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Exception during script execution: " << e.what() << std::endl;
+        }
     }
     catch (const std::exception &e)
     {
@@ -112,19 +120,29 @@ void configure_js(std::string config_path)
 
 ImageParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
 {
-    grabber.reallocBuffers(3);
-    grabber.start(1);
-    ScopedBuffer firstBuffer(grabber);
+    try
+    {
+        grabber.reallocBuffers(3);
+        grabber.start(1);
+        ScopedBuffer firstBuffer(grabber);
 
-    ImageParams params;
-    params.width = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_WIDTH);
-    params.height = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_HEIGHT);
-    params.pixelFormat = firstBuffer.getInfo<uint64_t>(gc::BUFFER_INFO_PIXELFORMAT);
-    params.imageSize = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE);
-    params.bufferCount = 5000; // You can adjust this as needed
+        ImageParams params;
+        params.width = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_WIDTH);
+        params.height = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_HEIGHT);
+        params.pixelFormat = firstBuffer.getInfo<uint64_t>(gc::BUFFER_INFO_PIXELFORMAT);
+        params.imageSize = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE);
+        params.bufferCount = 5000; // You can adjust this as needed
 
-    grabber.stop();
-    return params;
+        grabber.stop();
+        return params;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Exception in initializeGrabber: " << e.what() << std::endl;
+        // Return default parameters to prevent further crashes
+        ImageParams defaultParams{640, 480, 0, 307200, 5000};
+        return defaultParams;
+    }
 }
 
 void initializeBackgroundFrame(SharedResources &shared, const ImageParams &params)
@@ -239,76 +257,96 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                           threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
                           threads.emplace_back(processTriggerThread, std::ref(grabber), std::ref(shared));
 
-                          grabber.start();
-                          // egrabber request fps and exposure time load to shared.resources for metric display
-                          uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
-                          uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
-                          // Get exposure time
-                          uint64_t exposureTime = grabber.getInteger<RemoteModule>("ExposureTime");
-                          shared.currentFPS = static_cast<double>(fr);
-                          shared.dataRate = static_cast<double>(dr);
-                          shared.exposureTime = exposureTime;
-                          size_t frameCount = 0;
-                          uint64_t lastFrameId = 0;
-                          uint64_t duplicateCount = 0;
-                          while (!shared.done)
-                          {
-                              if (shared.paused)
-                              {
-                                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                  cv::waitKey(1);
-                                  continue;
-                              }
-
-                              // Update FPS and other metrics periodically (every 100 frames or so)
-                              if (frameCount % 100 == 0)
-                              {
+                          try {
+                              grabber.start();
+                              // egrabber request fps and exposure time load to shared.resources for metric display
+                              try {
                                   uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
                                   uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
+                                  // Get exposure time
                                   uint64_t exposureTime = grabber.getInteger<RemoteModule>("ExposureTime");
                                   shared.currentFPS = static_cast<double>(fr);
                                   shared.dataRate = static_cast<double>(dr);
                                   shared.exposureTime = exposureTime;
-                                  shared.updated = true;
                               }
-
-                              ScopedBuffer buffer(grabber);
-                              uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
-                              uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);
-                              uint64_t timestamp = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_TIMESTAMP);
-                              bool isIncomplete = buffer.getInfo<bool>(gc::BUFFER_INFO_IS_INCOMPLETE);
-                              size_t sizeFilled = buffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE_FILLED);
-
-                              if (!isIncomplete)
+                              catch (const std::exception &e) {
+                                  std::cerr << "Error retrieving camera statistics: " << e.what() << std::endl;
+                                  // Use default values
+                                  shared.currentFPS = 0.0;
+                                  shared.dataRate = 0.0;
+                                  shared.exposureTime = 0;
+                              }
+                              
+                              size_t frameCount = 0;
+                              uint64_t lastFrameId = 0;
+                              uint64_t duplicateCount = 0;
+                              while (!shared.done)
                               {
-                                  if (frameId <= lastFrameId)
+                                  if (shared.paused)
                                   {
-                                      ++duplicateCount;
-                                      //   std::cout << "Duplicate frame detected: FrameID=" << frameId << ", Timestamp=" << timestamp << std::endl;
+                                      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                      cv::waitKey(1);
+                                      continue;
+                                  }
+
+                                  // Update FPS and other metrics periodically (every 100 frames or so)
+                                  if (frameCount % 100 == 0)
+                                  {
+                                      uint64_t fr = grabber.getInteger<StreamModule>("StatisticsFrameRate");
+                                      uint64_t dr = grabber.getInteger<StreamModule>("StatisticsDataRate");
+                                      uint64_t exposureTime = grabber.getInteger<RemoteModule>("ExposureTime");
+                                      shared.currentFPS = static_cast<double>(fr);
+                                      shared.dataRate = static_cast<double>(dr);
+                                      shared.exposureTime = exposureTime;
+                                      shared.updated = true;
+                                  }
+
+                                  ScopedBuffer buffer(grabber);
+                                  uint8_t *imagePointer = buffer.getInfo<uint8_t *>(gc::BUFFER_INFO_BASE);
+                                  uint64_t frameId = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_FRAMEID);
+                                  uint64_t timestamp = buffer.getInfo<uint64_t>(gc::BUFFER_INFO_TIMESTAMP);
+                                  bool isIncomplete = buffer.getInfo<bool>(gc::BUFFER_INFO_IS_INCOMPLETE);
+                                  size_t sizeFilled = buffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE_FILLED);
+
+                                  if (!isIncomplete)
+                                  {
+                                      if (frameId <= lastFrameId)
+                                      {
+                                          ++duplicateCount;
+                                          //   std::cout << "Duplicate frame detected: FrameID=" << frameId << ", Timestamp=" << timestamp << std::endl;
+                                      }
+                                      else
+                                      {
+                                          circularBuffer.push(imagePointer);
+                                          processingBuffer.push(imagePointer);
+                                          {
+                                              std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
+                                              std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
+                                              shared.framesToProcess.push(frameCount);
+                                              shared.framesToDisplay.push(frameCount);
+                                          }
+                                          shared.displayQueueCondition.notify_one();
+                                          shared.processingQueueCondition.notify_one();
+                                          frameCount++;
+                                      }
+                                      lastFrameId = frameId;
                                   }
                                   else
                                   {
-                                      circularBuffer.push(imagePointer);
-                                      processingBuffer.push(imagePointer);
-                                      {
-                                          std::lock_guard<std::mutex> displayLock(shared.displayQueueMutex);
-                                          std::lock_guard<std::mutex> processingLock(shared.processingQueueMutex);
-                                          shared.framesToProcess.push(frameCount);
-                                          shared.framesToDisplay.push(frameCount);
-                                      }
-                                      shared.displayQueueCondition.notify_one();
-                                      shared.processingQueueCondition.notify_one();
-                                      frameCount++;
+                                      //   std::cout << "Incomplete frame received: FrameID=" << frameId << std::endl;
                                   }
-                                  lastFrameId = frameId;
-                              }
-                              else
-                              {
-                                  //   std::cout << "Incomplete frame received: FrameID=" << frameId << std::endl;
                               }
                           }
+                          catch (const std::exception &e) {
+                              std::cerr << "Exception in grabbing loop: " << e.what() << std::endl;
+                          }
 
-                          grabber.stop();
+                          try {
+                              grabber.stop();
+                          }
+                          catch (const std::exception &e) {
+                              std::cerr << "Error stopping grabber: " << e.what() << std::endl;
+                          }
 
                           return threads; });
 }
@@ -368,20 +406,28 @@ int mib_grabber_main()
         lastUsedCameraIndex = selectedCamera;
 
         // Initialize grabber with selected camera
-        EGenTL genTL;
-        EGrabberDiscovery discovery(genTL);
-        discovery.discover();
-        EGrabber<CallbackOnDemand> grabber(discovery.cameras(selectedCamera));
+        try
+        {
+            EGenTL genTL;
+            EGrabberDiscovery discovery(genTL);
+            discovery.discover();
+            EGrabber<CallbackOnDemand> grabber(discovery.cameras(selectedCamera));
 
-        // Continue with your existing initialization and grabbing logic
-        ImageParams params = initializeGrabber(grabber);
-        CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
-        CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
-        SharedResources shared;
-        initializeBackgroundFrame(shared, params);
-        shared.roi = cv::Rect(0, 0, static_cast<int>(params.width), static_cast<int>(params.height));
+            // Continue with your existing initialization and grabbing logic
+            ImageParams params = initializeGrabber(grabber);
+            CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
+            CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
+            SharedResources shared;
+            initializeBackgroundFrame(shared, params);
+            shared.roi = cv::Rect(0, 0, static_cast<int>(params.width), static_cast<int>(params.height));
 
-        temp_sample(grabber, params, circularBuffer, processingBuffer, shared);
+            temp_sample(grabber, params, circularBuffer, processingBuffer, shared);
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Exception in mib_grabber_main: " << e.what() << std::endl;
+            return 1;
+        }
     }
     catch (const std::exception &e)
     {
