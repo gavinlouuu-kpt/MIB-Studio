@@ -917,7 +917,6 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 
     // Create egrabberConfig.js if it doesn't exist
     createDefaultConfigIfMissing("egrabberConfig.js");
-    configure_js("egrabberConfig.js");
 
     // Select save directory
     std::string saveDir = selectSaveDirectory("config.json");
