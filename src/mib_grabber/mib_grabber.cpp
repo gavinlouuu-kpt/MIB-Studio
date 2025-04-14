@@ -134,21 +134,21 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
-void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
-{
-    // grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
-    // grabber.setString<InterfaceModule>("LineMode", "Output");
-    grabber.setString<InterfaceModule>("LineSource", shared.triggerOut ? "High" : "Low");
-}
+// void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+// {
+//     // grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+//     // grabber.setString<InterfaceModule>("LineMode", "Output");
+//     grabber.setString<InterfaceModule>("LineSource", shared.triggerOut ? "High" : "Low");
+// }
 
-void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
-{
-    while (!shared.done)
-    {
-        triggerOut(grabber, shared);
-        // wait do not sleep
-    }
-}
+// void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+// {
+//     while (!shared.done)
+//     {
+//         triggerOut(grabber, shared);
+//         // wait do not sleep
+//     }
+// }
 
 void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
@@ -193,7 +193,7 @@ void hybrid_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &param
                           std::vector<std::thread> threads;
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
                           threads.emplace_back(simulateCameraThread, std::ref(cameraBuffer), std::ref(shared), std::ref(params));
-                          threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
+                        //   threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
                           threads.emplace_back(processTriggerThread, std::ref(grabber), std::ref(shared));
 
                           grabber.start();
@@ -235,8 +235,8 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                       {
                           std::vector<std::thread> threads;
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
-                          // Add trigger thread before starting the grabber
-                          threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
+                          
+                        //   threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared)); // previous testing trigger 
                           threads.emplace_back(processTriggerThread, std::ref(grabber), std::ref(shared));
 
                           grabber.start();

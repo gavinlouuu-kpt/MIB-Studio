@@ -1,5 +1,5 @@
 {
-    "cmake.sourceDirectory": "D:/code/mib-studio",
+    "cmake.sourceDirectory": "D:/MIB-Studio",
     "files.associations": {
         "algorithm": "cpp",
         "atomic": "cpp",

@@ -186,8 +186,8 @@ void metricDisplayThread(SharedResources &shared)
                                                 text(shared.paused.load() ? "Yes" : "No")}),
                                           hbox({text("Overlay Mode: "),
                                                 text(shared.overlayMode.load() ? "Yes" : "No")}),
-                                          hbox({text("Trigger Out: "),
-                                                text(shared.triggerOut.load() ? "Yes" : "No")}),
+                                          //   hbox({text("Trigger Out: "),
+                                          // text(shared.triggerOut.load() ? "Yes" : "No")}),
                                           hbox({text("Current Frame Index: "),
                                                 text(std::to_string(shared.currentFrameIndex.load()))}),
                                           hbox({text("Saving Speed: "),
@@ -826,10 +826,10 @@ void keyboardHandlingThread(
             }
             shared.displayNeedsUpdate = true;
         }
-        else if (key == 't' || key == 'T')
-        {
-            shared.triggerOut = !shared.triggerOut;
-        }
+        // else if (key == 't' || key == 'T')
+        // {
+        //     shared.triggerOut = !shared.triggerOut;
+        // }
         else if (key == 'r' || key == 'R')
         {
             shared.running = !shared.running;
