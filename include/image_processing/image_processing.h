@@ -137,6 +137,8 @@ struct SharedResources
     cv::Mat backgroundFrame;
     cv::Mat blurredBackground;
     std::mutex backgroundFrameMutex;
+    std::string backgroundCaptureTime;     // Timestamp when background was captured
+    std::mutex backgroundCaptureTimeMutex; // Mutex for the background capture time
     cv::Rect roi;
     std::mutex roiMutex;
 
@@ -154,7 +156,7 @@ struct SharedResources
     std::string saveDirectory;
     // metrics
     CircularBuffer processingTimes{1000, sizeof(double)};                          // Buffer to store last 1000 processing times
-    CircularBuffer deformabilityBuffer{10000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
+    CircularBuffer deformabilityBuffer{30000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
     std::mutex deformabilityBufferMutex;
     std::atomic<double> currentFPS;
     std::atomic<double> dataRate;

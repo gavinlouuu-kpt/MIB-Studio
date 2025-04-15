@@ -179,6 +179,13 @@ void metricDisplayThread(SharedResources &shared)
 
     auto render_status = [&]()
     {
+        // Get the background capture time with proper lock
+        std::string bgCaptureTime;
+        {
+            std::lock_guard<std::mutex> lock(shared.backgroundCaptureTimeMutex);
+            bgCaptureTime = shared.backgroundCaptureTime.empty() ? "Not set" : shared.backgroundCaptureTime;
+        }
+
         return window(text("Status"), vbox({
                                           hbox({text("Running: "),
                                                 text(shared.running.load() ? "Yes" : "No")}),
@@ -192,7 +199,8 @@ void metricDisplayThread(SharedResources &shared)
                                                 text(std::to_string(shared.currentFrameIndex.load()))}),
                                           hbox({text("Saving Speed: "),
                                                 text(std::to_string((int)shared.diskSaveTime.load()) + " ms")}),
-
+                                          hbox({text("Background Captured: "),
+                                                text(bgCaptureTime)}),
                                       }));
     };
 
@@ -202,7 +210,7 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("ESC: Exit program"),
                                                          text("Space: Pause/Resume live feed"),
                                                          text("When Paused:"),
-                                                         text("  B: Set current frame as background"),
+                                                         text("  B: Set current frame as background (logs timestamp)"),
                                                          text("  A: Next frame"),
                                                          text("  D: Previous frame"),
                                                          text("Display Options:"),
@@ -755,8 +763,8 @@ void keyboardHandlingThread(
         }
         else if (key == 'q' || key == 'Q')
         {
-            // std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
-            // shared.deformabilityBuffer.clear();
+            std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
+            shared.deformabilityBuffer.clear();
         }
         else if (key == 'S')
         {
@@ -823,8 +831,21 @@ void keyboardHandlingThread(
                 {
                     // std::cout << "Background set." << std::endl;
                 }
+
+                // Record the timestamp when background was captured
+                auto now = std::chrono::system_clock::now();
+                auto time_t_now = std::chrono::system_clock::to_time_t(now);
+                std::lock_guard<std::mutex> timeLock(shared.backgroundCaptureTimeMutex);
+
+                // Format time to only show hours:minutes:seconds
+                std::tm timeInfo;
+                localtime_s(&timeInfo, &time_t_now);
+                char buffer[9]; // HH:MM:SS + null terminator
+                strftime(buffer, sizeof(buffer), "%H:%M:%S", &timeInfo);
+                shared.backgroundCaptureTime = buffer;
             }
             shared.displayNeedsUpdate = true;
+            shared.updated = true; // Ensure dashboard gets updated
         }
         // else if (key == 't' || key == 'T')
         // {
@@ -914,6 +935,12 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.deformabilityBuffer.clear();
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
+
+    // Initialize the background capture time
+    {
+        std::lock_guard<std::mutex> lock(shared.backgroundCaptureTimeMutex);
+        shared.backgroundCaptureTime = "";
+    }
 
     // Create egrabberConfig.js if it doesn't exist
     createDefaultConfigIfMissing("egrabberConfig.js");

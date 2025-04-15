@@ -198,6 +198,18 @@ void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &p
     {
         std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
     }
+
+    // Record the timestamp when background was automatically initialized
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::lock_guard<std::mutex> timeLock(shared.backgroundCaptureTimeMutex);
+
+    // Format time to only show hours:minutes:seconds
+    std::tm timeInfo;
+    localtime_s(&timeInfo, &time_t_now);
+    char buffer[9]; // HH:MM:SS + null terminator
+    strftime(buffer, sizeof(buffer), "%H:%M:%S", &timeInfo);
+    shared.backgroundCaptureTime = std::string(buffer) + " (auto)"; // Indicate this was automatic initialization
 }
 
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared)
