@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <!-- Resources will be added here as needed -->
+    </qresource>
+    <qresource prefix="/images">
+        <!-- Resources will be added here as needed -->
+    </qresource>
+</RCC> 

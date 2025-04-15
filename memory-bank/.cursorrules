@@ -1,0 +1,39 @@
+# MIB-Studio Project Rules
+
+## Critical Implementation Paths
+- The core image processing must remain independent of UI framework
+- OpenCV Mat objects need conversion to Qt-compatible formats (QImage) for display
+- All UI updates must be thread-safe and non-blocking
+- Performance metrics should be collected with minimal overhead
+
+## Project Preferences
+- Use Qt6 rather than Qt5
+- Prefer Qt's signals/slots for communication between components
+- Use QtCharts for all metric visualizations
+- Maintain CMake/vcpkg for dependency management
+- Follow Qt naming conventions for new Qt-specific code
+
+## Code Style
+- Use camelCase for methods and variables
+- Use PascalCase for class names
+- Use snake_case for file names
+- Document all public interfaces using doxygen-style comments
+- Group related functionality into namespaces
+
+## File Organization
+- Qt UI files (.ui) should be in a dedicated ui/ directory
+- Qt resource files (.qrc) should be in a resources/ directory
+- Separate processing logic from UI code where possible
+- Use include guards with project prefix (e.g., MIB_STUDIO_HEADER_H)
+
+## Build Process
+- Always update vcpkg before adding new dependencies
+- Use CMake's find_package for detecting Qt components
+- Configure Qt's MOC, UIC, and RCC in CMakeLists.txt
+- Add separate build targets for UI-related components
+
+## Testing Strategy
+- UI changes should not break existing image processing logic
+- Performance benchmarks must be run before and after Qt integration
+- Test on multiple platforms if possible (Windows priority)
+- Test with various camera resolutions and frame rates 
