@@ -221,9 +221,13 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     std::ofstream csvFile(csvFilePath);
 
     std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
+    
+    // Save condition from configuration
+    json condition_config = readConfig("config.json");
+    std::string condition = condition_config["save_directory"];
 
     // Write CSV header
-    csvFile << "Timestamp_us,Deformability,Area\n";
+    csvFile << "Condition, Timestamp_us,Deformability,Area\n";
 
     // Add this block to save both background images
     if (!results.empty())
@@ -250,7 +254,8 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     for (const auto &result : results)
     {
         // Write data to CSV
-        csvFile << result.timestamp << ","
+        csvFile << condition << ","
+                << result.timestamp << ","
                 << result.deformability << ","
                 << result.area << "\n";
 
