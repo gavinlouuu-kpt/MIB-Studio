@@ -791,6 +791,23 @@ void displayKeyboardInstructions() {
     std::cout << "-----------------------------------\n" << std::endl;
 }
 
+// Helper function to parse CSV headers and get column indices
+std::map<std::string, int> parseCSVHeaders(const std::string& headerLine) {
+    std::map<std::string, int> headerMap;
+    std::stringstream ss(headerLine);
+    std::string header;
+    int index = 0;
+    
+    while (std::getline(ss, header, ',')) {
+        // Trim whitespace
+        header.erase(0, header.find_first_not_of(" \t"));
+        header.erase(header.find_last_not_of(" \t") + 1);
+        headerMap[header] = index++;
+    }
+    
+    return headerMap;
+}
+
 void reviewSavedData()
 {
     std::string projectPath = MenuSystem::navigateAndSelectFolder();
@@ -965,10 +982,35 @@ void reviewSavedData()
         
         // Load all measurements from the master CSV
         std::ifstream csvFile(masterDataPath);
-        std::string header;
-        std::getline(csvFile, header); // Skip header
-        std::string line;
+        std::string headerLine;
+        std::getline(csvFile, headerLine); // Get header line
         
+        // Parse headers to find column indices
+        auto headers = parseCSVHeaders(headerLine);
+        
+        // Debug header information
+        std::cout << "CSV Headers: " << headerLine << std::endl;
+        std::cout << "Parsed header mapping: ";
+        for (const auto& [name, index] : headers) {
+            std::cout << name << "=" << index << " ";
+        }
+        std::cout << std::endl;
+        
+        // Check for required columns
+        if (!headers.count("Batch") || !headers.count("Timestamp_us") || 
+            !headers.count("Deformability") || !headers.count("Area")) {
+            std::cerr << "Error: Missing required columns in CSV. Expected: Batch, Timestamp_us, Deformability, Area" << std::endl;
+            return;
+        }
+        
+        // Get column indices
+        int batchIdx = headers["Batch"];
+        int conditionIdx = headers.count("Condition") ? headers["Condition"] : -1;
+        int timestampIdx = headers["Timestamp_us"];
+        int deformabilityIdx = headers["Deformability"];
+        int areaIdx = headers["Area"];
+        
+        std::string line;
         while (std::getline(csvFile, line)) {
             std::stringstream lineStream(line);
             std::string cell;
@@ -978,14 +1020,20 @@ void reviewSavedData()
                 values.push_back(cell);
             }
             
-            if (values.size() >= 5) {
-                allMeasurements.emplace_back(
-                    std::stoi(values[0]),     // Batch number
-                    values[1],                // Condition
-                    std::stoll(values[2]),    // Timestamp
-                    std::stod(values[3]),     // Deformability
-                    std::stod(values[4])      // Area
-                );
+            if (values.size() > std::max({batchIdx, conditionIdx, timestampIdx, deformabilityIdx, areaIdx})) {
+                try {
+                    std::string condition = (conditionIdx >= 0) ? values[conditionIdx] : "unknown";
+                    
+                    allMeasurements.emplace_back(
+                        std::stoi(values[batchIdx]),
+                        condition,
+                        std::stoll(values[timestampIdx]),
+                        std::stod(values[deformabilityIdx]),
+                        std::stod(values[areaIdx])
+                    );
+                } catch (const std::exception& e) {
+                    std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
+                }
             }
         }
         
@@ -1292,10 +1340,29 @@ void reviewSavedData()
 
         // Load CSV data
         std::ifstream csvFile((batchDirs[currentBatchIndex] / "batch_data.csv").string());
-        std::string line;
-        std::getline(csvFile, line);                                     // Skip header
+        std::string headerLine;
+        std::getline(csvFile, headerLine); // Get header line
+        
+        // Parse headers to find column indices
+        auto headers = parseCSVHeaders(headerLine);
+        
+        // Debug header information
+        std::cout << "Batch CSV Headers: " << headerLine << std::endl;
+        
+        // Check for required columns and get indices
+        if (!headers.count("Timestamp_us") || !headers.count("Deformability") || !headers.count("Area")) {
+            std::cerr << "Error: Missing required columns in batch CSV. Expected: Timestamp_us, Deformability, Area" << std::endl;
+            continue; // Skip this batch
+        }
+        
+        int conditionIdx = headers.count("Condition") ? headers["Condition"] : -1;
+        int timestampIdx = headers["Timestamp_us"];
+        int deformabilityIdx = headers["Deformability"];
+        int areaIdx = headers["Area"];
+
         std::vector<std::tuple<long long, double, double>> measurements; // timestamp, deformability, area
 
+        std::string line;
         while (std::getline(csvFile, line))
         {
             std::stringstream ss(line);
@@ -1307,12 +1374,17 @@ void reviewSavedData()
                 values.push_back(value);
             }
 
-            if (values.size() >= 3)
+            if (values.size() > std::max({timestampIdx, deformabilityIdx, areaIdx}))
             {
-                measurements.emplace_back(
-                    std::stoll(values[0]),
-                    std::stod(values[1]),
-                    std::stod(values[2]));
+                try {
+                    measurements.emplace_back(
+                        std::stoll(values[timestampIdx]),
+                        std::stod(values[deformabilityIdx]),
+                        std::stod(values[areaIdx])
+                    );
+                } catch (const std::exception& e) {
+                    std::cerr << "Error parsing batch data line: " << line << " - " << e.what() << std::endl;
+                }
             }
         }
 
