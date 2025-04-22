@@ -127,19 +127,21 @@ void metricDisplayThread(SharedResources &shared)
         lastCheckTime = now;
         lastBufferCount = currentBufferCount;
 
-        return rate;
+        // Return the rate and the shared recorded items count
+        return std::make_tuple(rate, shared.recordedItemsCount.load());
     };
 
     auto render_processing_metrics = [&]()
     {
         auto [instantTime, avgTime, maxTime, minTime, highLatencyPct] = calculateProcessingMetrics(shared.processingTimes);
-        double rate = calculateDeformabilityBufferRate(shared);
+        auto [rate, recordedCount] = calculateDeformabilityBufferRate(shared);
 
         return window(text("Processing Metrics"), vbox({hbox({text("Avg Processing Time: "), text(std::to_string((int)avgTime) + " us")}),
                                                         hbox({text("Max Processing Time: "), text(std::to_string((int)maxTime) + " us")}),
                                                         hbox({text("High Latency (>200us): "), text(std::to_string(highLatencyPct) + "%")}),
                                                         hbox({text("Processing Queue Size: "), text(std::to_string(shared.framesToProcess.size()) + " frames")}),
                                                         hbox({text("Deformability Buffer Size: "), text(std::to_string(shared.deformabilityBuffer.size()) + " sets")}),
+                                                        hbox({text("Recorded Items Count: "), text(std::to_string(recordedCount) + " items")}),
                                                         hbox({text("Processed Trigger: "), text(shared.processTrigger.load() ? "Yes" : "No")}),
                                                         hbox({text("Trigger Onset Duration: "), text(std::to_string(shared.triggerOnsetDuration.load()) + " us")}),
                                                         hbox({text("Deformability: "), text(std::to_string(shared.frameDeformabilities.load()))}),
@@ -201,6 +203,8 @@ void metricDisplayThread(SharedResources &shared)
                                                 text(std::to_string((int)shared.diskSaveTime.load()) + " ms")}),
                                           hbox({text("Background Captured: "),
                                                 text(bgCaptureTime)}),
+                                          hbox({text("Recorded Items: "),
+                                                text(std::to_string(shared.recordedItemsCount.load()))}),
                                       }));
     };
 
@@ -305,6 +309,11 @@ void processingThreadTask(
 
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
+                        
+                        // If running is true, increment the recorded items counter
+                        if (shared.running) {
+                            shared.recordedItemsCount.fetch_add(1, std::memory_order_relaxed);
+                        }
 
                         if (shared.running)
                         {
@@ -765,6 +774,7 @@ void keyboardHandlingThread(
         {
             std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
             shared.deformabilityBuffer.clear();
+            shared.recordedItemsCount = 0; // Reset the recorded items counter
         }
         else if (key == 'S')
         {
@@ -847,12 +857,9 @@ void keyboardHandlingThread(
             shared.displayNeedsUpdate = true;
             shared.updated = true; // Ensure dashboard gets updated
         }
-        // else if (key == 't' || key == 'T')
-        // {
-        //     shared.triggerOut = !shared.triggerOut;
-        // }
         else if (key == 'r' || key == 'R')
         {
+            // Toggle running state
             shared.running = !shared.running;
         }
         shared.updated = true;
@@ -935,6 +942,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.deformabilityBuffer.clear();
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
+    shared.recordedItemsCount = 0; // Initialize recorded items counter
 
     // Initialize the background capture time
     {

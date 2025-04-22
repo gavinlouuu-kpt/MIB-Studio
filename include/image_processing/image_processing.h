@@ -121,6 +121,7 @@ struct SharedResources
     std::atomic<int> currentFrameIndex{-1};
     std::atomic<bool> displayNeedsUpdate{false};
     std::atomic<int> currentBatchNumber{0};
+    std::atomic<size_t> recordedItemsCount{0}; // Counter for items recorded during 'running' state
 
     std::atomic<size_t> latestCameraFrame{0}; // for simulated camera
     std::atomic<size_t> frameRateCount{0};    // for simulated camera
