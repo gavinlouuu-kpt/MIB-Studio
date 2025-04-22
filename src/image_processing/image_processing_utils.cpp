@@ -643,6 +643,154 @@ bool updateConfig(const std::string &filename, const std::string &key, const jso
     }
 }
 
+FilterResult legacyContourAnalysis(const cv::Mat &processedImage, const cv::Rect &roi, const ProcessingConfig &config)
+{
+    // Initialize result with default values
+    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0};
+    
+    // Find contours using the legacy approach (no hierarchy/nested contour detection)
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(processedImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    
+    // Filter out small noise contours
+    std::vector<std::vector<cv::Point>> filteredContours;
+    
+    // Minimum area threshold to filter out noise
+    const double minNoiseArea = 10.0;
+    
+    for (const auto &contour : contours)
+    {
+        double area = cv::contourArea(contour);
+        if (area >= minNoiseArea)
+        {
+            filteredContours.push_back(contour);
+        }
+    }
+    
+    // Check for border touching (simple version)
+    if (config.enable_border_check && !filteredContours.empty())
+    {
+        const int borderThreshold = 2;
+        
+        for (const auto &contour : filteredContours)
+        {
+            for (const auto &point : contour)
+            {
+                int x = point.x - roi.x;
+                int y = point.y - roi.y;
+                
+                if (x >= 0 && x < roi.width && y >= 0 && y < roi.height)
+                {
+                    if (x < borderThreshold || x >= roi.width - borderThreshold ||
+                        y < borderThreshold || y >= roi.height - borderThreshold)
+                    {
+                        result.touchesBorder = true;
+                        break;
+                    }
+                }
+                else
+                {
+                    result.touchesBorder = true;
+                    break;
+                }
+            }
+            
+            if (result.touchesBorder)
+                break;
+        }
+    }
+    
+    // If not touching border or border check disabled, calculate metrics
+    if (!result.touchesBorder || !config.enable_border_check)
+    {
+        if (!filteredContours.empty())
+        {
+            // Find the largest contour
+            size_t largestIdx = 0;
+            double largestArea = 0.0;
+            
+            for (size_t i = 0; i < filteredContours.size(); i++)
+            {
+                double area = cv::contourArea(filteredContours[i]);
+                if (area > largestArea)
+                {
+                    largestArea = area;
+                    largestIdx = i;
+                }
+            }
+            
+            // Calculate metrics using the largest contour
+            auto [deformability, area] = calculateMetrics(filteredContours[largestIdx]);
+            result.deformability = deformability;
+            result.area = area;
+            
+            // Check area range if needed
+            if (!config.enable_area_range_check ||
+                (area >= config.area_threshold_min && area <= config.area_threshold_max))
+            {
+                result.inRange = true;
+                result.isValid = true;
+            }
+        }
+    }
+    
+    return result;
+}
+
+// Update the formatProcessingConfig function to include background information
+std::string formatProcessingConfig(const ProcessingConfig &config) {
+    std::stringstream ss;
+    ss << "Processing Config:" << std::endl
+       << "  Gaussian Blur: " << config.gaussian_blur_size << std::endl
+       << "  BG Subtract Threshold: " << config.bg_subtract_threshold << std::endl
+       << "  Morph Kernel Size: " << config.morph_kernel_size << std::endl
+       << "  Morph Iterations: " << config.morph_iterations << std::endl
+       << "  Area Range: " << config.area_threshold_min << " - " << config.area_threshold_max << std::endl
+       << "  Checks: Border=" << (config.enable_border_check ? "On" : "Off")
+       << ", Area=" << (config.enable_area_range_check ? "On" : "Off")
+       << ", SingleInner=" << (config.require_single_inner_contour ? "On" : "Off") << std::endl
+       << "  Contrast: " << (config.enable_contrast_enhancement ? "On" : "Off")
+       << " (alpha=" << config.contrast_alpha << ", beta=" << config.contrast_beta << ")";
+    return ss.str();
+}
+
+// Update the function to properly handle the background with the batch's original config
+void updateBackgroundForReview(SharedResources &shared) {
+    if (shared.backgroundFrame.empty()) {
+        return; // No background to update
+    }
+
+    std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+    
+    // Apply Gaussian blur to the original background frame with batch-specific config
+    cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                    cv::Size(shared.processingConfig.gaussian_blur_size,
+                             shared.processingConfig.gaussian_blur_size),
+                    0);
+
+    // Apply contrast enhancement if it was enabled during recording
+    if (shared.processingConfig.enable_contrast_enhancement) {
+        // Apply alpha (contrast) and beta (brightness) adjustments
+        shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                         shared.processingConfig.contrast_alpha,
+                                         shared.processingConfig.contrast_beta);
+    }
+}
+
+// Function to display keyboard controls
+void displayKeyboardInstructions() {
+    std::cout << "\n--------- KEYBOARD CONTROLS ---------" << std::endl;
+    std::cout << "ESC: Exit review mode" << std::endl;
+    std::cout << "SPACE: Toggle processing overlay" << std::endl;
+    std::cout << "r: Toggle recalculated metrics display" << std::endl;
+    std::cout << "c: Toggle configuration display" << std::endl;
+    std::cout << "a: Previous image" << std::endl;
+    std::cout << "d: Next image" << std::endl;
+    std::cout << "q: Previous batch (when available)" << std::endl;
+    std::cout << "e: Next batch (when available)" << std::endl;
+    std::cout << "-----------------------------------\n" << std::endl;
+}
+
 void reviewSavedData()
 {
     std::string projectPath = MenuSystem::navigateAndSelectFolder();
@@ -891,6 +1039,10 @@ void reviewSavedData()
                 shared.roi = loadROIFromMasterCSV(masterROIPath, selectedBatch);
                 processingConfig = loadMasterConfig(masterConfigPath, selectedBatch);
                 shared.processingConfig = processingConfig;
+                
+                // Initialize background with original configuration
+                shared.backgroundFrame = backgroundClean.clone();
+                updateBackgroundForReview(shared);
             } catch (const std::exception &e) {
                 std::cerr << "Error loading batch-specific data: " << e.what() << std::endl;
                 return;
@@ -908,6 +1060,10 @@ void reviewSavedData()
                     shared.roi = loadROIFromMasterCSV(masterROIPath, firstBatch);
                     processingConfig = loadMasterConfig(masterConfigPath, firstBatch);
                     shared.processingConfig = processingConfig;
+                    
+                    // Initialize background with original configuration
+                    shared.backgroundFrame = backgroundClean.clone();
+                    updateBackgroundForReview(shared);
                 } catch (const std::exception &e) {
                     std::cerr << "Error loading batch-specific data: " << e.what() << std::endl;
                     return;
@@ -918,10 +1074,6 @@ void reviewSavedData()
             }
         }
         
-        // Initialize remaining shared resources
-        cv::GaussianBlur(backgroundClean, shared.blurredBackground, cv::Size(3, 3), 0);
-        shared.backgroundFrame = backgroundClean.clone();
-        
         // Initialize thread mats for processing
         ThreadLocalMats mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
         
@@ -929,22 +1081,54 @@ void reviewSavedData()
         cv::namedWindow("Data Review", cv::WINDOW_NORMAL);
         cv::resizeWindow("Data Review", backgroundClean.cols, backgroundClean.rows);
         
+        // Display keyboard instructions
+        displayKeyboardInstructions();
+        
         // Review logic for consolidated data
         size_t currentImageIndex = 0;
         bool showProcessed = false;
+        bool showRecalculated = false;
+        bool showConfig = false;
         bool running = true;
         
         while (running && currentImageIndex < filteredImages.size()) {
             // Create display image
             cv::Mat displayImage;
             cv::cvtColor(filteredImages[currentImageIndex], displayImage, cv::COLOR_GRAY2BGR);
+            cv::Mat processedImage;
+            double recalcDeformability = 0.0;
+            double recalcArea = 0.0;
+            bool recalcValid = false;
+            
+            // Process the current image
+            processedImage = cv::Mat(filteredImages[currentImageIndex].rows,
+                                    filteredImages[currentImageIndex].cols,
+                                    CV_8UC1);
+            processFrame(filteredImages[currentImageIndex], shared, processedImage, mats);
+            
+            // First try with the current contour detection method
+            FilterResult filterResult = filterProcessedImage(processedImage, shared.roi, 
+                                                            shared.processingConfig, 255);
+            recalcDeformability = filterResult.deformability;
+            recalcArea = filterResult.area;
+            recalcValid = filterResult.isValid;
+            
+            // Default to current method
+            std::string methodUsed = "C"; // C for Current method
+            
+            // If not valid, try with legacy contour detection for older data
+            if (!recalcValid) {
+                FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, shared.processingConfig);
+                
+                if (legacyResult.isValid) {
+                    recalcDeformability = legacyResult.deformability;
+                    recalcArea = legacyResult.area;
+                    recalcValid = true;
+                    methodUsed = "L"; // L for Legacy method
+                }
+            }
             
             if (showProcessed) {
-                cv::Mat processedImage = cv::Mat(filteredImages[currentImageIndex].rows,
-                                                filteredImages[currentImageIndex].cols,
-                                                CV_8UC1);
-                processFrame(filteredImages[currentImageIndex], shared, processedImage, mats);
-                
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
                 cv::addWeighted(displayImage, 0.7, processedOverlay, 0.3, 0, displayImage);
@@ -955,13 +1139,30 @@ void reviewSavedData()
             
             cv::imshow("Data Review", displayImage);
             
-            // Print current image information
+            // Print current image information with comparison to recalculated values
             if (currentImageIndex < filteredMeasurements.size()) {
-                auto [batchNum, condition, timestamp, deformability, area] = filteredMeasurements[currentImageIndex];
+                auto [batchNum, condition, timestamp, storedDeformability, storedArea] = filteredMeasurements[currentImageIndex];
+                
+                double deformDiff = recalcDeformability - storedDeformability;
+                double areaDiff = recalcArea - storedArea;
+                
                 std::cout << "\rBatch: " << batchNum 
-                          << " | Frame: " << currentImageIndex << "/" << (filteredImages.size() - 1)
-                          << " | Deformability: " << deformability
-                          << " | Area: " << int(area) << "                    " << std::flush;
+                          << " | Frame: " << currentImageIndex << "/" << (filteredImages.size() - 1);
+                
+                if (showRecalculated) {
+                    std::cout << " | Stored Def: " << std::fixed << std::setprecision(4) << storedDeformability
+                              << " | Recalc Def(" << methodUsed << "): " << std::fixed << std::setprecision(4) << recalcDeformability
+                              << " | Diff: " << std::fixed << std::setprecision(4) << deformDiff
+                              << " | Stored Area: " << std::fixed << std::setprecision(1) << storedArea
+                              << " | Recalc Area(" << methodUsed << "): " << std::fixed << std::setprecision(1) << recalcArea
+                              << " | Diff: " << std::fixed << std::setprecision(1) << areaDiff
+                              << " | Valid: " << (recalcValid ? "Yes" : "No") << "          ";
+                } else {
+                    std::cout << " | Deformability: " << std::fixed << std::setprecision(4) << storedDeformability
+                              << " | Area: " << std::fixed << std::setprecision(1) << storedArea << "                    ";
+                }
+                
+                std::cout << std::flush;
             }
             
             // Handle keyboard input
@@ -972,6 +1173,17 @@ void reviewSavedData()
                     break;
                 case ' ': // Spacebar - toggle processing overlay
                     showProcessed = !showProcessed;
+                    break;
+                case 'r': // Toggle recalculated values display
+                    showRecalculated = !showRecalculated;
+                    break;
+                case 'c': // Toggle config display
+                    showConfig = !showConfig;
+                    if (showConfig) {
+                        // Clear current line and display config
+                        std::cout << "\r" << std::string(120, ' ') << std::endl;
+                        std::cout << formatProcessingConfig(shared.processingConfig) << std::endl;
+                    }
                     break;
                 case 'a': // Previous image
                     if (currentImageIndex > 0)
@@ -1008,6 +1220,7 @@ void reviewSavedData()
         // Load batch-specific processing config
         processingConfig = loadBatchConfig(batchPath);
         shared.processingConfig = processingConfig;
+        
         // Load background image
         cv::Mat backgroundClean = cv::imread((batchPath / "background_clean.tiff").string(), cv::IMREAD_GRAYSCALE);
         if (backgroundClean.empty())
@@ -1029,9 +1242,10 @@ void reviewSavedData()
             roiValues.push_back(std::stoi(value));
         }
 
-        // Initialize shared resources
+        // Initialize shared resources with batch's original settings
         shared.roi = cv::Rect(roiValues[0], roiValues[1], roiValues[2], roiValues[3]);
-        cv::GaussianBlur(backgroundClean, shared.blurredBackground, cv::Size(3, 3), 0);
+        shared.backgroundFrame = backgroundClean.clone();
+        updateBackgroundForReview(shared);
 
         return backgroundClean;
     };
@@ -1039,7 +1253,9 @@ void reviewSavedData()
     std::sort(batchDirs.begin(), batchDirs.end());
     size_t currentBatchIndex = 0;
     size_t currentImageIndex = 0;
-    bool showProcessed = false;
+    bool showProcessed = true;
+    bool showRecalculated = false;
+    bool showConfig = true;
 
     // Initialize resources
     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
@@ -1048,6 +1264,9 @@ void reviewSavedData()
     // Create display window
     cv::namedWindow("Data Review", cv::WINDOW_NORMAL);
     cv::resizeWindow("Data Review", backgroundClean.cols, backgroundClean.rows);
+    
+    // Display keyboard instructions
+    displayKeyboardInstructions();
 
     bool running = true;
     while (running)
@@ -1088,7 +1307,7 @@ void reviewSavedData()
                 values.push_back(value);
             }
 
-            if (values.size() == 3)
+            if (values.size() >= 3)
             {
                 measurements.emplace_back(
                     std::stoll(values[0]),
@@ -1102,14 +1321,41 @@ void reviewSavedData()
             // Create display image
             cv::Mat displayImage;
             cv::cvtColor(images[currentImageIndex], displayImage, cv::COLOR_GRAY2BGR);
+            cv::Mat processedImage;
+            double recalcDeformability = 0.0;
+            double recalcArea = 0.0;
+            bool recalcValid = false;
+            
+            // Process the current image
+            processedImage = cv::Mat(images[currentImageIndex].rows,
+                                    images[currentImageIndex].cols,
+                                    CV_8UC1);
+            processFrame(images[currentImageIndex], shared, processedImage, mats);
+            
+            // First try with the current contour detection method
+            FilterResult filterResult = filterProcessedImage(processedImage, shared.roi, 
+                                                           shared.processingConfig, 255);
+            recalcDeformability = filterResult.deformability;
+            recalcArea = filterResult.area;
+            recalcValid = filterResult.isValid;
+            
+            // Default to current method
+            std::string methodUsed = "C"; // C for Current method
+            
+            // If not valid, try with legacy contour detection for older data
+            if (!recalcValid) {
+                FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, shared.processingConfig);
+                
+                if (legacyResult.isValid) {
+                    recalcDeformability = legacyResult.deformability;
+                    recalcArea = legacyResult.area;
+                    recalcValid = true;
+                    methodUsed = "L"; // L for Legacy method
+                }
+            }
 
             if (showProcessed)
             {
-                cv::Mat processedImage = cv::Mat(images[currentImageIndex].rows,
-                                                 images[currentImageIndex].cols,
-                                                 CV_8UC1);
-                processFrame(images[currentImageIndex], shared, processedImage, mats);
-
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
                 cv::addWeighted(displayImage, 0.7, processedOverlay, 0.3, 0, displayImage);
@@ -1120,14 +1366,31 @@ void reviewSavedData()
 
             cv::imshow("Data Review", displayImage);
             
-            // Print current image information
+            // Print current image information with comparison to recalculated values
             if (currentImageIndex < measurements.size())
             {
-                auto [timestamp, deformability, area] = measurements[currentImageIndex];
+                auto [timestamp, storedDeformability, storedArea] = measurements[currentImageIndex];
+                
+                double deformDiff = recalcDeformability - storedDeformability;
+                double areaDiff = recalcArea - storedArea;
+                
                 std::cout << "\rBatch: " << currentBatchIndex 
-                          << " | Frame: " << currentImageIndex << "/" << (images.size() - 1)
-                          << " | Deformability: " << deformability
-                          << " | Area: " << int(area) << "                    " << std::flush;
+                          << " | Frame: " << currentImageIndex << "/" << (images.size() - 1);
+                
+                if (showRecalculated) {
+                    std::cout << " | Stored Def: " << std::fixed << std::setprecision(4) << storedDeformability
+                              << " | Recalc Def(" << methodUsed << "): " << std::fixed << std::setprecision(4) << recalcDeformability
+                              << " | Diff: " << std::fixed << std::setprecision(4) << deformDiff
+                              << " | Stored Area: " << std::fixed << std::setprecision(1) << storedArea
+                              << " | Recalc Area(" << methodUsed << "): " << std::fixed << std::setprecision(1) << recalcArea
+                              << " | Diff: " << std::fixed << std::setprecision(1) << areaDiff
+                              << " | Valid: " << (recalcValid ? "Yes" : "No") << "          ";
+                } else {
+                    std::cout << " | Deformability: " << std::fixed << std::setprecision(4) << storedDeformability
+                              << " | Area: " << std::fixed << std::setprecision(1) << storedArea << "                    ";
+                }
+                
+                std::cout << std::flush;
             }
 
             // Handle keyboard input
@@ -1139,6 +1402,17 @@ void reviewSavedData()
                 break;
             case ' ': // Spacebar - toggle processing overlay
                 showProcessed = !showProcessed;
+                break;
+            case 'r': // Toggle recalculated values display
+                showRecalculated = !showRecalculated;
+                break;
+            case 'c': // Toggle config display
+                showConfig = !showConfig;
+                if (showConfig) {
+                    // Clear current line and display config
+                    std::cout << "\r" << std::string(120, ' ') << std::endl;
+                    std::cout << formatProcessingConfig(shared.processingConfig) << std::endl;
+                }
                 break;
             case 'a': // Previous image
                 if (currentImageIndex > 0)
@@ -1155,6 +1429,14 @@ void reviewSavedData()
                     currentImageIndex = 0;
                     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
                     mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
+                    
+                    // Show the new batch's config
+                    std::cout << "\r" << std::string(120, ' ') << std::endl;
+                    std::cout << "Loaded batch " << currentBatchIndex << " with config:" << std::endl;
+                    std::cout << formatProcessingConfig(shared.processingConfig) << std::endl;
+                    
+                    // Display keyboard instructions after switching batches
+                    displayKeyboardInstructions();
                     break;
                 }
                 break;
@@ -1165,6 +1447,14 @@ void reviewSavedData()
                     currentImageIndex = 0;
                     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
                     mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
+                    
+                    // Show the new batch's config
+                    std::cout << "\r" << std::string(120, ' ') << std::endl;
+                    std::cout << "Loaded batch " << currentBatchIndex << " with config:" << std::endl;
+                    std::cout << formatProcessingConfig(shared.processingConfig) << std::endl;
+                    
+                    // Display keyboard instructions after switching batches
+                    displayKeyboardInstructions();
                     break;
                 }
                 break;
@@ -1172,7 +1462,11 @@ void reviewSavedData()
 
             // If batch changed, break inner loop to load new batch data
             if (key == 'q' || key == 'e')
+            {
+                // Display keyboard instructions after switching batches
+                displayKeyboardInstructions();
                 break;
+            }
         }
     }
 
