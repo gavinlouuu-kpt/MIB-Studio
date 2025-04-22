@@ -229,6 +229,10 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     bool masterFileExists = std::filesystem::exists(masterCsvPath);
     std::ofstream masterCsvFile(masterCsvPath, std::ios::app); // Open in append mode
 
+    // Create/open master images binary file in parent directory
+    std::string masterImagesPath = directory + "/" + condition + "_images.bin";
+    std::ofstream masterImageFile(masterImagesPath, std::ios::binary | std::ios::app); // Binary + append mode
+
     // Write header to master CSV if it's a new file
     if (!masterFileExists) {
         masterCsvFile << "Batch,Condition,Timestamp_us,Deformability,Area\n";
@@ -236,8 +240,6 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
     std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
     
-    
-
     // Write CSV header
     csvFile << "Condition,Timestamp_us,Deformability,Area\n";
 
@@ -278,7 +280,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                       << result.deformability << ","
                       << result.area << "\n";
 
-        // Save image metadata and data (unchanged)
+        // Save image metadata and data to batch image file
         int rows = result.originalImage.rows;
         int cols = result.originalImage.cols;
         int type = result.originalImage.type();
@@ -297,10 +299,28 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                 imageFile.write(reinterpret_cast<const char *>(result.originalImage.ptr(r)), cols * result.originalImage.elemSize());
             }
         }
+        
+        // Also write to master images file with the same format
+        masterImageFile.write(reinterpret_cast<const char *>(&rows), sizeof(int));
+        masterImageFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
+        masterImageFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
+
+        if (result.originalImage.isContinuous())
+        {
+            masterImageFile.write(reinterpret_cast<const char *>(result.originalImage.data), result.originalImage.total() * result.originalImage.elemSize());
+        }
+        else
+        {
+            for (int r = 0; r < rows; ++r)
+            {
+                masterImageFile.write(reinterpret_cast<const char *>(result.originalImage.ptr(r)), cols * result.originalImage.elemSize());
+            }
+        }
     }
     csvFile.close();
     masterCsvFile.close();
     imageFile.close();
+    masterImageFile.close();
 
     // std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
 }
