@@ -953,16 +953,16 @@ void reviewSavedData()
             // Draw ROI rectangle
             cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 2);
             
-            // Add text overlay with measurements
+            cv::imshow("Data Review", displayImage);
+            
+            // Print current image information
             if (currentImageIndex < filteredMeasurements.size()) {
                 auto [batchNum, condition, timestamp, deformability, area] = filteredMeasurements[currentImageIndex];
-                std::string info = "D:" + std::to_string(deformability) +
-                                   ", A:" + std::to_string(int(area));
-                cv::putText(displayImage, info, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
-                           0.7, cv::Scalar(0, 255, 0), 2);
+                std::cout << "\rBatch: " << batchNum 
+                          << " | Frame: " << currentImageIndex << "/" << (filteredImages.size() - 1)
+                          << " | Deformability: " << deformability
+                          << " | Area: " << int(area) << "                    " << std::flush;
             }
-            
-            cv::imshow("Data Review", displayImage);
             
             // Handle keyboard input
             int key = cv::waitKey(0);
@@ -1118,19 +1118,17 @@ void reviewSavedData()
             // Draw ROI rectangle
             cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 2);
 
-            // Add text overlay with measurements
+            cv::imshow("Data Review", displayImage);
+            
+            // Print current image information
             if (currentImageIndex < measurements.size())
             {
                 auto [timestamp, deformability, area] = measurements[currentImageIndex];
-                std::string info = "B:" + std::to_string(currentBatchIndex) +
-                                   " F:" + std::to_string(currentImageIndex) + "/" + std::to_string(images.size() - 1) +
-                                   " D:" + std::to_string(deformability) +
-                                   " A:" + std::to_string(int(area));
-                cv::putText(displayImage, info, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
-                            0.7, cv::Scalar(0, 255, 0), 2);
+                std::cout << "\rBatch: " << currentBatchIndex 
+                          << " | Frame: " << currentImageIndex << "/" << (images.size() - 1)
+                          << " | Deformability: " << deformability
+                          << " | Area: " << int(area) << "                    " << std::flush;
             }
-
-            cv::imshow("Data Review", displayImage);
 
             // Handle keyboard input
             int key = cv::waitKey(0);
