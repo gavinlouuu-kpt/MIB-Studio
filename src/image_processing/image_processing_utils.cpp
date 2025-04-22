@@ -956,11 +956,8 @@ void reviewSavedData()
             // Add text overlay with measurements
             if (currentImageIndex < filteredMeasurements.size()) {
                 auto [batchNum, condition, timestamp, deformability, area] = filteredMeasurements[currentImageIndex];
-                std::string info = "Batch: " + std::to_string(batchNum) +
-                                   " | Frame: " + std::to_string(currentImageIndex) + "/" + std::to_string(filteredImages.size() - 1) +
-                                   " | Deformability: " + std::to_string(deformability) +
-                                   " | Area: " + std::to_string(area) +
-                                   " | Processing: " + (showProcessed ? "ON" : "OFF");
+                std::string info = "D:" + std::to_string(deformability) +
+                                   ", A:" + std::to_string(int(area));
                 cv::putText(displayImage, info, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
                            0.7, cv::Scalar(0, 255, 0), 2);
             }
