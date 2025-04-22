@@ -774,7 +774,6 @@ void keyboardHandlingThread(
         {
             std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
             shared.deformabilityBuffer.clear();
-            shared.recordedItemsCount = 0; // Reset the recorded items counter
         }
         else if (key == 'S')
         {

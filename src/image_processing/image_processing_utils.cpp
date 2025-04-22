@@ -233,9 +233,40 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     std::string masterImagesPath = directory + "/" + condition + "_images.bin";
     std::ofstream masterImageFile(masterImagesPath, std::ios::binary | std::ios::app); // Binary + append mode
 
+    // Create/open master background images binary file
+    std::string masterBackgroundsPath = directory + "/" + condition + "_backgrounds.bin";
+    bool masterBackgroundFileExists = std::filesystem::exists(masterBackgroundsPath);
+    std::ofstream masterBackgroundFile(masterBackgroundsPath, std::ios::binary | std::ios::app); // Binary + append mode
+
+    // Create/open master ROI CSV file
+    std::string masterROIPath = directory + "/" + condition + "_roi.csv";
+    bool masterROIFileExists = std::filesystem::exists(masterROIPath);
+    std::ofstream masterROIFile(masterROIPath, std::ios::app); // Append mode
+    
+    // Create/open master config JSON file
+    std::string masterConfigPath = directory + "/" + condition + "_processing_config.json";
+    bool masterConfigFileExists = std::filesystem::exists(masterConfigPath);
+    json masterConfig;
+    
+    // Load existing master config if it exists
+    if (masterConfigFileExists) {
+        std::ifstream configIn(masterConfigPath);
+        try {
+            configIn >> masterConfig;
+        } catch (const std::exception& e) {
+            // If parsing fails, start with a new empty JSON object
+            masterConfig = json::object();
+        }
+    }
+
     // Write header to master CSV if it's a new file
     if (!masterFileExists) {
         masterCsvFile << "Batch,Condition,Timestamp_us,Deformability,Area\n";
+    }
+    
+    // Write header to master ROI CSV if it's a new file
+    if (!masterROIFileExists) {
+        masterROIFile << "Batch,x,y,width,height\n";
     }
 
     std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
@@ -243,13 +274,32 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     // Write CSV header
     csvFile << "Condition,Timestamp_us,Deformability,Area\n";
 
-    // Add this block to save both background images
+    // Save current batch's data to master files
     if (!results.empty())
     {
-        // Save clean background
+        // Save clean background to batch folder
         cv::imwrite(batchDir + "/background_clean.tiff", shared.backgroundFrame);
+        
+        // Save background to master binary file
+        int rows = shared.backgroundFrame.rows;
+        int cols = shared.backgroundFrame.cols;
+        int type = shared.backgroundFrame.type();
+        masterBackgroundFile.write(reinterpret_cast<const char *>(&shared.currentBatchNumber), sizeof(int)); // Store batch number
+        masterBackgroundFile.write(reinterpret_cast<const char *>(&rows), sizeof(int));
+        masterBackgroundFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
+        masterBackgroundFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
+        
+        if (shared.backgroundFrame.isContinuous()) {
+            masterBackgroundFile.write(reinterpret_cast<const char *>(shared.backgroundFrame.data), 
+                                      shared.backgroundFrame.total() * shared.backgroundFrame.elemSize());
+        } else {
+            for (int r = 0; r < rows; ++r) {
+                masterBackgroundFile.write(reinterpret_cast<const char *>(shared.backgroundFrame.ptr(r)), 
+                                          cols * shared.backgroundFrame.elemSize());
+            }
+        }
 
-        // Save ROI coordinates to CSV
+        // Save ROI coordinates to batch CSV
         std::ofstream roiFile(batchDir + "/roi.csv");
         roiFile << "x,y,width,height\n";
         roiFile << shared.roi.x << ","
@@ -257,12 +307,27 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                 << shared.roi.width << ","
                 << shared.roi.height;
         roiFile.close();
+        
+        // Append ROI to master ROI file
+        masterROIFile << shared.currentBatchNumber << ","
+                      << shared.roi.x << ","
+                      << shared.roi.y << ","
+                      << shared.roi.width << ","
+                      << shared.roi.height << "\n";
 
-        // Save processing configuration
+        // Save processing configuration to batch folder
         json config = readConfig("config.json");
         std::ofstream configFile(batchDir + "/processing_config.json");
         configFile << std::setw(4) << config["image_processing"] << std::endl;
         configFile.close();
+        
+        // Add batch config to master config
+        std::string batchKey = "batch_" + std::to_string(shared.currentBatchNumber);
+        masterConfig[batchKey] = config["image_processing"];
+        
+        // Write updated master config file
+        std::ofstream masterConfigFile(masterConfigPath);
+        masterConfigFile << std::setw(4) << masterConfig << std::endl;
     }
 
     for (const auto &result : results)
@@ -321,6 +386,8 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     masterCsvFile.close();
     imageFile.close();
     masterImageFile.close();
+    masterBackgroundFile.close();
+    masterROIFile.close();
 
     // std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
 }
@@ -582,8 +649,65 @@ void reviewSavedData()
     std::vector<std::filesystem::path> batchDirs;
     ProcessingConfig processingConfig;
 
-    // Remove this since we'll load it per batch
-    // json config = readConfig("config.json");
+    // Check if this is a consolidated dataset with master files
+    json condition_config = readConfig("config.json");
+    std::string condition = condition_config["save_directory"];
+    bool hasMasterFiles = false;
+    std::string masterConfigPath = projectPath + "/" + condition + "_processing_config.json";
+    std::string masterROIPath = projectPath + "/" + condition + "_roi.csv";
+    std::string masterBackgroundsPath = projectPath + "/" + condition + "_backgrounds.bin";
+    std::string masterDataPath = projectPath + "/" + condition + "_data.csv";
+    std::string masterImagesPath = projectPath + "/" + condition + "_images.bin";
+    
+    // Check if master files exist
+    if (std::filesystem::exists(masterConfigPath) && 
+        std::filesystem::exists(masterROIPath) && 
+        std::filesystem::exists(masterBackgroundsPath) &&
+        std::filesystem::exists(masterDataPath) &&
+        std::filesystem::exists(masterImagesPath)) {
+        hasMasterFiles = true;
+        std::cout << "Found consolidated master files in this directory. Using them for data review." << std::endl;
+    }
+
+    auto loadMasterConfig = [](const std::string &configPath, int batchNum) -> ProcessingConfig {
+        std::ifstream configFile(configPath);
+        if (!configFile.is_open()) {
+            throw std::runtime_error("Failed to load master processing config from: " + configPath);
+        }
+        json masterConfig;
+        configFile >> masterConfig;
+        
+        // Get the config for the specified batch
+        std::string batchKey = "batch_" + std::to_string(batchNum);
+        if (!masterConfig.contains(batchKey)) {
+            throw std::runtime_error("Master config file does not contain configuration for batch " + std::to_string(batchNum));
+        }
+        
+        json config = masterConfig[batchKey];
+
+        return ProcessingConfig{
+            config["gaussian_blur_size"],
+            config["bg_subtract_threshold"],
+            config["morph_kernel_size"],
+            config["morph_iterations"],
+            config["area_threshold_min"],
+            config["area_threshold_max"],
+            config.contains("filters") && config["filters"].contains("enable_border_check") ? 
+                config["filters"]["enable_border_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? 
+                config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_area_range_check") ? 
+                config["filters"]["enable_area_range_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
+                config["filters"]["require_single_inner_contour"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
+                config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
+                config["contrast_enhancement"]["beta"].get<int>() : 10
+        };
+    };
 
     auto loadBatchConfig = [](const std::filesystem::path &batchPath) -> ProcessingConfig
     {
@@ -599,9 +723,275 @@ void reviewSavedData()
             config["gaussian_blur_size"],
             config["bg_subtract_threshold"],
             config["morph_kernel_size"],
-            config["morph_iterations"]};
+            config["morph_iterations"],
+            config["area_threshold_min"],
+            config["area_threshold_max"],
+            config.contains("filters") && config["filters"].contains("enable_border_check") ? 
+                config["filters"]["enable_border_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? 
+                config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_area_range_check") ? 
+                config["filters"]["enable_area_range_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
+                config["filters"]["require_single_inner_contour"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
+                config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
+                config["contrast_enhancement"]["beta"].get<int>() : 10
+        };
     };
 
+    // Function to load ROI for a specific batch from master ROI CSV
+    auto loadROIFromMasterCSV = [](const std::string &roiPath, int batchNum) -> cv::Rect {
+        std::ifstream roiFile(roiPath);
+        if (!roiFile.is_open()) {
+            throw std::runtime_error("Failed to open master ROI file: " + roiPath);
+        }
+        
+        std::string header;
+        std::getline(roiFile, header); // Skip header
+        
+        std::string line;
+        while (std::getline(roiFile, line)) {
+            std::stringstream ss(line);
+            std::string value;
+            std::vector<std::string> values;
+            
+            while (std::getline(ss, value, ',')) {
+                values.push_back(value);
+            }
+            
+            if (values.size() >= 5 && std::stoi(values[0]) == batchNum) {
+                return cv::Rect(
+                    std::stoi(values[1]), // x
+                    std::stoi(values[2]), // y
+                    std::stoi(values[3]), // width
+                    std::stoi(values[4])  // height
+                );
+            }
+        }
+        
+        throw std::runtime_error("Failed to find ROI for batch " + std::to_string(batchNum) + " in master ROI file");
+    };
+    
+    // Function to load background for a specific batch from master backgrounds.bin
+    auto loadBackgroundFromMasterBin = [](const std::string &bgPath, int batchNum) -> cv::Mat {
+        std::ifstream bgFile(bgPath, std::ios::binary);
+        if (!bgFile.is_open()) {
+            throw std::runtime_error("Failed to open master backgrounds file: " + bgPath);
+        }
+        
+        while (bgFile.good()) {
+            int storedBatchNum, rows, cols, type;
+            bgFile.read(reinterpret_cast<char *>(&storedBatchNum), sizeof(int));
+            
+            if (bgFile.eof()) {
+                break;
+            }
+            
+            bgFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+            bgFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+            bgFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+            
+            cv::Mat background(rows, cols, type);
+            bgFile.read(reinterpret_cast<char *>(background.data), rows * cols * background.elemSize());
+            
+            if (storedBatchNum == batchNum) {
+                return background.clone(); // Found the background for this batch
+            }
+        }
+        
+        throw std::runtime_error("Failed to find background for batch " + std::to_string(batchNum) + " in master backgrounds file");
+    };
+
+    // If we have master files, use them to initialize shared resources
+    SharedResources shared;
+    cv::Mat backgroundClean;
+    
+    if (hasMasterFiles) {
+        // Process all images from the master images file
+        std::vector<cv::Mat> allImages;
+        std::vector<std::tuple<int, std::string, long long, double, double>> allMeasurements;
+        
+        // Load all measurements from the master CSV
+        std::ifstream csvFile(masterDataPath);
+        std::string header;
+        std::getline(csvFile, header); // Skip header
+        std::string line;
+        
+        while (std::getline(csvFile, line)) {
+            std::stringstream lineStream(line);
+            std::string cell;
+            std::vector<std::string> values;
+            
+            while (std::getline(lineStream, cell, ',')) {
+                values.push_back(cell);
+            }
+            
+            if (values.size() >= 5) {
+                allMeasurements.emplace_back(
+                    std::stoi(values[0]),     // Batch number
+                    values[1],                // Condition
+                    std::stoll(values[2]),    // Timestamp
+                    std::stod(values[3]),     // Deformability
+                    std::stod(values[4])      // Area
+                );
+            }
+        }
+        
+        // Load all images from the master images binary file
+        std::ifstream imageFile(masterImagesPath, std::ios::binary);
+        while (imageFile.good()) {
+            int rows, cols, type;
+            imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+            imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+            imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+            
+            if (imageFile.eof()) {
+                break;
+            }
+            
+            cv::Mat image(rows, cols, type);
+            imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+            allImages.push_back(image.clone());
+        }
+        
+        // Allow user to select which batch to review
+        std::set<int> availableBatches;
+        for (const auto &measurement : allMeasurements) {
+            availableBatches.insert(std::get<0>(measurement));
+        }
+        
+        std::cout << "Available batches: ";
+        for (int batch : availableBatches) {
+            std::cout << batch << " ";
+        }
+        std::cout << std::endl;
+        std::cout << "Enter batch number to review (or -1 for all): ";
+        int selectedBatch;
+        std::cin >> selectedBatch;
+        
+        std::vector<cv::Mat> filteredImages;
+        std::vector<std::tuple<int, std::string, long long, double, double>> filteredMeasurements;
+        
+        if (selectedBatch >= 0) {
+            // Filter images and measurements by batch
+            for (size_t i = 0; i < allMeasurements.size() && i < allImages.size(); ++i) {
+                if (std::get<0>(allMeasurements[i]) == selectedBatch) {
+                    filteredImages.push_back(allImages[i]);
+                    filteredMeasurements.push_back(allMeasurements[i]);
+                }
+            }
+            
+            // Load batch-specific background, ROI, and config
+            try {
+                backgroundClean = loadBackgroundFromMasterBin(masterBackgroundsPath, selectedBatch);
+                shared.roi = loadROIFromMasterCSV(masterROIPath, selectedBatch);
+                processingConfig = loadMasterConfig(masterConfigPath, selectedBatch);
+                shared.processingConfig = processingConfig;
+            } catch (const std::exception &e) {
+                std::cerr << "Error loading batch-specific data: " << e.what() << std::endl;
+                return;
+            }
+        } else {
+            // Use all images and measurements
+            filteredImages = allImages;
+            filteredMeasurements = allMeasurements;
+            
+            // Load background, ROI, and config from the first batch
+            if (!availableBatches.empty()) {
+                int firstBatch = *availableBatches.begin();
+                try {
+                    backgroundClean = loadBackgroundFromMasterBin(masterBackgroundsPath, firstBatch);
+                    shared.roi = loadROIFromMasterCSV(masterROIPath, firstBatch);
+                    processingConfig = loadMasterConfig(masterConfigPath, firstBatch);
+                    shared.processingConfig = processingConfig;
+                } catch (const std::exception &e) {
+                    std::cerr << "Error loading batch-specific data: " << e.what() << std::endl;
+                    return;
+                }
+            } else {
+                std::cerr << "No batches found in the master files" << std::endl;
+                return;
+            }
+        }
+        
+        // Initialize remaining shared resources
+        cv::GaussianBlur(backgroundClean, shared.blurredBackground, cv::Size(3, 3), 0);
+        shared.backgroundFrame = backgroundClean.clone();
+        
+        // Initialize thread mats for processing
+        ThreadLocalMats mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
+        
+        // Create display window
+        cv::namedWindow("Data Review", cv::WINDOW_NORMAL);
+        cv::resizeWindow("Data Review", backgroundClean.cols, backgroundClean.rows);
+        
+        // Review logic for consolidated data
+        size_t currentImageIndex = 0;
+        bool showProcessed = false;
+        bool running = true;
+        
+        while (running && currentImageIndex < filteredImages.size()) {
+            // Create display image
+            cv::Mat displayImage;
+            cv::cvtColor(filteredImages[currentImageIndex], displayImage, cv::COLOR_GRAY2BGR);
+            
+            if (showProcessed) {
+                cv::Mat processedImage = cv::Mat(filteredImages[currentImageIndex].rows,
+                                                filteredImages[currentImageIndex].cols,
+                                                CV_8UC1);
+                processFrame(filteredImages[currentImageIndex], shared, processedImage, mats);
+                
+                cv::Mat processedOverlay;
+                cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
+                cv::addWeighted(displayImage, 0.7, processedOverlay, 0.3, 0, displayImage);
+            }
+            
+            // Draw ROI rectangle
+            cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 2);
+            
+            // Add text overlay with measurements
+            if (currentImageIndex < filteredMeasurements.size()) {
+                auto [batchNum, condition, timestamp, deformability, area] = filteredMeasurements[currentImageIndex];
+                std::string info = "Batch: " + std::to_string(batchNum) +
+                                   " | Frame: " + std::to_string(currentImageIndex) + "/" + std::to_string(filteredImages.size() - 1) +
+                                   " | Deformability: " + std::to_string(deformability) +
+                                   " | Area: " + std::to_string(area) +
+                                   " | Processing: " + (showProcessed ? "ON" : "OFF");
+                cv::putText(displayImage, info, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
+                           0.7, cv::Scalar(0, 255, 0), 2);
+            }
+            
+            cv::imshow("Data Review", displayImage);
+            
+            // Handle keyboard input
+            int key = cv::waitKey(0);
+            switch (key) {
+                case 27: // ESC
+                    running = false;
+                    break;
+                case ' ': // Spacebar - toggle processing overlay
+                    showProcessed = !showProcessed;
+                    break;
+                case 'a': // Previous image
+                    if (currentImageIndex > 0)
+                        currentImageIndex--;
+                    break;
+                case 'd': // Next image
+                    if (currentImageIndex < filteredImages.size() - 1)
+                        currentImageIndex++;
+                    break;
+            }
+        }
+        
+        cv::destroyAllWindows();
+        return;
+    }
+
+    // Original code for batch-by-batch review if not using master files
     for (const auto &entry : std::filesystem::directory_iterator(projectPath))
     {
         if (entry.is_directory() && entry.path().filename().string().find("batch_") != std::string::npos)
@@ -655,10 +1045,6 @@ void reviewSavedData()
     bool showProcessed = false;
 
     // Initialize resources
-    cv::Mat backgroundClean;
-    SharedResources shared;
-
-    // Initial batch setup
     backgroundClean = initializeBatch(batchDirs[currentBatchIndex], shared);
     ThreadLocalMats mats = initializeThreadMats(backgroundClean.rows, backgroundClean.cols, shared);
 
