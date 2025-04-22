@@ -214,20 +214,32 @@ void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &p
 
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared)
 {
+    // Save condition from configuration
+    json condition_config = readConfig("config.json");
+    std::string condition = condition_config["save_directory"];
+    
     std::string batchDir = directory + "/batch_" + std::to_string(shared.currentBatchNumber);
     std::filesystem::create_directories(batchDir);
 
     std::string csvFilePath = batchDir + "/batch_data.csv";
     std::ofstream csvFile(csvFilePath);
+    
+    // Create/open master CSV file in parent directory
+    std::string masterCsvPath = directory + "/" + condition + "_data.csv";
+    bool masterFileExists = std::filesystem::exists(masterCsvPath);
+    std::ofstream masterCsvFile(masterCsvPath, std::ios::app); // Open in append mode
+
+    // Write header to master CSV if it's a new file
+    if (!masterFileExists) {
+        masterCsvFile << "Batch,Condition,Timestamp_us,Deformability,Area\n";
+    }
 
     std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
     
-    // Save condition from configuration
-    json condition_config = readConfig("config.json");
-    std::string condition = condition_config["save_directory"];
+    
 
     // Write CSV header
-    csvFile << "Condition, Timestamp_us,Deformability,Area\n";
+    csvFile << "Condition,Timestamp_us,Deformability,Area\n";
 
     // Add this block to save both background images
     if (!results.empty())
@@ -253,11 +265,18 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
     for (const auto &result : results)
     {
-        // Write data to CSV
+        // Write data to batch CSV
         csvFile << condition << ","
                 << result.timestamp << ","
                 << result.deformability << ","
                 << result.area << "\n";
+        
+        // Also write to master CSV with batch number
+        masterCsvFile << shared.currentBatchNumber << ","
+                      << condition << ","
+                      << result.timestamp << ","
+                      << result.deformability << ","
+                      << result.area << "\n";
 
         // Save image metadata and data (unchanged)
         int rows = result.originalImage.rows;
@@ -280,6 +299,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
         }
     }
     csvFile.close();
+    masterCsvFile.close();
     imageFile.close();
 
     // std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
