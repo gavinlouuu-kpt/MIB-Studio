@@ -399,6 +399,12 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
         int key = cv::waitKey(30); // More responsive key checking
         if (key == 27) { // ESC key
             shared.done = true;  // Signal all threads to exit
+            // Notify all other threads to exit
+            shared.displayQueueCondition.notify_all();
+            shared.processingQueueCondition.notify_all();
+            shared.savingCondition.notify_all();
+            shared.scatterDataCondition.notify_one();
+            shared.newValidFrameAvailable = true;
         }
         
         // Sleep for a short time to avoid high CPU usage
@@ -927,6 +933,9 @@ void keyboardHandlingThread(
             shared.displayQueueCondition.notify_all();
             shared.processingQueueCondition.notify_all();
             shared.savingCondition.notify_all();
+            shared.scatterDataCondition.notify_one();
+            // Set the valid frame available flag to ensure the valid frames thread checks done
+            shared.newValidFrameAvailable = true;
         }
         else if (key == 32)
         { // Space bar
