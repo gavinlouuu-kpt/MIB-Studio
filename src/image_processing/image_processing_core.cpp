@@ -77,7 +77,22 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     }
 }
 
-std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>> findContours(const cv::Mat &processedImage)
+double calculateRingRatio(const std::vector<cv::Point>& innerContour, const std::vector<cv::Point>& outerContour)
+{
+    // Calculate areas of both contours
+    double innerArea = cv::contourArea(innerContour);
+    double outerArea = cv::contourArea(outerContour);
+    
+    // Prevent division by zero
+    if (outerArea <= 0) {
+        return 0.0;
+    }
+    
+    // Calculate the ratio of inner area to outer area and return sqrt of it
+    return innerArea / outerArea;
+}
+
+std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>, std::vector<int>> findContours(const cv::Mat &processedImage)
 {
     std::vector<std::vector<cv::Point>> contours;
     std::vector<cv::Vec4i> hierarchy;
@@ -106,6 +121,7 @@ std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv
     // Check if there are nested contours by examining the hierarchy
     bool hasNestedContours = false;
     std::vector<std::vector<cv::Point>> innerContours;
+    std::vector<int> parentIndices; // Store parent indices for inner contours
 
     // Process hierarchy to find inner contours
     for (size_t i = 0; i < filteredHierarchy.size(); i++)
@@ -115,10 +131,22 @@ std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv
         {
             hasNestedContours = true;
             innerContours.push_back(filteredContours[i]);
+            
+            // Store the index of the parent contour in the filtered contours array
+            int parentIdx = filteredHierarchy[i][3];
+            // Need to map from original hierarchy index to filtered index
+            int filteredParentIdx = -1;
+            for (size_t j = 0; j < filteredContours.size(); j++) {
+                if (j == parentIdx) {
+                    filteredParentIdx = j;
+                    break;
+                }
+            }
+            parentIndices.push_back(filteredParentIdx);
         }
     }
 
-    return std::make_tuple(filteredContours, hasNestedContours, innerContours);
+    return std::make_tuple(filteredContours, hasNestedContours, innerContours, parentIndices);
 }
 
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour)
@@ -137,13 +165,13 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 {
     // Initialize result with default values
     // isValid is now false by default, will be set to true if criteria are met
-    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0};
+    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0, 0.0};
 
     // Get ROI from processed image
     cv::Mat roiImage = processedImage(roi);
 
     // First, find contours in the entire processed image
-    auto [contours, hasNestedContours, innerContours] = findContours(processedImage);
+    auto [contours, hasNestedContours, innerContours, parentIndices] = findContours(processedImage);
 
     // Update inner contour information
     result.innerContourCount = static_cast<int>(innerContours.size());
@@ -253,6 +281,17 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
             auto [deformability, area] = calculateMetrics(innerContours[0]);
             result.deformability = deformability;
             result.area = area;
+
+            // Calculate ring ratio using the parent contour information
+            if (result.hasSingleInnerContour && parentIndices.size() > 0)
+            {
+                int parentIdx = parentIndices[0];
+                if (parentIdx >= 0 && parentIdx < contours.size())
+                {
+                    // Calculate the ring ratio using the inner contour and its parent outer contour
+                    result.ringRatio = calculateRingRatio(innerContours[0], contours[parentIdx]);
+                }
+            }
 
             // Check area range only if that check is enabled
             if (!config.enable_area_range_check ||

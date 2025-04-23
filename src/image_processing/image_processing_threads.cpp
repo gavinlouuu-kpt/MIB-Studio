@@ -149,7 +149,8 @@ void metricDisplayThread(SharedResources &shared)
                                                         hbox({text("Trigger Onset Duration: "), text(std::to_string(shared.triggerOnsetDuration.load()) + " us")}),
                                                         hbox({text("Deformability: "), text(std::to_string(shared.frameDeformabilities.load()))}),
                                                         hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))}),
-                                                        hbox({text("Area Ratio: "), text(std::to_string(shared.frameAreaRatios.load()))})}));
+                                                        hbox({text("Area Ratio: "), text(std::to_string(shared.frameAreaRatios.load()))}),
+                                                        hbox({text("Ring Ratio: "), text(std::to_string(shared.frameRingRatios.load()))})}));
     };
 
     auto render_config_metrics = [&]()
@@ -269,9 +270,6 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
     // Flag to track if display needs updating
     bool displayNeedsUpdate = false;
     
-    // Track if we've processed new frames
-    bool hasNewFrames = false;
-    
     // Pre-create a placeholder image for when no valid frames are available
     cv::Mat noValidFramesImg(height, width, CV_8UC3, cv::Scalar(40, 40, 40));
     cv::putText(noValidFramesImg, "Waiting for valid frames...", 
@@ -281,38 +279,60 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
     // Local cache of valid frames to avoid locking the mutex during display
     std::deque<SharedResources::ValidFrameData> validFramesCache;
     
+    // Frame rate control - maximum 60 FPS
+    const std::chrono::microseconds frameInterval(1000000 / 60); // 60 FPS = 16.67ms
+    auto lastFrameTime = std::chrono::high_resolution_clock::now();
+    
     // Wait for initialization
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
     while (!shared.done)
     {
-        hasNewFrames = false;
+        // Use condition variable with timeout to wait for new frames
+        std::unique_lock<std::mutex> lock(shared.validFramesMutex);
         
-        // Check if there are new valid frames
-        if (shared.newValidFrameAvailable)
-        {
-            // Lock the mutex and copy the frames to our local cache
-            {
-                std::lock_guard<std::mutex> lock(shared.validFramesMutex);
-                
-                if (!shared.validFramesQueue.empty()) {
-                    // Copy the queue to our local cache
-                    validFramesCache = shared.validFramesQueue;
-                    hasNewFrames = true;
-                }
-                
-                // Reset the flag
-                shared.newValidFrameAvailable = false;
-            }
-            
-            // Mark display for update if we have new frames
-            if (hasNewFrames) {
-                displayNeedsUpdate = true;
-            }
+        // Check done flag immediately before waiting
+        if (shared.done) {
+            lock.unlock();
+            break;
         }
         
-        // Update the display if we have new frames or haven't displayed existing frames yet
-        if (displayNeedsUpdate || (validFramesCache.empty() && !displayNeedsUpdate))
+        // Wait for notification with timeout or until a new frame is available or done
+        shared.validFramesCondition.wait_for(lock, frameInterval, [&shared]() {
+            return shared.newValidFrameAvailable || shared.done;
+        });
+        
+        // Check done flag again after waiting
+        if (shared.done) {
+            lock.unlock();
+            break;
+        }
+        
+        // Enforce maximum frame rate
+        auto now = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastFrameTime);
+        if (elapsed < frameInterval && !shared.done) 
+        {
+            // Skip this update if not enough time has passed
+            lock.unlock();
+            continue;
+        }
+        
+        // Process new frames if available
+        if (shared.newValidFrameAvailable && !shared.validFramesQueue.empty()) 
+        {
+            // Copy the queue to our local cache
+            validFramesCache = shared.validFramesQueue;
+            displayNeedsUpdate = true;
+            
+            // Reset the flag
+            shared.newValidFrameAvailable = false;
+        }
+        
+        lock.unlock();
+        
+        // Update the display if needed
+        if (displayNeedsUpdate || validFramesCache.empty())
         {
             // Reset the flag
             displayNeedsUpdate = false;
@@ -358,9 +378,7 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
                     
                     // Add timestamp and metrics text
                     std::stringstream ss;
-                    ss << "Time: " << validFramesCache[i].timestamp;
-                    cv::putText(colorFrame, ss.str(), cv::Point(10, 20), 
-                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+          
                     
                     ss.str("");
                     ss << "Def: " << std::fixed << std::setprecision(3) << validFramesCache[i].result.deformability;
@@ -372,11 +390,13 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
                     cv::putText(colorFrame, ss.str(), cv::Point(10, 60), 
                                 cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
                     
-                    // Add frame number
-                    ss.str("");
-                    ss << "Frame: " << validFramesCache[i].frameIndex;
-                    cv::putText(colorFrame, ss.str(), cv::Point(10, 80), 
-                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                    // Add ring ratio if it's a valid frame with nested contours
+                    if (validFramesCache[i].result.isValid && validFramesCache[i].result.hasSingleInnerContour) {
+                        ss.str("");
+                        ss << "Ring Ratio: " << std::fixed << std::setprecision(3) << validFramesCache[i].result.ringRatio;
+                        cv::putText(colorFrame, ss.str(), cv::Point(10, 80), 
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                    }
                     
                     // Copy to the combined display
                     colorFrame.copyTo(displayRegion);
@@ -393,22 +413,10 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
             
             // Process UI events
             cv::waitKey(1);
+            
+            // Update last frame time
+            lastFrameTime = std::chrono::high_resolution_clock::now();
         }
-        
-        // Handle keyboard events for the valid frames window
-        int key = cv::waitKey(30); // More responsive key checking
-        if (key == 27) { // ESC key
-            shared.done = true;  // Signal all threads to exit
-            // Notify all other threads to exit
-            shared.displayQueueCondition.notify_all();
-            shared.processingQueueCondition.notify_all();
-            shared.savingCondition.notify_all();
-            shared.scatterDataCondition.notify_one();
-            shared.newValidFrameAvailable = true;
-        }
-        
-        // Sleep for a short time to avoid high CPU usage
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
     
     cv::destroyWindow(windowName);
@@ -472,6 +480,7 @@ void processingThreadTask(
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
                         shared.deformabilityBuffer.push(reinterpret_cast<const uint8_t *>(&plotMetrics));
                         shared.frameAreaRatios.store(filterResult.areaRatio);
+                        shared.frameRingRatios.store(filterResult.ringRatio);
 
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
@@ -490,6 +499,7 @@ void processingThreadTask(
                             qualifiedResult.areaRatio = filterResult.areaRatio;
                             qualifiedResult.area = filterResult.area;
                             qualifiedResult.deformability = filterResult.deformability;
+                            qualifiedResult.ringRatio = filterResult.ringRatio;
                             qualifiedResult.originalImage = inputImage.clone();
 
                             std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
@@ -531,6 +541,7 @@ void processingThreadTask(
                         
                         // Signal that a new valid frame is available
                         shared.newValidFrameAvailable = true;
+                        shared.validFramesCondition.notify_one();
                     }
                 }
             }
@@ -668,12 +679,16 @@ void displayThreadTask(
                     {
                         shared.frameDeformabilities.store(filterResult.deformability);
                         shared.frameAreas.store(filterResult.area);
+                        shared.frameAreaRatios.store(filterResult.areaRatio);
+                        shared.frameRingRatios.store(filterResult.ringRatio);
                     }
                     else
                     {
                         // Store negative values of the metrics to indicate invalid frames
                         shared.frameDeformabilities.store(-filterResult.deformability);
                         shared.frameAreas.store(-filterResult.area);
+                        shared.frameAreaRatios.store(-filterResult.areaRatio);
+                        shared.frameRingRatios.store(-filterResult.ringRatio);
                     }
 
                     updateDisplay(image, processedImage, filterResult);
@@ -740,12 +755,16 @@ void displayThreadTask(
                         {
                             shared.frameDeformabilities.store(filterResult.deformability);
                             shared.frameAreas.store(filterResult.area);
+                            shared.frameAreaRatios.store(filterResult.areaRatio);
+                            shared.frameRingRatios.store(filterResult.ringRatio);
                         }
                         else
                         {
                             // Store negative values of the metrics to indicate invalid frames
                             shared.frameDeformabilities.store(-filterResult.deformability);
                             shared.frameAreas.store(-filterResult.area);
+                            shared.frameAreaRatios.store(-filterResult.areaRatio);
+                            shared.frameRingRatios.store(-filterResult.ringRatio);
                         }
 
                         updateDisplay(image, processedImage, filterResult);
@@ -936,6 +955,7 @@ void keyboardHandlingThread(
             shared.scatterDataCondition.notify_one();
             // Set the valid frame available flag to ensure the valid frames thread checks done
             shared.newValidFrameAvailable = true;
+            shared.validFramesCondition.notify_one();
         }
         else if (key == 32)
         { // Space bar
@@ -1158,6 +1178,8 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.displayQueueCondition.notify_all();
     shared.processingQueueCondition.notify_all();
     shared.savingCondition.notify_all();
+    shared.validFramesCondition.notify_all();
+    shared.scatterDataCondition.notify_all();
     std::cout << "Joining threads..." << std::endl;
     for (auto &thread : threads)
     {

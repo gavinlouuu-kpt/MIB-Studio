@@ -33,6 +33,7 @@ struct QualifiedResult
     double areaRatio;
     double area;
     double deformability;
+    double ringRatio; // Ratio of inner contour area to outer contour area
 
     cv::Mat originalImage;
 };
@@ -108,6 +109,7 @@ struct FilterResult
     double deformability;
     double area;
     double areaRatio;
+    double ringRatio; // Ratio of inner contour area to outer contour area
 };
 
 struct SharedResources
@@ -133,6 +135,7 @@ struct SharedResources
     };
     std::deque<ValidFrameData> validFramesQueue;
     std::mutex validFramesMutex;
+    std::condition_variable validFramesCondition;
     std::atomic<bool> newValidFrameAvailable{false};
 
     std::atomic<size_t> latestCameraFrame{0}; // for simulated camera
@@ -180,6 +183,7 @@ struct SharedResources
     std::atomic<double> frameDeformabilities;
     std::atomic<double> frameAreas;
     std::atomic<double> frameAreaRatios;
+    std::atomic<double> frameRingRatios;
     // std::atomic<size_t> totalFramesProcessed;
     std::atomic<bool> updated;
     std::atomic<bool> validProcessingFrame{false};
@@ -203,7 +207,7 @@ void loadImages(const std::string &directory, CircularBuffer &cameraBuffer, bool
 void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &params, const CircularBuffer &cameraBuffer);
 void processFrame(const cv::Mat &inputImage, SharedResources &shared,
                   cv::Mat &outputImage, ThreadLocalMats &mats);
-std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>> findContours(const cv::Mat &processedImage);
+std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>, std::vector<int>> findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
 
 void onTrackbar(int pos, void *userdata);
