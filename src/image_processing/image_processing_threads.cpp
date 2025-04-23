@@ -15,6 +15,9 @@
 #include <matplot/matplot.h>
 #include <thread>
 #include <atomic>
+#include <deque>  // Add this for std::deque
+#include <iomanip> // For std::setprecision
+#include <sstream> // For std::stringstream
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -252,6 +255,160 @@ void metricDisplayThread(SharedResources &shared)
     }
 }
 
+void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &circularBuffer, const ImageParams &imageParams)
+{
+    const std::string windowName = "Valid Frames";
+    
+    // Create a window for the valid frames display
+    cv::namedWindow(windowName, cv::WINDOW_AUTOSIZE);
+    
+    // Get dimensions from image params
+    int height = static_cast<int>(imageParams.height);
+    int width = static_cast<int>(imageParams.width);
+    
+    // Flag to track if display needs updating
+    bool displayNeedsUpdate = false;
+    
+    // Track if we've processed new frames
+    bool hasNewFrames = false;
+    
+    // Pre-create a placeholder image for when no valid frames are available
+    cv::Mat noValidFramesImg(height, width, CV_8UC3, cv::Scalar(40, 40, 40));
+    cv::putText(noValidFramesImg, "Waiting for valid frames...", 
+                cv::Point(width/2 - 150, height/2), 
+                cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(200, 200, 200), 2);
+    
+    // Local cache of valid frames to avoid locking the mutex during display
+    std::deque<SharedResources::ValidFrameData> validFramesCache;
+    
+    // Wait for initialization
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    while (!shared.done)
+    {
+        hasNewFrames = false;
+        
+        // Check if there are new valid frames
+        if (shared.newValidFrameAvailable)
+        {
+            // Lock the mutex and copy the frames to our local cache
+            {
+                std::lock_guard<std::mutex> lock(shared.validFramesMutex);
+                
+                if (!shared.validFramesQueue.empty()) {
+                    // Copy the queue to our local cache
+                    validFramesCache = shared.validFramesQueue;
+                    hasNewFrames = true;
+                }
+                
+                // Reset the flag
+                shared.newValidFrameAvailable = false;
+            }
+            
+            // Mark display for update if we have new frames
+            if (hasNewFrames) {
+                displayNeedsUpdate = true;
+            }
+        }
+        
+        // Update the display if we have new frames or haven't displayed existing frames yet
+        if (displayNeedsUpdate || (validFramesCache.empty() && !displayNeedsUpdate))
+        {
+            // Reset the flag
+            displayNeedsUpdate = false;
+            
+            // Create combined display image
+            if (!validFramesCache.empty())
+            {
+                int totalHeight = height * validFramesCache.size();
+                cv::Mat combinedDisplay(totalHeight, width, CV_8UC3);
+                
+                // Fill the combined display with the valid frames
+                for (size_t i = 0; i < validFramesCache.size(); i++)
+                {
+                    cv::Mat displayRegion = combinedDisplay(cv::Rect(0, i * height, width, height));
+                    
+                    // Convert original to BGR
+                    cv::Mat colorFrame;
+                    cv::cvtColor(validFramesCache[i].originalImage, colorFrame, cv::COLOR_GRAY2BGR);
+                    
+                    // Create overlay from processed image
+                    if (shared.overlayMode)
+                    {
+                        // Create a mask from the processed image
+                        cv::Mat mask = (validFramesCache[i].processedImage > 0);
+                        
+                        // Create a colored overlay
+                        cv::Mat overlay = cv::Mat::zeros(colorFrame.size(), CV_8UC3);
+                        
+                        // Use overlay color based on the filter result
+                        cv::Scalar overlayColor = determineOverlayColor(validFramesCache[i].result, true);
+                        
+                        // Create semi-transparent overlay
+                        const double opacity = 0.3;
+                        overlay.setTo(overlayColor, mask);
+                        cv::addWeighted(colorFrame, 1.0, overlay, opacity, 0, colorFrame);
+                    }
+                    
+                    // Draw ROI rectangle
+                    {
+                        std::lock_guard<std::mutex> roiLock(shared.roiMutex);
+                        cv::rectangle(colorFrame, shared.roi, cv::Scalar(0, 255, 0), 1);
+                    }
+                    
+                    // Add timestamp and metrics text
+                    std::stringstream ss;
+                    ss << "Time: " << validFramesCache[i].timestamp;
+                    cv::putText(colorFrame, ss.str(), cv::Point(10, 20), 
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                    
+                    ss.str("");
+                    ss << "Def: " << std::fixed << std::setprecision(3) << validFramesCache[i].result.deformability;
+                    cv::putText(colorFrame, ss.str(), cv::Point(10, 40), 
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                    
+                    ss.str("");
+                    ss << "Area: " << std::fixed << std::setprecision(1) << validFramesCache[i].result.area;
+                    cv::putText(colorFrame, ss.str(), cv::Point(10, 60), 
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                    
+                    // Add frame number
+                    ss.str("");
+                    ss << "Frame: " << validFramesCache[i].frameIndex;
+                    cv::putText(colorFrame, ss.str(), cv::Point(10, 80), 
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                    
+                    // Copy to the combined display
+                    colorFrame.copyTo(displayRegion);
+                }
+                
+                // Show the combined display
+                cv::imshow(windowName, combinedDisplay);
+            }
+            else
+            {
+                // Show placeholder when no valid frames are available
+                cv::imshow(windowName, noValidFramesImg);
+            }
+            
+            // Process UI events
+            cv::waitKey(1);
+        }
+        
+        // Handle keyboard events for the valid frames window
+        int key = cv::waitKey(30); // More responsive key checking
+        if (key == 27) { // ESC key
+            shared.done = true;  // Signal all threads to exit
+        }
+        
+        // Sleep for a short time to avoid high CPU usage
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+    
+    cv::destroyWindow(windowName);
+    std::cout << "Valid frames display thread interrupted." << std::endl;
+}
+
 void processingThreadTask(
     std::mutex &processingQueueMutex,
     std::condition_variable &processingQueueCondition,
@@ -268,6 +425,9 @@ void processingThreadTask(
     // const size_t area_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
     shared.processTrigger = false;
+    
+    // Initialize frame counter
+    size_t frameCounter = 0;
 
     while (!shared.done)
     {
@@ -339,6 +499,32 @@ void processingThreadTask(
                                 shared.savingCondition.notify_one();
                             }
                         }
+                    }
+                    
+                    // Add valid frame to the queue for the validFramesDisplayThread
+                    {
+                        std::lock_guard<std::mutex> validFramesLock(shared.validFramesMutex);
+                        
+                        // Create the valid frame data
+                        SharedResources::ValidFrameData validFrame;
+                        validFrame.originalImage = inputImage.clone();
+                        validFrame.processedImage = processedImage.clone();
+                        validFrame.result = filterResult;
+                        validFrame.frameIndex = frameCounter++;
+                        validFrame.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now().time_since_epoch()).count();
+                        
+                        // Add to the front of the queue (newest first)
+                        shared.validFramesQueue.push_front(std::move(validFrame));
+                        
+                        // Keep only the latest 5 frames
+                        const size_t MAX_VALID_FRAMES = 5;
+                        while (shared.validFramesQueue.size() > MAX_VALID_FRAMES) {
+                            shared.validFramesQueue.pop_back();
+                        }
+                        
+                        // Signal that a new valid frame is available
+                        shared.newValidFrameAvailable = true;
                     }
                 }
             }
@@ -989,6 +1175,9 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
     threads.emplace_back(metricDisplayThread, std::ref(shared));
+    
+    // Add the validFramesDisplayThread to show the latest 5 valid frames
+    threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
 
     // Read from json to check if scatterplot is enabled
     json config = readConfig("config.json");

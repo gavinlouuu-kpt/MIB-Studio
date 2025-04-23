@@ -123,6 +123,18 @@ struct SharedResources
     std::atomic<int> currentBatchNumber{0};
     std::atomic<size_t> recordedItemsCount{0}; // Counter for items recorded during 'running' state
 
+    // Valid frames sharing between processing thread and display thread
+    struct ValidFrameData {
+        cv::Mat originalImage;
+        cv::Mat processedImage;
+        FilterResult result;
+        size_t frameIndex;
+        int64_t timestamp;
+    };
+    std::deque<ValidFrameData> validFramesQueue;
+    std::mutex validFramesMutex;
+    std::atomic<bool> newValidFrameAvailable{false};
+
     std::atomic<size_t> latestCameraFrame{0}; // for simulated camera
     std::atomic<size_t> frameRateCount{0};    // for simulated camera
     std::queue<size_t> framesToProcess;
@@ -216,6 +228,8 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                         std::vector<std::thread> &threads);
 void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTORY,
                        std::function<std::vector<std::thread>(SharedResources &, const std::string &)> setupThreads);
+
+void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &circularBuffer, const ImageParams &imageParams);
 
 ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared);
 
