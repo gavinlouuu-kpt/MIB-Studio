@@ -289,47 +289,52 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
     while (!shared.done)
     {
         // Use condition variable with timeout to wait for new frames
-        std::unique_lock<std::mutex> lock(shared.validFramesMutex);
-        
-        // Check done flag immediately before waiting
-        if (shared.done) {
-            lock.unlock();
-            break;
-        }
-        
-        // Wait for notification with timeout or until a new frame is available or done
-        shared.validFramesCondition.wait_for(lock, frameInterval, [&shared]() {
-            return shared.newValidFrameAvailable || shared.done;
-        });
-        
-        // Check done flag again after waiting
-        if (shared.done) {
-            lock.unlock();
-            break;
-        }
-        
-        // Enforce maximum frame rate
-        auto now = std::chrono::high_resolution_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastFrameTime);
-        if (elapsed < frameInterval && !shared.done) 
         {
-            // Skip this update if not enough time has passed
-            lock.unlock();
-            continue;
-        }
-        
-        // Process new frames if available
-        if (shared.newValidFrameAvailable && !shared.validFramesQueue.empty()) 
-        {
-            // Copy the queue to our local cache
-            validFramesCache = shared.validFramesQueue;
-            displayNeedsUpdate = true;
+            std::unique_lock<std::mutex> lock(shared.validFramesMutex);
             
-            // Reset the flag
-            shared.newValidFrameAvailable = false;
-        }
+            // Check done flag immediately before waiting
+            if (shared.done) {
+                break;
+            }
+            
+            // Use a shorter timeout to check done flag more frequently
+            const auto shortTimeout = std::chrono::milliseconds(frameInterval.count() / 1000);
+            
+            // Wait for notification with timeout or until a new frame is available or done
+            shared.validFramesCondition.wait_for(lock, shortTimeout, [&shared]() {
+                return shared.newValidFrameAvailable || shared.done;
+            });
+            
+            // Check done flag again after waiting
+            if (shared.done) {
+                break;
+            }
+            
+            // Enforce maximum frame rate
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastFrameTime);
+            if (elapsed < frameInterval && !shared.done) 
+            {
+                // Continue to next iteration with done check
+                continue;
+            }
+            
+            // Process new frames if available
+            if (shared.newValidFrameAvailable && !shared.validFramesQueue.empty()) 
+            {
+                // Copy the queue to our local cache
+                validFramesCache = shared.validFramesQueue;
+                displayNeedsUpdate = true;
+                
+                // Reset the flag
+                shared.newValidFrameAvailable = false;
+            }
+        } // Unlock mutex here to minimize lock time
         
-        lock.unlock();
+        // Check done flag again outside the lock
+        if (shared.done) {
+            break;
+        }
         
         // Update the display if needed
         if (displayNeedsUpdate || validFramesCache.empty())
@@ -411,11 +416,18 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
                 cv::imshow(windowName, noValidFramesImg);
             }
             
-            // Process UI events
-            cv::waitKey(1);
+            // Process UI events with a short timeout to check done flag frequently
+            if (cv::waitKey(1) >= 0 || shared.done) {
+                break;
+            }
             
             // Update last frame time
             lastFrameTime = std::chrono::high_resolution_clock::now();
+        }
+        
+        // Check done flag one more time to ensure responsiveness
+        if (shared.done) {
+            break;
         }
     }
     
@@ -949,13 +961,18 @@ void keyboardHandlingThread(
         if (key == 27)
         { // ESC key
             shared.done = true;
+            
+            // Signal all condition variables to wake up their threads
+            shared.validFramesCondition.notify_all();
             shared.displayQueueCondition.notify_all();
             shared.processingQueueCondition.notify_all();
             shared.savingCondition.notify_all();
-            shared.scatterDataCondition.notify_one();
-            // Set the valid frame available flag to ensure the valid frames thread checks done
+            shared.scatterDataCondition.notify_all();
+            
+            // Set new valid frame available to ensure the valid frames thread wakes up
             shared.newValidFrameAvailable = true;
-            shared.validFramesCondition.notify_one();
+            
+            std::cout << "ESC pressed, exiting..." << std::endl;
         }
         else if (key == 32)
         { // Space bar
