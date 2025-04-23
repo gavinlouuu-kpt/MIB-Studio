@@ -89,7 +89,7 @@ double calculateRingRatio(const std::vector<cv::Point>& innerContour, const std:
     }
     
     // Calculate the ratio of inner area to outer area and return sqrt of it
-    return innerArea / outerArea;
+    return  std::sqrt(outerArea-innerArea);
 }
 
 std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>, std::vector<int>> findContours(const cv::Mat &processedImage)

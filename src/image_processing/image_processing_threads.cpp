@@ -298,7 +298,7 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
             }
             
             // Use a shorter timeout to check done flag more frequently
-            const auto shortTimeout = std::chrono::milliseconds(frameInterval.count() / 1000);
+            const auto shortTimeout = std::chrono::milliseconds(10);
             
             // Wait for notification with timeout or until a new frame is available or done
             shared.validFramesCondition.wait_for(lock, shortTimeout, [&shared]() {
@@ -1197,6 +1197,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.savingCondition.notify_all();
     shared.validFramesCondition.notify_all();
     shared.scatterDataCondition.notify_all();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::cout << "Joining threads..." << std::endl;
     for (auto &thread : threads)
     {

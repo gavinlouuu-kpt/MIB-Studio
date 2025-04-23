@@ -261,7 +261,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
     // Write header to master CSV if it's a new file
     if (!masterFileExists) {
-        masterCsvFile << "Batch,Condition,Timestamp_us,Deformability,Area\n";
+        masterCsvFile << "Batch,Condition,Timestamp_us,Deformability,Area,RingRatio\n";
     }
     
     // Write header to master ROI CSV if it's a new file
@@ -272,7 +272,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
     
     // Write CSV header
-    csvFile << "Condition,Timestamp_us,Deformability,Area\n";
+    csvFile << "Condition,Timestamp_us,Deformability,Area,RingRatio\n";
 
     // Save current batch's data to master files
     if (!results.empty())
@@ -336,14 +336,16 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
         csvFile << condition << ","
                 << result.timestamp << ","
                 << result.deformability << ","
-                << result.area << "\n";
+                << result.area << ","
+                << result.ringRatio << "\n";
         
         // Also write to master CSV with batch number
         masterCsvFile << shared.currentBatchNumber << ","
                       << condition << ","
                       << result.timestamp << ","
                       << result.deformability << ","
-                      << result.area << "\n";
+                      << result.area << ","
+                      << result.ringRatio << "\n";
 
         // Save image metadata and data to batch image file
         int rows = result.originalImage.rows;
