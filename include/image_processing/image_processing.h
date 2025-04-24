@@ -126,6 +126,12 @@ struct SharedResources
     std::atomic<size_t> recordedItemsCount{0}; // Counter for items recorded during 'running' state
     std::atomic<bool> clearHistogramData{false}; // Flag to clear histogram data
     std::atomic<double> averageRingRatio{0.0}; // Average ring ratio for dashboard display
+    
+    // Thread shutdown tracking
+    std::atomic<int> activeThreadCount{0};
+    std::atomic<int> threadsReadyToJoin{0};
+    std::mutex threadShutdownMutex;
+    std::condition_variable threadShutdownCondition;
 
     // Valid frames sharing between processing thread and display thread
     struct ValidFrameData {

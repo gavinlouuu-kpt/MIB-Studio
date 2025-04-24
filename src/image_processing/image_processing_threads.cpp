@@ -74,6 +74,14 @@ void simulateCameraThread(
         }
         shared.updated = true;
     }
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+    
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
@@ -256,6 +264,13 @@ void metricDisplayThread(SharedResources &shared)
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
 }
 
 void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &circularBuffer, const ImageParams &imageParams)
@@ -434,6 +449,14 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
     }
     
     cv::destroyWindow(windowName);
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+    
     std::cout << "Valid frames display thread interrupted." << std::endl;
 }
 
@@ -573,6 +596,14 @@ void processingThreadTask(
             lock.unlock();
         }
     }
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+    
     std::cout << "Processing thread interrupted." << std::endl;
 }
 
@@ -815,6 +846,14 @@ void displayThreadTask(
     }
 
     cv::destroyAllWindows();
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+    
     std::cout << "Display thread interrupted." << std::endl;
 }
 
@@ -948,6 +987,13 @@ void updateScatterPlot(SharedResources &shared)
     catch (const std::exception &e)
     {
         std::cerr << "Fatal error in scatter plot thread: " << e.what() << std::endl;
+    }
+
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
     }
 
     std::cout << "Scatter plot thread interrupted." << std::endl;
@@ -1126,6 +1172,13 @@ void updateRingRatioHistogram(SharedResources &shared)
         std::cerr << "Fatal error in ring ratio histogram thread: " << e.what() << std::endl;
     }
 
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+
     std::cout << "Ring ratio histogram thread interrupted." << std::endl;
 }
 
@@ -1292,6 +1345,14 @@ void keyboardHandlingThread(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+    
     std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
 
@@ -1343,6 +1404,14 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
         }
         shared.updated = true;
     }
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+    
     std::cout << "Result saving thread interrupted." << std::endl;
 }
 
@@ -1357,6 +1426,10 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
     shared.recordedItemsCount = 0; // Initialize recorded items counter
+    
+    // Reset thread counting
+    shared.activeThreadCount = 0;
+    shared.threadsReadyToJoin = 0;
 
     // Initialize the background capture time
     {
@@ -1373,14 +1446,38 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 
     // Call the setup function passed as parameter
     std::vector<std::thread> threads = setupThreads(shared, saveDir);
+    
+    // Store the number of threads we need to wait for
+    shared.activeThreadCount = threads.size();
 
-    // Wait for completion
-    shared.displayQueueCondition.notify_all();
-    shared.processingQueueCondition.notify_all();
-    shared.savingCondition.notify_all();
-    shared.validFramesCondition.notify_all();
-    shared.scatterDataCondition.notify_all();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Wait for threads to signal they're ready to be joined when done is set to true
+    // This will happen when ESC is pressed and done becomes true
+    {
+        std::unique_lock<std::mutex> lock(shared.threadShutdownMutex);
+        
+        // Wait for all threads to signal they're exiting
+        while (!shared.done) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        
+        std::cout << "Waiting for all threads to complete..." << std::endl;
+        
+        // Send signals to all condition variables to wake threads that might be waiting
+        shared.displayQueueCondition.notify_all();
+        shared.processingQueueCondition.notify_all();
+        shared.savingCondition.notify_all();
+        shared.validFramesCondition.notify_all();
+        shared.scatterDataCondition.notify_all();
+        
+        // Wait for all threads to be ready to join
+        shared.threadShutdownCondition.wait(lock, [&shared]() {
+            return shared.threadsReadyToJoin >= shared.activeThreadCount;
+        });
+        
+        std::cout << "All threads are ready to be joined." << std::endl;
+    }
+    
+    // Now safe to join all threads
     std::cout << "Joining threads..." << std::endl;
     for (auto &thread : threads)
     {
