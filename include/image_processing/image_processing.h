@@ -125,6 +125,7 @@ struct SharedResources
     std::atomic<int> currentBatchNumber{0};
     std::atomic<size_t> recordedItemsCount{0}; // Counter for items recorded during 'running' state
     std::atomic<bool> clearHistogramData{false}; // Flag to clear histogram data
+    std::atomic<double> averageRingRatio{0.0}; // Average ring ratio for dashboard display
 
     // Valid frames sharing between processing thread and display thread
     struct ValidFrameData {

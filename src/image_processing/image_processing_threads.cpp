@@ -151,7 +151,8 @@ void metricDisplayThread(SharedResources &shared)
                                                         hbox({text("Deformability: "), text(std::to_string(shared.frameDeformabilities.load()))}),
                                                         hbox({text("Area: "), text(std::to_string(shared.frameAreas.load()))}),
                                                         hbox({text("Area Ratio: "), text(std::to_string(shared.frameAreaRatios.load()))}),
-                                                        hbox({text("Ring Ratio: "), text(std::to_string(shared.frameRingRatios.load()))})}));
+                                                        hbox({text("Ring Ratio: "), text(std::to_string(shared.frameRingRatios.load()))}),
+                                                        hbox({text("Avg Ring Ratio: "), text(std::to_string(shared.averageRingRatio.load()).substr(0, 6))})}));
     };
 
     auto render_config_metrics = [&]()
@@ -1073,13 +1074,24 @@ void updateRingRatioHistogram(SharedResources &shared)
 
                             if (!hasInvalidValues)
                             {
+                                // Calculate average ring ratio
+                                double sum = 0.0;
+                                for (double ratio : ringRatios) {
+                                    sum += ratio;
+                                }
+                                double average = sum / ringRatios.size();
+                                
+                                // Store the average in the shared resource for dashboard display
+                                shared.averageRingRatio.store(average, std::memory_order_relaxed);
+                                
                                 // Create histogram using a fixed number of bins
                                 const int NUM_BINS = 25;
                                 auto h = hist(ringRatios, NUM_BINS);
                                 
                                 xlabel("Ring Ratio");
                                 ylabel("Frequency");
-                                title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples)");
+                                title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples, Avg: " + 
+                                      std::to_string(average).substr(0, 5) + ")");
 
                                 f->draw();
                             }
