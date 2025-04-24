@@ -124,6 +124,7 @@ struct SharedResources
     std::atomic<bool> displayNeedsUpdate{false};
     std::atomic<int> currentBatchNumber{0};
     std::atomic<size_t> recordedItemsCount{0}; // Counter for items recorded during 'running' state
+    std::atomic<bool> clearHistogramData{false}; // Flag to clear histogram data
 
     // Valid frames sharing between processing thread and display thread
     struct ValidFrameData {
@@ -172,7 +173,7 @@ struct SharedResources
     std::string saveDirectory;
     // metrics
     CircularBuffer processingTimes{1000, sizeof(double)};                          // Buffer to store last 1000 processing times
-    CircularBuffer deformabilityBuffer{30000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
+    CircularBuffer deformabilityBuffer{10000, sizeof(std::tuple<double, double>)}; // Buffer for last 1000 deformability measurements
     std::mutex deformabilityBufferMutex;
     std::atomic<double> currentFPS;
     std::atomic<double> dataRate;

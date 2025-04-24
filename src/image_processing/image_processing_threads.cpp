@@ -18,6 +18,7 @@
 #include <deque>  // Add this for std::deque
 #include <iomanip> // For std::setprecision
 #include <sstream> // For std::stringstream
+#include <random>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -951,6 +952,233 @@ void updateScatterPlot(SharedResources &shared)
     std::cout << "Scatter plot thread interrupted." << std::endl;
 }
 
+void updateRingRatioHistogram(SharedResources &shared)
+{
+    using namespace matplot;
+
+    try
+    {
+        auto f = figure(true);
+        if (!f)
+        {
+            std::cerr << "Failed to create histogram figure" << std::endl;
+            return;
+        }
+        f->quiet_mode(true);
+        auto ax = gca();
+        if (!ax)
+        {
+            std::cerr << "Failed to get current axes for histogram" << std::endl;
+            return;
+        }
+
+        // Persistent vector to accumulate all ring ratios over time
+        std::vector<double> persistentRingRatios;
+        persistentRingRatios.reserve(10000);
+
+        const auto updateInterval = std::chrono::milliseconds(5000);
+        auto lastUpdateTime = std::chrono::steady_clock::now();
+        
+        while (!shared.done)
+        {
+            try
+            {
+                auto now = std::chrono::steady_clock::now();
+                if (now - lastUpdateTime < updateInterval)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+
+                bool needsUpdate = false;
+                std::vector<double> newRingRatios;
+                {
+                    std::lock_guard<std::mutex> lock(shared.validFramesMutex);
+                    
+                    // Check if we should clear the data (in response to the shared flag)
+                    if (shared.clearHistogramData)
+                    {
+                        persistentRingRatios.clear();
+                        shared.clearHistogramData = false;
+                        std::cout << "Histogram data cleared" << std::endl;
+                        needsUpdate = true;
+                    }
+                    
+                    // Temporary vector for new ring ratios
+                    newRingRatios.clear();
+                    newRingRatios.reserve(1000);
+
+                    // Collect ring ratios from valid frames
+                    for (const auto& frame : shared.validFramesQueue)
+                    {
+                        if (frame.result.isValid && frame.result.hasSingleInnerContour)
+                        {
+                            newRingRatios.push_back(frame.result.ringRatio);
+                        }
+                    }
+
+                    // Also collect ring ratios from deformability buffer for history
+                    std::lock_guard<std::mutex> bufferLock(shared.deformabilityBufferMutex);
+                    
+                    // Try to get more ring ratio data from qualified results
+                    {
+                        std::lock_guard<std::mutex> qualifiedLock(shared.qualifiedResultsMutex);
+                        const auto& currentBuffer = shared.usingBuffer1 ? 
+                            shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
+                            
+                        // Add ring ratios from current qualified results buffer
+                        for (const auto& result : currentBuffer) {
+                            if (result.ringRatio > 0) {
+                                newRingRatios.push_back(result.ringRatio);
+                            }
+                        }
+                    }
+                    
+                    // Add current frame's ring ratio if valid
+                    double currentRingRatio = shared.frameRingRatios.load();
+                    if (currentRingRatio > 0) {
+                        newRingRatios.push_back(currentRingRatio);
+                    }
+                    
+                    // If we found new data, add it to our persistent collection
+                    if (!newRingRatios.empty())
+                    {
+                        // Filter out extreme outliers (values outside 3 standard deviations)
+                        if (!newRingRatios.empty()) {
+                            // Calculate mean and standard deviation of existing data
+                            double mean = 0.0;
+                            double variance = 0.0;
+                            double stdDev = 0.0;
+                            
+                            if (!persistentRingRatios.empty()) {
+                                // Calculate mean
+                                for (double val : persistentRingRatios) {
+                                    mean += val;
+                                }
+                                mean /= persistentRingRatios.size();
+                                
+                                // Calculate variance
+                                for (double val : persistentRingRatios) {
+                                    variance += (val - mean) * (val - mean);
+                                }
+                                variance /= persistentRingRatios.size();
+                                
+                                // Calculate standard deviation
+                                stdDev = std::sqrt(variance);
+                            } else {
+                                // If no existing data, use the new data for stats
+                                for (double val : newRingRatios) {
+                                    mean += val;
+                                }
+                                mean /= newRingRatios.size();
+                                
+                                for (double val : newRingRatios) {
+                                    variance += (val - mean) * (val - mean);
+                                }
+                                variance /= newRingRatios.size();
+                                
+                                stdDev = std::sqrt(variance);
+                            }
+                            
+                            // Only filter if we have a valid standard deviation
+                            if (stdDev > 0) {
+                                const double OUTLIER_THRESHOLD = 3.0; // 3 standard deviations
+                                
+                                // Filter out extreme outliers
+                                auto it = std::remove_if(newRingRatios.begin(), newRingRatios.end(), 
+                                                        [mean, stdDev, OUTLIER_THRESHOLD](double val) {
+                                                            return std::abs(val - mean) > OUTLIER_THRESHOLD * stdDev;
+                                                        });
+                                
+                                // Erase the outliers
+                                if (it != newRingRatios.end()) {
+                                    size_t removedCount = std::distance(it, newRingRatios.end());
+                                    newRingRatios.erase(it, newRingRatios.end());
+                                    if (removedCount > 0) {
+                                        std::cout << "Removed " << removedCount << " outliers from histogram data" << std::endl;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Add new ring ratios to our persistent collection
+                        persistentRingRatios.insert(persistentRingRatios.end(), 
+                                                  newRingRatios.begin(), 
+                                                  newRingRatios.end());
+                        
+                        // Limit the size to 10,000 entries maximum
+                        const size_t MAX_PERSISTENT_SIZE = 10000;
+                        if (persistentRingRatios.size() > MAX_PERSISTENT_SIZE) {
+                            // Keep only the most recent entries
+                            persistentRingRatios.erase(
+                                persistentRingRatios.begin(),
+                                persistentRingRatios.begin() + (persistentRingRatios.size() - MAX_PERSISTENT_SIZE)
+                            );
+                        }
+                        
+                        needsUpdate = true;
+                    }
+                }
+
+                if (needsUpdate || (persistentRingRatios.size() > 0 && now - lastUpdateTime >= std::chrono::seconds(10)))
+                {
+                    try
+                    {
+                        ax->clear();
+
+                        // Check for invalid values
+                        bool hasInvalidValues = false;
+                        for (double ratio : persistentRingRatios)
+                        {
+                            if (!std::isfinite(ratio))
+                            {
+                                hasInvalidValues = true;
+                                break;
+                            }
+                        }
+
+                        if (!hasInvalidValues && !persistentRingRatios.empty())
+                        {
+                            // Create histogram using the global hist function with a fixed number of bins
+                            const int NUM_BINS = 25;
+                            auto h = hist(persistentRingRatios, NUM_BINS);
+                            std::cout << "Histogram with " << h->num_bins() << " bins and " 
+                                      << persistentRingRatios.size() << " total samples" << std::endl;
+                            
+                            xlabel("Ring Ratio");
+                            ylabel("Frequency");
+                            title("Ring Ratio Distribution (" + std::to_string(persistentRingRatios.size()) + " samples)");
+
+                            f->draw();
+                        }
+                        else
+                        {
+                            std::cerr << "Invalid values detected in histogram data or no data available" << std::endl;
+                        }
+
+                        lastUpdateTime = now;
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::cerr << "Error updating histogram: " << e.what() << std::endl;
+                    }
+                }
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Error in histogram loop: " << e.what() << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Fatal error in ring ratio histogram thread: " << e.what() << std::endl;
+    }
+
+    std::cout << "Ring ratio histogram thread interrupted." << std::endl;
+}
+
 void keyboardHandlingThread(
     const CircularBuffer &circularBuffer,
     size_t bufferCount, size_t width, size_t height,
@@ -1004,8 +1232,13 @@ void keyboardHandlingThread(
         }
         else if (key == 'q' || key == 'Q')
         {
+            // Clear deformability buffer
             std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
             shared.deformabilityBuffer.clear();
+            
+            // Set flag to clear histogram data
+            shared.clearHistogramData = true;
+            std::cout << "Clearing histogram data..." << std::endl;
         }
         else if (key == 'S')
         {
@@ -1228,13 +1461,19 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     // Add the validFramesDisplayThread to show the latest 5 valid frames
     threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
 
-    // Read from json to check if scatterplot is enabled
+    // Read from json to check if scatterplot and histogram are enabled
     json config = readConfig("config.json");
     bool scatterPlotEnabled = config.value("scatter_plot_enabled", false);
+    bool histogramEnabled = config.value("histogram_enabled", true);  // Default to true
 
     if (scatterPlotEnabled)
     {
         threads.emplace_back(updateScatterPlot, std::ref(shared));
+    }
+    
+    if (histogramEnabled)
+    {
+        threads.emplace_back(updateRingRatioHistogram, std::ref(shared));
     }
 }
 
