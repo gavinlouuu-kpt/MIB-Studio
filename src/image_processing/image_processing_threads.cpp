@@ -972,64 +972,54 @@ void updateRingRatioHistogram(SharedResources &shared)
             return;
         }
 
-        // Persistent vector to accumulate all ring ratios over time
-        std::vector<double> persistentRingRatios;
-        persistentRingRatios.reserve(10000);
+        // Vector to store ring ratios
+        std::vector<double> ringRatios;
+        ringRatios.reserve(2000);
 
         const auto updateInterval = std::chrono::milliseconds(5000);
         auto lastUpdateTime = std::chrono::steady_clock::now();
-        
+
         while (!shared.done)
         {
             try
             {
-                auto now = std::chrono::steady_clock::now();
-                if (now - lastUpdateTime < updateInterval)
+                // Wait for new data or timeout
                 {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    continue;
-                }
-
-                bool needsUpdate = false;
-                std::vector<double> newRingRatios;
-                {
-                    std::lock_guard<std::mutex> lock(shared.validFramesMutex);
+                    std::unique_lock<std::mutex> lock(shared.deformabilityBufferMutex);
                     
-                    // Check if we should clear the data (in response to the shared flag)
+                    // Use the same condition variable as scatter plot with timeout
+                    shared.scatterDataCondition.wait_for(lock, updateInterval, [&shared]() {
+                        return shared.newScatterDataAvailable || shared.clearHistogramData || shared.done;
+                    });
+                    
+                    if (shared.done) break;
+                    
+                    // Clear data if requested
                     if (shared.clearHistogramData)
                     {
-                        persistentRingRatios.clear();
+                        ringRatios.clear();
                         shared.clearHistogramData = false;
                         std::cout << "Histogram data cleared" << std::endl;
-                        needsUpdate = true;
                     }
-                    
-                    // Temporary vector for new ring ratios
-                    newRingRatios.clear();
-                    newRingRatios.reserve(1000);
 
-                    // Collect ring ratios from valid frames
-                    for (const auto& frame : shared.validFramesQueue)
+                    auto now = std::chrono::steady_clock::now();
+                    if (now - lastUpdateTime < updateInterval && !shared.newScatterDataAvailable)
                     {
-                        if (frame.result.isValid && frame.result.hasSingleInnerContour)
-                        {
-                            newRingRatios.push_back(frame.result.ringRatio);
-                        }
+                        continue;
                     }
 
-                    // Also collect ring ratios from deformability buffer for history
-                    std::lock_guard<std::mutex> bufferLock(shared.deformabilityBufferMutex);
-                    
-                    // Try to get more ring ratio data from qualified results
+                    // Process qualified results to extract ring ratios
+                    bool needsUpdate = false;
                     {
                         std::lock_guard<std::mutex> qualifiedLock(shared.qualifiedResultsMutex);
                         const auto& currentBuffer = shared.usingBuffer1 ? 
                             shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
                             
-                        // Add ring ratios from current qualified results buffer
+                        // Collect valid ring ratios
                         for (const auto& result : currentBuffer) {
                             if (result.ringRatio > 0) {
-                                newRingRatios.push_back(result.ringRatio);
+                                ringRatios.push_back(result.ringRatio);
+                                needsUpdate = true;
                             }
                         }
                     }
@@ -1037,131 +1027,62 @@ void updateRingRatioHistogram(SharedResources &shared)
                     // Add current frame's ring ratio if valid
                     double currentRingRatio = shared.frameRingRatios.load();
                     if (currentRingRatio > 0) {
-                        newRingRatios.push_back(currentRingRatio);
+                        ringRatios.push_back(currentRingRatio);
+                        needsUpdate = true;
                     }
                     
-                    // If we found new data, add it to our persistent collection
-                    if (!newRingRatios.empty())
-                    {
-                        // Filter out extreme outliers (values outside 3 standard deviations)
-                        if (!newRingRatios.empty()) {
-                            // Calculate mean and standard deviation of existing data
-                            double mean = 0.0;
-                            double variance = 0.0;
-                            double stdDev = 0.0;
-                            
-                            if (!persistentRingRatios.empty()) {
-                                // Calculate mean
-                                for (double val : persistentRingRatios) {
-                                    mean += val;
-                                }
-                                mean /= persistentRingRatios.size();
-                                
-                                // Calculate variance
-                                for (double val : persistentRingRatios) {
-                                    variance += (val - mean) * (val - mean);
-                                }
-                                variance /= persistentRingRatios.size();
-                                
-                                // Calculate standard deviation
-                                stdDev = std::sqrt(variance);
-                            } else {
-                                // If no existing data, use the new data for stats
-                                for (double val : newRingRatios) {
-                                    mean += val;
-                                }
-                                mean /= newRingRatios.size();
-                                
-                                for (double val : newRingRatios) {
-                                    variance += (val - mean) * (val - mean);
-                                }
-                                variance /= newRingRatios.size();
-                                
-                                stdDev = std::sqrt(variance);
-                            }
-                            
-                            // Only filter if we have a valid standard deviation
-                            if (stdDev > 0) {
-                                const double OUTLIER_THRESHOLD = 3.0; // 3 standard deviations
-                                
-                                // Filter out extreme outliers
-                                auto it = std::remove_if(newRingRatios.begin(), newRingRatios.end(), 
-                                                        [mean, stdDev, OUTLIER_THRESHOLD](double val) {
-                                                            return std::abs(val - mean) > OUTLIER_THRESHOLD * stdDev;
-                                                        });
-                                
-                                // Erase the outliers
-                                if (it != newRingRatios.end()) {
-                                    size_t removedCount = std::distance(it, newRingRatios.end());
-                                    newRingRatios.erase(it, newRingRatios.end());
-                                    if (removedCount > 0) {
-                                        std::cout << "Removed " << removedCount << " outliers from histogram data" << std::endl;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Add new ring ratios to our persistent collection
-                        persistentRingRatios.insert(persistentRingRatios.end(), 
-                                                  newRingRatios.begin(), 
-                                                  newRingRatios.end());
-                        
-                        // Limit the size to 10,000 entries maximum
-                        const size_t MAX_PERSISTENT_SIZE = 10000;
-                        if (persistentRingRatios.size() > MAX_PERSISTENT_SIZE) {
-                            // Keep only the most recent entries
-                            persistentRingRatios.erase(
-                                persistentRingRatios.begin(),
-                                persistentRingRatios.begin() + (persistentRingRatios.size() - MAX_PERSISTENT_SIZE)
-                            );
-                        }
-                        
-                        needsUpdate = true;
+                    // Keep only the most recent entries
+                    const size_t MAX_PERSISTENT_SIZE = 10000;
+                    if (ringRatios.size() > MAX_PERSISTENT_SIZE) {
+                        ringRatios.erase(
+                            ringRatios.begin(),
+                            ringRatios.begin() + (ringRatios.size() - MAX_PERSISTENT_SIZE)
+                        );
+                    }
+
+                    if (!needsUpdate && ringRatios.empty()) {
+                        continue;
                     }
                 }
 
-                if (needsUpdate || (persistentRingRatios.size() > 0 && now - lastUpdateTime >= std::chrono::seconds(10)))
+                // Update the histogram
+                try
                 {
-                    try
+                    ax->clear();
+
+                    // Check for invalid values
+                    bool hasInvalidValues = false;
+                    for (double ratio : ringRatios)
                     {
-                        ax->clear();
-
-                        // Check for invalid values
-                        bool hasInvalidValues = false;
-                        for (double ratio : persistentRingRatios)
+                        if (!std::isfinite(ratio))
                         {
-                            if (!std::isfinite(ratio))
-                            {
-                                hasInvalidValues = true;
-                                break;
-                            }
+                            hasInvalidValues = true;
+                            break;
                         }
-
-                        if (!hasInvalidValues && !persistentRingRatios.empty())
-                        {
-                            // Create histogram using the global hist function with a fixed number of bins
-                            const int NUM_BINS = 25;
-                            auto h = hist(persistentRingRatios, NUM_BINS);
-                            std::cout << "Histogram with " << h->num_bins() << " bins and " 
-                                      << persistentRingRatios.size() << " total samples" << std::endl;
-                            
-                            xlabel("Ring Ratio");
-                            ylabel("Frequency");
-                            title("Ring Ratio Distribution (" + std::to_string(persistentRingRatios.size()) + " samples)");
-
-                            f->draw();
-                        }
-                        else
-                        {
-                            std::cerr << "Invalid values detected in histogram data or no data available" << std::endl;
-                        }
-
-                        lastUpdateTime = now;
                     }
-                    catch (const std::exception &e)
+
+                    if (!hasInvalidValues && !ringRatios.empty())
                     {
-                        std::cerr << "Error updating histogram: " << e.what() << std::endl;
+                        // Create histogram using a fixed number of bins
+                        const int NUM_BINS = 25;
+                        auto h = hist(ringRatios, NUM_BINS);
+                        
+                        xlabel("Ring Ratio");
+                        ylabel("Frequency");
+                        title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples)");
+
+                        f->draw();
                     }
+                    else if (hasInvalidValues)
+                    {
+                        std::cerr << "Invalid values detected in histogram data" << std::endl;
+                    }
+
+                    lastUpdateTime = std::chrono::high_resolution_clock::now();
+                }
+                catch (const std::exception &e)
+                {
+                    std::cerr << "Error updating histogram: " << e.what() << std::endl;
                 }
             }
             catch (const std::exception &e)
