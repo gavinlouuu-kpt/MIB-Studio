@@ -975,6 +975,10 @@ void updateRingRatioHistogram(SharedResources &shared)
         // Vector to store ring ratios
         std::vector<double> ringRatios;
         ringRatios.reserve(2000);
+        
+        // Vector to collect new data between updates
+        std::vector<double> newRingRatios;
+        newRingRatios.reserve(500);
 
         const auto updateInterval = std::chrono::milliseconds(5000);
         auto lastUpdateTime = std::chrono::steady_clock::now();
@@ -988,7 +992,7 @@ void updateRingRatioHistogram(SharedResources &shared)
                     std::unique_lock<std::mutex> lock(shared.deformabilityBufferMutex);
                     
                     // Use the same condition variable as scatter plot with timeout
-                    shared.scatterDataCondition.wait_for(lock, updateInterval, [&shared]() {
+                    shared.scatterDataCondition.wait_for(lock, std::chrono::milliseconds(100), [&shared]() {
                         return shared.newScatterDataAvailable || shared.clearHistogramData || shared.done;
                     });
                     
@@ -998,91 +1002,104 @@ void updateRingRatioHistogram(SharedResources &shared)
                     if (shared.clearHistogramData)
                     {
                         ringRatios.clear();
+                        newRingRatios.clear();
                         shared.clearHistogramData = false;
                         std::cout << "Histogram data cleared" << std::endl;
                     }
 
-                    auto now = std::chrono::steady_clock::now();
-                    if (now - lastUpdateTime < updateInterval && !shared.newScatterDataAvailable)
+                    // Collect new data into temporary buffer without updating the plot yet
+                    if (shared.newScatterDataAvailable)
                     {
-                        continue;
-                    }
-
-                    // Process qualified results to extract ring ratios
-                    bool needsUpdate = false;
-                    {
-                        std::lock_guard<std::mutex> qualifiedLock(shared.qualifiedResultsMutex);
-                        const auto& currentBuffer = shared.usingBuffer1 ? 
-                            shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
-                            
-                        // Collect valid ring ratios
-                        for (const auto& result : currentBuffer) {
-                            if (result.ringRatio > 0) {
-                                ringRatios.push_back(result.ringRatio);
-                                needsUpdate = true;
+                        // Process qualified results to extract ring ratios
+                        {
+                            std::lock_guard<std::mutex> qualifiedLock(shared.qualifiedResultsMutex);
+                            const auto& currentBuffer = shared.usingBuffer1 ? 
+                                shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
+                                
+                            // Collect valid ring ratios into the temporary buffer
+                            for (const auto& result : currentBuffer) {
+                                if (result.ringRatio > 0) {
+                                    newRingRatios.push_back(result.ringRatio);
+                                }
                             }
                         }
-                    }
-                    
-                    // Add current frame's ring ratio if valid
-                    double currentRingRatio = shared.frameRingRatios.load();
-                    if (currentRingRatio > 0) {
-                        ringRatios.push_back(currentRingRatio);
-                        needsUpdate = true;
-                    }
-                    
-                    // Keep only the most recent entries
-                    const size_t MAX_PERSISTENT_SIZE = 10000;
-                    if (ringRatios.size() > MAX_PERSISTENT_SIZE) {
-                        ringRatios.erase(
-                            ringRatios.begin(),
-                            ringRatios.begin() + (ringRatios.size() - MAX_PERSISTENT_SIZE)
-                        );
-                    }
-
-                    if (!needsUpdate && ringRatios.empty()) {
-                        continue;
+                        
+                        // Add current frame's ring ratio if valid
+                        double currentRingRatio = shared.frameRingRatios.load();
+                        if (currentRingRatio > 0) {
+                            newRingRatios.push_back(currentRingRatio);
+                        }
+                        
+                        shared.newScatterDataAvailable = false;
                     }
                 }
 
-                // Update the histogram
-                try
+                // Check if it's time to update the plot (every 5 seconds)
+                auto now = std::chrono::steady_clock::now();
+                if (now - lastUpdateTime >= updateInterval)
                 {
-                    ax->clear();
-
-                    // Check for invalid values
-                    bool hasInvalidValues = false;
-                    for (double ratio : ringRatios)
-                    {
-                        if (!std::isfinite(ratio))
-                        {
-                            hasInvalidValues = true;
-                            break;
+                    // Add accumulated new data to the main buffer
+                    if (!newRingRatios.empty()) {
+                        ringRatios.insert(ringRatios.end(), newRingRatios.begin(), newRingRatios.end());
+                        newRingRatios.clear();
+                        
+                        // Keep only the most recent entries
+                        const size_t MAX_PERSISTENT_SIZE = 10000;
+                        if (ringRatios.size() > MAX_PERSISTENT_SIZE) {
+                            ringRatios.erase(
+                                ringRatios.begin(),
+                                ringRatios.begin() + (ringRatios.size() - MAX_PERSISTENT_SIZE)
+                            );
                         }
                     }
 
-                    if (!hasInvalidValues && !ringRatios.empty())
+                    // Update the histogram if there's data
+                    if (!ringRatios.empty())
                     {
-                        // Create histogram using a fixed number of bins
-                        const int NUM_BINS = 25;
-                        auto h = hist(ringRatios, NUM_BINS);
-                        
-                        xlabel("Ring Ratio");
-                        ylabel("Frequency");
-                        title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples)");
+                        try
+                        {
+                            ax->clear();
 
-                        f->draw();
-                    }
-                    else if (hasInvalidValues)
-                    {
-                        std::cerr << "Invalid values detected in histogram data" << std::endl;
-                    }
+                            // Check for invalid values
+                            bool hasInvalidValues = false;
+                            for (double ratio : ringRatios)
+                            {
+                                if (!std::isfinite(ratio))
+                                {
+                                    hasInvalidValues = true;
+                                    break;
+                                }
+                            }
 
-                    lastUpdateTime = std::chrono::high_resolution_clock::now();
+                            if (!hasInvalidValues)
+                            {
+                                // Create histogram using a fixed number of bins
+                                const int NUM_BINS = 25;
+                                auto h = hist(ringRatios, NUM_BINS);
+                                
+                                xlabel("Ring Ratio");
+                                ylabel("Frequency");
+                                title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples)");
+
+                                f->draw();
+                            }
+                            else
+                            {
+                                std::cerr << "Invalid values detected in histogram data" << std::endl;
+                            }
+                        }
+                        catch (const std::exception &e)
+                        {
+                            std::cerr << "Error updating histogram: " << e.what() << std::endl;
+                        }
+                    }
+                    
+                    lastUpdateTime = now;
                 }
-                catch (const std::exception &e)
+                else
                 {
-                    std::cerr << "Error updating histogram: " << e.what() << std::endl;
+                    // Sleep briefly to avoid busy waiting
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 }
             }
             catch (const std::exception &e)
