@@ -3,6 +3,8 @@
     "ftxui",
     "matplotplusplus",
     "opencv4",
-    "nlohmann-json"
+    "nlohmann-json",
+    "qtbase",
+    "qtcharts"
   ]
 }
