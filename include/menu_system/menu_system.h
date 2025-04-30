@@ -8,6 +8,7 @@ namespace MenuSystem
     void clearInputBuffer();
     void displayMenu();
     void runMockSample();
+    void runMockSample(const std::string& imageDirectory);
     void runLiveSample();
     void convertSavedImages();
     void egrabberConfig();

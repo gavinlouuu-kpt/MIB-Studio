@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <opencv2/imgcodecs.hpp>
+#include <QApplication>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -88,6 +89,9 @@ void MainWindow::on_actionRunMockSample_triggered()
     );
     
     if (!folderPath.isEmpty()) {
+        statusBar()->showMessage("Processing mock sample from: " + folderPath + "...");
+        // Use QApplication::processEvents to update the UI before starting the processing
+        QApplication::processEvents();
         runMockSample(folderPath);
     }
 }
@@ -203,22 +207,18 @@ void MainWindow::loadImageFolder(const QString& folderPath)
 
 void MainWindow::runMockSample(const QString& folderPath)
 {
-    // Placeholder for running mock sample
-    // In future phases, this will interface with the existing mock sample code
-    QMessageBox::information(this, "Run Mock Sample", 
-        "Mock sample functionality will be implemented in future phases.\n"
-        "Selected folder: " + folderPath);
-    
-    // For demonstration purposes only - will be replaced with actual implementation
-    QDir dir(folderPath);
-    QStringList filters;
-    filters << "*.png" << "*.jpg" << "*.bmp" << "*.tif";
-    QStringList imageFiles = dir.entryList(filters, QDir::Files);
-    
-    if (!imageFiles.isEmpty()) {
-        // Just load the first image for now
-        QString imagePath = folderPath + QDir::separator() + imageFiles.first();
-        loadImageFile(imagePath);
+    try {
+        // Call the MenuSystem runMockSample function with the selected folder
+        MenuSystem::runMockSample(folderPath.toStdString());
+        
+        // Update UI with success status
+        statusBar()->showMessage("Mock sample processing completed for: " + folderPath);
+    }
+    catch (const std::exception& e) {
+        // Show error message
+        QMessageBox::critical(this, "Error", 
+            QString("Error processing mock sample: %1").arg(e.what()));
+        statusBar()->showMessage("Error during mock sample processing", 5000);
     }
 }
 

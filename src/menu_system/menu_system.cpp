@@ -209,10 +209,18 @@ namespace MenuSystem
 
     void runMockSample()
     {
-
         std::cout << "Select the image directory:\n";
         std::string imageDirectory = navigateAndSelectFolder();
+        
+        if (!imageDirectory.empty()) {
+            runMockSample(imageDirectory);
+        } else {
+            std::cout << "No directory selected. Operation cancelled.\n";
+        }
+    }
 
+    void runMockSample(const std::string& imageDirectory)
+    {
         try
         {
             ImageParams params = initializeImageParams(imageDirectory);
