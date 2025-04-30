@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <!-- Add icon files here when available -->
+        <!-- <file>icons/app_icon.png</file> -->
+    </qresource>
+    <qresource prefix="/images">
+        <!-- Add image resources here when available -->
+    </qresource>
+    <qresource prefix="/styles">
+        <!-- Add style resources here when available -->
+    </qresource>
+</RCC> 

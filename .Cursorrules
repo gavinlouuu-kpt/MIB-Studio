@@ -1,0 +1,50 @@
+# MIB-Studio Project Rules
+
+## Code Style Preferences
+- Use camelCase for variable and function names
+- Use PascalCase for class names
+- Use underscore_case for file names
+- Indent with 4 spaces
+- Place opening braces on the same line for functions and control structures
+- Use explicit brace blocks for all control structures, even one-liners
+
+## Qt Integration Patterns
+- Keep OpenCV processing code separate from Qt UI code
+- Use signals and slots for communication between UI and processing components
+- Prefix private member variables with `m_` (e.g., `m_imageView`)
+- Prefix UI element member variables with `ui->`
+
+## File Organization
+- Place Qt UI classes in src/qt_ui/ directory
+- Keep image processing code in src/image_processing/ directory
+- Place utility functions in appropriate namespaces
+
+## Documentation Standards
+- Use Doxygen-style comments for classes, functions, and members
+- Include brief descriptions for all public methods
+- Document parameters and return values
+
+## Memory Management
+- Prefer smart pointers over raw pointers when ownership semantics are relevant
+- Use Qt parent-child relationships for UI component memory management
+- Explicitly manage resources in non-UI code
+
+## Threading Approach
+- Use Qt's threading model for background operations
+- Ensure UI remains responsive during processing tasks
+- Use signals and slots for thread communication
+
+## Testing Strategy
+- Test OpenCV-Qt image conversion thoroughly
+- Verify feature parity between FTXUI and Qt implementations
+- Maintain ability to toggle between interfaces during development
+
+## Build System
+- Use CMake with proper Qt integration
+- Manage dependencies through vcpkg
+- Set appropriate Qt-specific CMake flags
+
+## Transition Strategy
+- Implement incremental changes with fallback options
+- Complete one functional area before moving to the next
+- Maintain existing functionality throughout transition 
