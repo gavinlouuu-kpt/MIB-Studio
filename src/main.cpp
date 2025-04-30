@@ -4,6 +4,8 @@
 #include "qt_ui/MainWindow.h"
 #include <QApplication>
 #include <QDir>
+#include <QFile>
+#include <QLibraryInfo>
 #include <iostream>
 #include <string>
 #include <filesystem>
@@ -16,34 +18,24 @@ int main(int argc, char *argv[])
         bool useQt = true;  // Set to false to use the FTXUI interface
         
         if (useQt) {
-            // Initialize Qt application first
+            // Set the plugin path explicitly before creating QApplication
+            QStringList paths = QApplication::libraryPaths();
+            paths.append(QDir::currentPath() + "/plugins");
+            QApplication::setLibraryPaths(paths);
+            
+            // Initialize Qt application
             QApplication app(argc, argv);
             
-            // Now we can use QCoreApplication::applicationDirPath()
-            // Set the Qt plugin path to help find the platform plugin
-            QString appDir = QDir(QCoreApplication::applicationDirPath()).absolutePath();
-            
-            // Try multiple possible plugin locations
-            QStringList pluginPaths;
-            
-            // Check vcpkg installed location
-            pluginPaths << appDir + "/../../vcpkg_installed/x64-windows/qt6/plugins";
-            pluginPaths << appDir + "/../vcpkg_installed/x64-windows/qt6/plugins";
-            pluginPaths << appDir + "/vcpkg_installed/x64-windows/qt6/plugins";
-            
-            // Check other common locations
-            pluginPaths << appDir + "/plugins";
-            pluginPaths << appDir;
-            
-            // Debug output
-            std::cout << "Checking for Qt plugins in the following paths:" << std::endl;
-            for (const QString& path : pluginPaths) {
-                std::cout << "  " << path.toStdString() << std::endl;
-                if (QDir(path).exists()) {
-                    std::cout << "  --> Path exists" << std::endl;
-                    // Add to application library paths
-                    QCoreApplication::addLibraryPath(path);
-                }
+            // Print debug information about Qt plugin paths
+            std::cout << "Qt library paths: " << QApplication::libraryPaths().join("; ").toStdString() << std::endl;
+            std::cout << "Qt plugin path: " << QLibraryInfo::path(QLibraryInfo::PluginsPath).toStdString() << std::endl;
+            std::cout << "Current dir: " << QDir::currentPath().toStdString() << std::endl;
+
+            // Check if platform plugins exist in expected locations
+            if (QFile::exists("./plugins/platforms/qwindows.dll")) {
+                std::cout << "Found qwindows.dll in ./plugins/platforms/" << std::endl;
+            } else {
+                std::cout << "qwindows.dll not found in ./plugins/platforms/" << std::endl;
             }
             
             // Create and show the main window

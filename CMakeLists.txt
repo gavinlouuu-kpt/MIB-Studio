@@ -77,6 +77,109 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Charts
 )
 
+# Setup Qt deployment - copy plugins to the build output directory
+if(WIN32)
+    # Create a qt.conf file to tell Qt where to find plugins
+    file(GENERATE OUTPUT $<TARGET_FILE_DIR:${PROJECT_NAME}>/qt.conf CONTENT "[Paths]\nPlugins = ./plugins\n")
+    
+    # Create plugin directories
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory 
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/platforms
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/styles
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/imageformats
+        COMMENT "Creating plugin directories"
+    )
+    
+    # Helper function to copy Qt plugin with debug/release variant
+    function(copy_qt_plugin)
+        cmake_parse_arguments(ARG "" "PLUGIN_PATH;PLUGIN_NAME;OUTPUT_DIR" "" ${ARGN})
+        
+        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+            set(plugin_suffix "d")
+        else()
+            set(plugin_suffix "")
+        endif()
+        
+        set(plugin_file "${ARG_PLUGIN_PATH}/${ARG_PLUGIN_NAME}${plugin_suffix}.dll")
+        
+        # Check if the plugin file exists
+        if(EXISTS "${plugin_file}")
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${plugin_file}"
+                    "${ARG_OUTPUT_DIR}/"
+                COMMENT "Copying ${ARG_PLUGIN_NAME}${plugin_suffix}.dll"
+            )
+        else()
+            # Try the alternative suffix if the first attempt failed
+            if(plugin_suffix STREQUAL "d")
+                set(alt_plugin_file "${ARG_PLUGIN_PATH}/${ARG_PLUGIN_NAME}.dll")
+            else()
+                set(alt_plugin_file "${ARG_PLUGIN_PATH}/${ARG_PLUGIN_NAME}d.dll")
+            endif()
+            
+            if(EXISTS "${alt_plugin_file}")
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${alt_plugin_file}"
+                        "${ARG_OUTPUT_DIR}/"
+                    COMMENT "Copying alternative ${ARG_PLUGIN_NAME} plugin"
+                )
+            else()
+                message(STATUS "Plugin file not found: ${plugin_file} or ${alt_plugin_file}")
+            endif()
+        endif()
+    endfunction()
+    
+    # Copy platform plugins
+    copy_qt_plugin(
+        PLUGIN_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms"
+        PLUGIN_NAME "qwindows"
+        OUTPUT_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/platforms"
+    )
+    
+    # Copy style plugins
+    copy_qt_plugin(
+        PLUGIN_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/styles"
+        PLUGIN_NAME "qwindowsvistastyle"
+        OUTPUT_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/styles"
+    )
+    
+    # Copy image format plugins
+    foreach(img_plugin qjpeg qgif qico qsvg)
+        copy_qt_plugin(
+            PLUGIN_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/imageformats"
+            PLUGIN_NAME "${img_plugin}"
+            OUTPUT_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/imageformats"
+        )
+    endforeach()
+    
+    # Copy Qt core DLLs
+    foreach(qt_lib Core Gui Widgets Charts)
+        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+            set(lib_suffix "d")
+            set(bin_dir "debug/bin")
+        else()
+            set(lib_suffix "")
+            set(bin_dir "bin")
+        endif()
+        
+        set(qt_dll "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/${bin_dir}/Qt6${qt_lib}${lib_suffix}.dll")
+        
+        if(EXISTS "${qt_dll}")
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${qt_dll}"
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/"
+                COMMENT "Copying Qt6${qt_lib}${lib_suffix}.dll"
+            )
+        else()
+            message(STATUS "Qt DLL not found: ${qt_dll}")
+        endif()
+    endforeach()
+endif()
+
 # Build test executables
 file(GLOB TEST_SOURCES "src/tests/*.cpp")
 foreach(test_source ${TEST_SOURCES})

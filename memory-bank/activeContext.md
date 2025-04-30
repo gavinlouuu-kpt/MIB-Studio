@@ -1,12 +1,14 @@
 # MIB-Studio Active Context
 
 ## Current Focus
-We are currently in **Phase 1: Setup and Initial Integration** of the Qt transition plan. We have established the core Qt application framework and implemented the basic UI components. The focus now is on connecting this Qt framework to the existing OpenCV image processing functionality.
+We are currently in **Phase 1: Setup and Initial Integration** of the Qt transition plan. We have established the core Qt application framework and implemented the basic UI components. The focus now is on connecting this Qt framework to the existing OpenCV image processing functionality. We have successfully resolved platform plugin loading issues, ensuring the application can launch properly in both debug and release builds.
 
 ## Recent Decisions
 1. **Incremental Approach** - Decision to implement a toggle in main.cpp to allow switching between Qt and FTXUI interfaces during development
 2. **UI Layout Structure** - Implemented a split layout with controls on the left and tabbed content area on the right
 3. **Custom Image Viewing Widget** - Created a specialized ImageView widget to handle OpenCV image display with zoom and pan capabilities
+4. **Plugin Configuration Strategy** - Implemented a robust plugin path configuration that handles both debug and release builds, with proper fallback options
+5. **Diagnostic Logging** - Added diagnostic outputs in the application to assist with platform plugin configuration troubleshooting
 
 ## Active Considerations
 1. **Integration Strategy** - Determining the best approach to connect existing processing code to the new Qt interface
