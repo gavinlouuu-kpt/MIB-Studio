@@ -394,6 +394,512 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     // std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
 }
 
+// New utility function to calculate metrics from saved images and output to CSV
+void calculateMetricsFromSavedData(const std::string &inputDirectory, const std::string &outputFilePath)
+{
+    std::cout << "Calculating metrics from saved data in: " << inputDirectory << std::endl;
+    
+    // Check if this is a consolidated dataset with master files
+    json condition_config = readConfig("config.json");
+    std::string condition = condition_config["save_directory"];
+    bool hasMasterFiles = false;
+    std::string masterConfigPath = inputDirectory + "/" + condition + "_processing_config.json";
+    std::string masterROIPath = inputDirectory + "/" + condition + "_roi.csv";
+    std::string masterBackgroundsPath = inputDirectory + "/" + condition + "_backgrounds.bin";
+    std::string masterImagesPath = inputDirectory + "/" + condition + "_images.bin";
+    
+    // Check if all master files exist
+    if (std::filesystem::exists(masterConfigPath) && 
+        std::filesystem::exists(masterROIPath) && 
+        std::filesystem::exists(masterBackgroundsPath) &&
+        std::filesystem::exists(masterImagesPath)) {
+        hasMasterFiles = true;
+        std::cout << "Found consolidated master files. Using them for metrics calculation." << std::endl;
+    }
+    
+    // Create output CSV file
+    std::ofstream outputFile(outputFilePath);
+    if (!outputFile.is_open()) {
+        std::cerr << "Failed to create output file: " << outputFilePath << std::endl;
+        return;
+    }
+    
+    // Write CSV header
+    outputFile << "Batch,Condition,ImageIndex,Timestamp_us,Deformability,Area,RingRatio,Valid,Method,ProcessingConfig\n";
+    
+    // Helper function to load processing config for a batch
+    auto loadMasterConfig = [](const std::string &configPath, int batchNum) -> ProcessingConfig {
+        std::ifstream configFile(configPath);
+        if (!configFile.is_open()) {
+            throw std::runtime_error("Failed to load master processing config from: " + configPath);
+        }
+        json masterConfig;
+        configFile >> masterConfig;
+        
+        // Get the config for the specified batch
+        std::string batchKey = "batch_" + std::to_string(batchNum);
+        if (!masterConfig.contains(batchKey)) {
+            throw std::runtime_error("Master config file does not contain configuration for batch " + std::to_string(batchNum));
+        }
+        
+        json config = masterConfig[batchKey];
+
+        return ProcessingConfig{
+            config["gaussian_blur_size"],
+            config["bg_subtract_threshold"],
+            config["morph_kernel_size"],
+            config["morph_iterations"],
+            config["area_threshold_min"],
+            config["area_threshold_max"],
+            config.contains("filters") && config["filters"].contains("enable_border_check") ? 
+                config["filters"]["enable_border_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? 
+                config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_area_range_check") ? 
+                config["filters"]["enable_area_range_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
+                config["filters"]["require_single_inner_contour"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
+                config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
+                config["contrast_enhancement"]["beta"].get<int>() : 10
+        };
+    };
+    
+    // Helper function to load ROI for a batch from master CSV
+    auto loadROIFromMasterCSV = [](const std::string &roiPath, int batchNum) -> cv::Rect {
+        std::ifstream roiFile(roiPath);
+        if (!roiFile.is_open()) {
+            throw std::runtime_error("Failed to open master ROI file: " + roiPath);
+        }
+        
+        std::string header;
+        std::getline(roiFile, header); // Skip header
+        
+        std::string line;
+        while (std::getline(roiFile, line)) {
+            std::stringstream ss(line);
+            std::string value;
+            std::vector<std::string> values;
+            
+            while (std::getline(ss, value, ',')) {
+                values.push_back(value);
+            }
+            
+            if (values.size() >= 5 && std::stoi(values[0]) == batchNum) {
+                return cv::Rect(
+                    std::stoi(values[1]), // x
+                    std::stoi(values[2]), // y
+                    std::stoi(values[3]), // width
+                    std::stoi(values[4])  // height
+                );
+            }
+        }
+        
+        throw std::runtime_error("Failed to find ROI for batch " + std::to_string(batchNum) + " in master ROI file");
+    };
+    
+    // Helper function to load background for a batch from master binary file
+    auto loadBackgroundFromMasterBin = [](const std::string &bgPath, int batchNum) -> cv::Mat {
+        std::ifstream bgFile(bgPath, std::ios::binary);
+        if (!bgFile.is_open()) {
+            throw std::runtime_error("Failed to open master backgrounds file: " + bgPath);
+        }
+        
+        while (bgFile.good()) {
+            int storedBatchNum, rows, cols, type;
+            bgFile.read(reinterpret_cast<char *>(&storedBatchNum), sizeof(int));
+            
+            if (bgFile.eof()) {
+                break;
+            }
+            
+            bgFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+            bgFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+            bgFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+            
+            cv::Mat background(rows, cols, type);
+            bgFile.read(reinterpret_cast<char *>(background.data), rows * cols * background.elemSize());
+            
+            if (storedBatchNum == batchNum) {
+                return background.clone(); // Found the background for this batch
+            }
+            
+            // If not this batch, skip to next background
+            if (bgFile.eof()) {
+                break;
+            }
+        }
+        
+        throw std::runtime_error("Failed to find background for batch " + std::to_string(batchNum) + " in master backgrounds file");
+    };
+    
+    // Helper function to load batch configuration
+    auto loadBatchConfig = [](const std::filesystem::path &batchPath) -> ProcessingConfig {
+        std::ifstream configFile(batchPath / "processing_config.json");
+        if (!configFile.is_open()) {
+            throw std::runtime_error("Failed to load processing config from: " + batchPath.string());
+        }
+        json config;
+        configFile >> config;
+
+        return ProcessingConfig{
+            config["gaussian_blur_size"],
+            config["bg_subtract_threshold"],
+            config["morph_kernel_size"],
+            config["morph_iterations"],
+            config["area_threshold_min"],
+            config["area_threshold_max"],
+            config.contains("filters") && config["filters"].contains("enable_border_check") ? 
+                config["filters"]["enable_border_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? 
+                config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_area_range_check") ? 
+                config["filters"]["enable_area_range_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
+                config["filters"]["require_single_inner_contour"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
+                config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
+                config["contrast_enhancement"]["beta"].get<int>() : 10
+        };
+    };
+    
+    // Processing function to get a string representation of the config for CSV
+    auto configToString = [](const ProcessingConfig &config) -> std::string {
+        std::stringstream ss;
+        ss << "G" << config.gaussian_blur_size 
+           << "_T" << config.bg_subtract_threshold 
+           << "_M" << config.morph_kernel_size << "x" << config.morph_iterations
+           << "_A" << config.area_threshold_min << "-" << config.area_threshold_max;
+        return ss.str();
+    };
+    
+    if (hasMasterFiles) {
+        // Process all images from the master images file
+        std::set<int> availableBatches;
+        
+        // First pass: find all available batch numbers
+        {
+            std::ifstream roiFile(masterROIPath);
+            std::string header;
+            std::getline(roiFile, header); // Skip header
+            
+            std::string line;
+            while (std::getline(roiFile, line)) {
+                std::stringstream ss(line);
+                std::string value;
+                std::vector<std::string> values;
+                
+                while (std::getline(ss, value, ',')) {
+                    values.push_back(value);
+                }
+                
+                if (!values.empty()) {
+                    try {
+                        availableBatches.insert(std::stoi(values[0]));
+                    } catch (...) {
+                        // Skip invalid lines
+                    }
+                }
+            }
+        }
+        
+        std::cout << "Found " << availableBatches.size() << " batches in master files." << std::endl;
+        
+        // Process each batch
+        for (int batchNum : availableBatches) {
+            std::cout << "Processing batch " << batchNum << "..." << std::endl;
+            
+            // Load background, ROI, and processing config for this batch
+            SharedResources shared;
+            try {
+                shared.backgroundFrame = loadBackgroundFromMasterBin(masterBackgroundsPath, batchNum);
+                shared.roi = loadROIFromMasterCSV(masterROIPath, batchNum);
+                shared.processingConfig = loadMasterConfig(masterConfigPath, batchNum);
+                
+                // Initialize the blurred background with the original config settings
+                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                                cv::Size(shared.processingConfig.gaussian_blur_size,
+                                        shared.processingConfig.gaussian_blur_size), 0);
+
+                if (shared.processingConfig.enable_contrast_enhancement) {
+                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                                    shared.processingConfig.contrast_alpha,
+                                                    shared.processingConfig.contrast_beta);
+                }
+            } catch (const std::exception &e) {
+                std::cerr << "Error loading batch " << batchNum << " data: " << e.what() << std::endl;
+                continue; // Skip this batch
+            }
+            
+            // Initialize thread mats for processing
+            ThreadLocalMats mats = initializeThreadMats(shared.backgroundFrame.rows, 
+                                                      shared.backgroundFrame.cols, shared);
+            
+            // Load all images from the master images binary file
+            std::ifstream imageFile(masterImagesPath, std::ios::binary);
+            int imageIndex = 0;
+            
+            // Prepare a temporary file to store metadata about the images
+            std::vector<std::tuple<int, long long>> imageMetadata; // rows, cols, type for each image
+            
+            while (imageFile.good()) {
+                int rows, cols, type;
+                imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+                imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+                imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+                
+                if (imageFile.eof()) {
+                    break;
+                }
+                
+                cv::Mat image(rows, cols, type);
+                long long position = imageFile.tellg(); // Save current position
+                imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+                
+                // Process the image and calculate metrics
+                cv::Mat processedImage(rows, cols, CV_8UC1);
+                processFrame(image, shared, processedImage, mats);
+                
+                // First try with the current contour detection method
+                FilterResult filterResult = filterProcessedImage(processedImage, shared.roi,
+                                                              shared.processingConfig, 255);
+                
+                // Default to current method
+                std::string methodUsed = "Current";
+                bool isValid = filterResult.isValid;
+                double deformability = filterResult.deformability;
+                double area = filterResult.area;
+                double ringRatio = filterResult.ringRatio;
+                
+                // If not valid, try with legacy contour detection for older data
+                if (!isValid) {
+                    FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, 
+                                                                   shared.processingConfig);
+                    
+                    if (legacyResult.isValid) {
+                        methodUsed = "Legacy";
+                        isValid = true;
+                        deformability = legacyResult.deformability;
+                        area = legacyResult.area;
+                        ringRatio = legacyResult.ringRatio;
+                    }
+                }
+                
+                // Write metrics to CSV
+                outputFile << batchNum << ","
+                          << condition << ","
+                          << imageIndex << ","
+                          << "0," // No timestamp information for image files
+                          << deformability << ","
+                          << area << ","
+                          << ringRatio << ","
+                          << (isValid ? "Yes" : "No") << ","
+                          << methodUsed << ","
+                          << configToString(shared.processingConfig) << "\n";
+                
+                imageIndex++;
+                if (imageIndex % 100 == 0) {
+                    std::cout << "Processed " << imageIndex << " images from batch " << batchNum << std::endl;
+                }
+            }
+            
+            std::cout << "Completed batch " << batchNum << ". Processed " << imageIndex << " images." << std::endl;
+        }
+    } else {
+        // Process individual batch directories
+        std::vector<std::filesystem::path> batchDirs;
+        
+        for (const auto &entry : std::filesystem::directory_iterator(inputDirectory)) {
+            if (entry.is_directory() && entry.path().filename().string().find("batch_") != std::string::npos) {
+                batchDirs.push_back(entry.path());
+            }
+        }
+        
+        if (batchDirs.empty()) {
+            std::cout << "No batch directories found in " << inputDirectory << std::endl;
+            return;
+        }
+        
+        std::sort(batchDirs.begin(), batchDirs.end());
+        
+        // Process each batch directory
+        for (const auto &batchDir : batchDirs) {
+            // Extract batch number from directory name
+            std::string batchName = batchDir.filename().string();
+            int batchNum = -1;
+            try {
+                size_t pos = batchName.find("batch_");
+                if (pos != std::string::npos) {
+                    batchNum = std::stoi(batchName.substr(pos + 6));
+                }
+            } catch (...) {
+                // Skip if we can't extract a batch number
+                continue;
+            }
+            
+            std::cout << "Processing " << batchDir << " (Batch " << batchNum << ")" << std::endl;
+            
+            // Load batch configuration
+            SharedResources shared;
+            try {
+                // Load background image
+                shared.backgroundFrame = cv::imread((batchDir / "background_clean.tiff").string(), cv::IMREAD_GRAYSCALE);
+                if (shared.backgroundFrame.empty()) {
+                    throw std::runtime_error("Failed to load background image");
+                }
+                
+                // Read ROI from CSV
+                std::ifstream roiFile((batchDir / "roi.csv").string());
+                std::string roiHeader;
+                std::getline(roiFile, roiHeader); // Skip header
+                std::string roiData;
+                std::getline(roiFile, roiData);
+                std::stringstream ss(roiData);
+                std::string value;
+                std::vector<int> roiValues;
+                while (std::getline(ss, value, ',')) {
+                    roiValues.push_back(std::stoi(value));
+                }
+                
+                shared.roi = cv::Rect(roiValues[0], roiValues[1], roiValues[2], roiValues[3]);
+                
+                // Load processing config
+                shared.processingConfig = loadBatchConfig(batchDir);
+                
+                // Initialize the blurred background with the original config settings
+                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                                cv::Size(shared.processingConfig.gaussian_blur_size,
+                                        shared.processingConfig.gaussian_blur_size), 0);
+
+                if (shared.processingConfig.enable_contrast_enhancement) {
+                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                                     shared.processingConfig.contrast_alpha,
+                                                     shared.processingConfig.contrast_beta);
+                }
+            } catch (const std::exception &e) {
+                std::cerr << "Error loading batch " << batchNum << " data: " << e.what() << std::endl;
+                continue; // Skip this batch
+            }
+            
+            // Initialize thread mats for processing
+            ThreadLocalMats mats = initializeThreadMats(shared.backgroundFrame.rows, 
+                                                      shared.backgroundFrame.cols, shared);
+            
+            // Load CSV data to get timestamps
+            std::map<int, long long> timestamps;
+            std::ifstream csvFile((batchDir / "batch_data.csv").string());
+            if (csvFile.is_open()) {
+                std::string header;
+                std::getline(csvFile, header); // Skip header
+                
+                // Parse headers to find column indices
+                auto headers = parseCSVHeaders(header);
+                int timestampIdx = headers.count("Timestamp_us") ? headers["Timestamp_us"] : -1;
+                
+                if (timestampIdx >= 0) {
+                    int idx = 0;
+                    std::string line;
+                    while (std::getline(csvFile, line)) {
+                        std::stringstream ss(line);
+                        std::string cell;
+                        std::vector<std::string> values;
+                        
+                        while (std::getline(ss, cell, ',')) {
+                            values.push_back(cell);
+                        }
+                        
+                        if (values.size() > timestampIdx) {
+                            try {
+                                timestamps[idx++] = std::stoll(values[timestampIdx]);
+                            } catch (...) {
+                                // Skip invalid entries
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Load and process images from binary file
+            std::ifstream imageFile((batchDir / "images.bin").string(), std::ios::binary);
+            int imageIndex = 0;
+            
+            while (imageFile.good()) {
+                int rows, cols, type;
+                imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+                imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+                imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+                
+                if (imageFile.eof()) {
+                    break;
+                }
+                
+                cv::Mat image(rows, cols, type);
+                imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+                
+                // Process the image and calculate metrics
+                cv::Mat processedImage(rows, cols, CV_8UC1);
+                processFrame(image, shared, processedImage, mats);
+                
+                // First try with the current contour detection method
+                FilterResult filterResult = filterProcessedImage(processedImage, shared.roi,
+                                                              shared.processingConfig, 255);
+                
+                // Default to current method
+                std::string methodUsed = "Current";
+                bool isValid = filterResult.isValid;
+                double deformability = filterResult.deformability;
+                double area = filterResult.area;
+                double ringRatio = filterResult.ringRatio;
+                
+                // If not valid, try with legacy contour detection for older data
+                if (!isValid) {
+                    FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, 
+                                                                   shared.processingConfig);
+                    
+                    if (legacyResult.isValid) {
+                        methodUsed = "Legacy";
+                        isValid = true;
+                        deformability = legacyResult.deformability;
+                        area = legacyResult.area;
+                        ringRatio = legacyResult.ringRatio;
+                    }
+                }
+                
+                // Get timestamp for this image if available
+                long long timestamp = (timestamps.count(imageIndex)) ? timestamps[imageIndex] : 0;
+                
+                // Write metrics to CSV
+                outputFile << batchNum << ","
+                          << condition << ","
+                          << imageIndex << ","
+                          << timestamp << ","
+                          << deformability << ","
+                          << area << ","
+                          << ringRatio << ","
+                          << (isValid ? "Yes" : "No") << ","
+                          << methodUsed << ","
+                          << configToString(shared.processingConfig) << "\n";
+                
+                imageIndex++;
+                if (imageIndex % 100 == 0) {
+                    std::cout << "Processed " << imageIndex << " images from batch " << batchNum << std::endl;
+                }
+            }
+            
+            std::cout << "Completed batch " << batchNum << ". Processed " << imageIndex << " images." << std::endl;
+        }
+    }
+    
+    outputFile.close();
+    std::cout << "Metrics calculation complete. Results saved to: " << outputFilePath << std::endl;
+}
+
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
 {
     std::ifstream imageFile(binaryImageFile, std::ios::binary);
@@ -1418,13 +1924,14 @@ void reviewSavedData()
             
             // If not valid, try with legacy contour detection for older data
             if (!recalcValid) {
-                FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, shared.processingConfig);
+                FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, 
+                                                                   shared.processingConfig);
                 
                 if (legacyResult.isValid) {
+                    methodUsed = "Legacy";
+                    recalcValid = true;
                     recalcDeformability = legacyResult.deformability;
                     recalcArea = legacyResult.area;
-                    recalcValid = true;
-                    methodUsed = "L"; // L for Legacy method
                 }
             }
 

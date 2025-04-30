@@ -298,6 +298,36 @@ namespace MenuSystem
         std::cout << "Finished processing all batches." << std::endl;
     }
 
+    void calculateMetrics()
+    {
+        std::cout << "Select the project directory containing batches:\n";
+        std::string inputDirectory = navigateAndSelectFolder();
+        
+        if (inputDirectory.empty()) {
+            std::cout << "Operation cancelled.\n";
+            return;
+        }
+        
+        std::cout << "Enter the output CSV filename (will be saved in the selected project directory): ";
+        std::string outputFilename;
+        std::getline(std::cin, outputFilename);
+        
+        if (outputFilename.empty()) {
+            outputFilename = "metrics_output.csv";
+            std::cout << "Using default filename: " << outputFilename << std::endl;
+        }
+        
+        // Combine the input directory with the output filename to save in the project directory
+        std::string fullOutputPath = inputDirectory + "/" + outputFilename;
+        std::cout << "Output will be saved to: " << fullOutputPath << std::endl;
+        
+        try {
+            calculateMetricsFromSavedData(inputDirectory, fullOutputPath);
+        } catch (const std::exception &e) {
+            std::cerr << "Error calculating metrics: " << e.what() << std::endl;
+        }
+    }
+
     int runMenu()
     {
         using namespace ftxui;
@@ -308,6 +338,7 @@ namespace MenuSystem
             "Run Live Sample",
             "Run Hybrid Sample",
             "Review Saved Data",
+            "Calculate Metrics from Saved Data",
             "Convert Saved Images",
             "EGrabber Config",
             "EGrabber Hot Reload",
@@ -354,15 +385,18 @@ namespace MenuSystem
                 reviewSavedData();
                 break;
             case 4:
-                convertSavedImages();
+                calculateMetrics();
                 break;
             case 5:
-                egrabberConfig();
+                convertSavedImages();
                 break;
             case 6:
-                egrabberHotReload();
+                egrabberConfig();
                 break;
             case 7:
+                egrabberHotReload();
+                break;
+            case 8:
                 std::cout << "Exiting program.\n";
                 return 0;
             }

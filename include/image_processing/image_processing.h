@@ -247,8 +247,14 @@ ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &sha
 
 void reviewSavedData();
 
+void calculateMetricsFromSavedData(const std::string &inputDirectory, const std::string &outputFilePath);
+
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                   const ProcessingConfig &config, const uint8_t processedColor = 255);
+
+FilterResult legacyContourAnalysis(const cv::Mat &processedImage, const cv::Rect &roi, const ProcessingConfig &config);
+
+std::map<std::string, int> parseCSVHeaders(const std::string& headerLine);
 
 // Function to determine overlay color based on FilterResult
 cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);
