@@ -3,6 +3,7 @@
 #include "menu_system/menu_system.h"
 #include "qt_ui/MainWindow.h"
 #include <QApplication>
+#include <QDir>
 #include <iostream>
 #include <string>
 #include <filesystem>
@@ -15,8 +16,35 @@ int main(int argc, char *argv[])
         bool useQt = true;  // Set to false to use the FTXUI interface
         
         if (useQt) {
-            // Initialize Qt application
+            // Initialize Qt application first
             QApplication app(argc, argv);
+            
+            // Now we can use QCoreApplication::applicationDirPath()
+            // Set the Qt plugin path to help find the platform plugin
+            QString appDir = QDir(QCoreApplication::applicationDirPath()).absolutePath();
+            
+            // Try multiple possible plugin locations
+            QStringList pluginPaths;
+            
+            // Check vcpkg installed location
+            pluginPaths << appDir + "/../../vcpkg_installed/x64-windows/qt6/plugins";
+            pluginPaths << appDir + "/../vcpkg_installed/x64-windows/qt6/plugins";
+            pluginPaths << appDir + "/vcpkg_installed/x64-windows/qt6/plugins";
+            
+            // Check other common locations
+            pluginPaths << appDir + "/plugins";
+            pluginPaths << appDir;
+            
+            // Debug output
+            std::cout << "Checking for Qt plugins in the following paths:" << std::endl;
+            for (const QString& path : pluginPaths) {
+                std::cout << "  " << path.toStdString() << std::endl;
+                if (QDir(path).exists()) {
+                    std::cout << "  --> Path exists" << std::endl;
+                    // Add to application library paths
+                    QCoreApplication::addLibraryPath(path);
+                }
+            }
             
             // Create and show the main window
             MainWindow mainWindow;

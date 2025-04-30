@@ -6,6 +6,7 @@
 #include <memory>
 #include "qt_ui/ImageView.h"
 
+// Forward declaration
 namespace Ui {
 class MainWindow;
 }
