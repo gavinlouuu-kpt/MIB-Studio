@@ -13,30 +13,30 @@ void createDefaultConfigIfMissing(const std::filesystem::path &configPath)
     if (!std::filesystem::exists(configPath))
     {
         std::ofstream file(configPath);
-        file << "// Decrease the resolution before increasing the frame rate\n\n"
-             << "// Make sure to remove offset before changing the resolution\n\n"
-             << " var g = grabbers[0];\n"
-             << " g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
-             << " g.InterfacePort.set(\"LineMode\", \"Output\");\n"
-             << " g.InterfacePort.set(\"LineSource\", \"Low\");\n"
-             << " g.RemotePort.set(\"Width\", 512);\n"
-             << " g.RemotePort.set(\"Height\", 96);\n"
-             << " g.RemotePort.set(\"OffsetY\", 500);\n"
-             << " g.RemotePort.set(\"OffsetX\", 704);\n"
-             << " g.RemotePort.set(\"ExposureTime\", 2);\n"
-             << " g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
-             << "\n\n"
-             << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
-             << "// var g = grabbers[0];\n"
-             << "// g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
-             << "// g.InterfacePort.set(\"LineMode\", \"Output\");\n"
-             << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
-             << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
-             << "// g.RemotePort.set(\"ExposureTime\", 20);\n"
-             << "// g.RemotePort.set(\"OffsetY\", 0);\n"
-             << "// g.RemotePort.set(\"OffsetX\", 0);\n"
-             << "// g.RemotePort.set(\"Width\", 1920);\n"
-             << "// g.RemotePort.set(\"Height\", 1080);\n";
+        file 
+             << "var g = grabbers[0];\n"
+             << "g.RemotePort.execute(\"AcquisitionStop\");\n"
+             << "g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");//Trigger\n"
+             << "g.InterfacePort.set(\"LineMode\", \"Output\");\n"
+             << "g.InterfacePort.set(\"LineSource\", \"Low\");\n"
+             << "g.InterfacePort.set(\"LineSelector\", \"TTLIO11\"); //LED\n"
+             << "g.InterfacePort.set(\"LineMode\", \"Output\");\n"
+             << "g.InterfacePort.set(\"LineInverter\", true);\n"
+             << "g.InterfacePort.set(\"LineSource\", \"Device0Strobe\");\n"
+             << "g.RemotePort.set(\"Width\", 512);\n"
+             << "g.RemotePort.set(\"Height\", 96);\n"
+             << "g.RemotePort.set(\"OffsetY\", 500);\n"
+             << "g.RemotePort.set(\"OffsetX\", 704);\n"
+             << "g.RemotePort.set(\"ExposureTime\", 3);\n"
+             << "g.DevicePort.set(\"CameraControlMethod\", \"RC\");\n"
+             << "g.DevicePort.set(\"ExposureRecoveryTime\", \"200\");\n"
+             << "g.DevicePort.set(\"CycleMinimumPeriod\", \"200\");\n"
+             << "g.DevicePort.set(\"StrobeDelay\", \"-4\");\n"
+             << "g.DevicePort.set(\"StrobeDuration\", \"12\");\n"
+             << "g.RemotePort.set(\"TriggerMode\", \"On\");\n"
+             << "g.RemotePort.set(\"TriggerSource\", \"LinkTrigger0\");\n"
+             << "g.RemotePort.execute(\"AcquisitionStart\");\n\n";
+        
         file.close();
     }
 }
@@ -429,11 +429,11 @@ json readConfig(const std::string &filename)
         // Create default config with a more structured approach
         json image_processing = {
             {"gaussian_blur_size", 3},
-            {"bg_subtract_threshold", 10},
+            {"bg_subtract_threshold", 8},
             {"morph_kernel_size", 3},
             {"morph_iterations", 1},
-            {"area_threshold_min", 100},
-            {"area_threshold_max", 600},
+            {"area_threshold_min", 250},
+            {"area_threshold_max", 1200},
             {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_area_range_check", true}, {"require_single_inner_contour", true}}},
             {"contrast_enhancement", {{"enable_contrast", true}, {"alpha", 1.2}, {"beta", 10}}}};
 
@@ -442,6 +442,7 @@ json readConfig(const std::string &filename)
             {"buffer_threshold", 1000},
             {"target_fps", 5000},
             {"scatter_plot_enabled", false},
+            {"ring_ratio_histogram_enabled", false},
             {"image_processing", image_processing}};
 
         // Write default config to file

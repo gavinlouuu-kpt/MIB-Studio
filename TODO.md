@@ -1,99 +1,45 @@
 # TODO
-## 2025/3/7
-- [ ] Mark on preview trackbar where there is a trigger for easier viewing
-- [ ] Create a meta data file when saving file stream to annotate which frame contains a trigger
-## 2025/3/3
-- [-] Record condition, 10 frames after detected object (variable)
-Not needed as we only need to see the 10 frames in testing mode
-- [x] Image processing target - background to get inner contour
-- [x] Hierarchy contour finding the inner one
-- [x] Consistent stream saving order with live pause preview
-Now that it is consistent but we want image zero to be the oldest image and th largest number to be the latest image
-- [x] Remove trigger setup script from execution 
-- [x] Use .tiff format for saving images under all scenario 
-- [x] Fix trigger condition
-## 2025/2/12
-### Tests
-- [ ] Tool to test how the opencv algo performs given an ROI and config
-- [ ] Tool to create standard data i.e., how many valid/gated/doublet in the image given an ROI. 
-### Features
-- [x] Include trigger of 1 microsecond upon valid image
-- [x] Hybrid sample for testing egrabber function with images from file to test trigger without samples
 
-Note: Short pulses to trigger signal generator is working but the waveform is degraded as the pulse width decreases. Further verification is needed. The egrabber outgoing pulse is set to 1 microsecond.
+## Line Process
+Key assumptions
+1. Objects in image do not move from right to left
+2. Objects in image do not appear out of the right side of the image
+3. Objects in image move from left to right with constant speed
+4. Frame size does not change
 
-## 2024/11/21
-### Issues
-- [x] Fix scatter plot orientation due to area Ratio added
-- [x] Included density in scatter plot
-- [ ] Fill in center for accurate area estimation
-- [x] Saving batch continues after each experiment when not quitting programme. (residual variables and occasional error from camera loading on the next trial)
-- [-] Consistency between preview with and without pausing
-- [x] Intermediate processing view if error exist use differnet color
-- [x] Detailed rejection reasons
-- [ ] Saving stream doesn't have experiment name 
-- [x] Hot config reload not reflected consistently across all places (reload on pause)
-- [ ] Display important tunable metrics on dashboard
-- [-] Simplify should update display logic (problematic)
-### Features
-- [ ] GUI offset field of view
-- [ ] Digital contrast as part of processing
-  - [ ] Digital contrast performance test
-- [ ] TUI for minio upload with predefined alias 
-- [ ] Mock grabber using batch format
-## 2024/11/20
-- [x] Convex hull calculation
-- [x] FPS monitoring
-- [x] Opactiy over original image
-- [x] Exposure time monitoring (testing on camera needed)
-- [x] Always keep the same proportion (cannot change size entirely)
-
-## 2024/10/31
-- Duplicate frame detection works, repeated saving is because of more than one contour found
-- Param hot reload completed with json in display mode. Need to leave and re enter to see the effect
-
-## 2024/10/24
-### Target: Get real time cell contour
-- Duplicate frame detection
-- Calculate DI (gating from noise, debris, shake*)
-- (can tune from json) Easy to tune threshold params 
-- (ok - use 'b' when paused) Background acquisition uncouple from pause
-- XY offset to align field of view from 1920 x 1080 to 512 x 96 (EGrabber script to offset)
-- (ok for now - direct read from bin, need to integrate back to current functions) Faster image conversion for review
-- (not essential) larger saving batch (saving speed is not the bottleneck)
-- (ok - use 'r' to start saving) Do not auto-save with deformabilities
-- change scatter plot to qt
-- create a setup mode
+- Remove ROI
+  - Background subtraction the entire frame
+  - Find all nested contour in one image
+  - Find all nested contour of the next image
+  - Match contour between images based on contour position
+  - Predict next contour position
+  - Record all contour in frame
 
 
+We will process the 1st image to obtain info i.e., contain target x(s) and store the metrics i.e., (list of masks, rank the masks according to their x position). Then process the 2nd image and compare how many pixels the targets have moved to the right. Determine the whether in the next frame that particular target is still in the frame. At the nth image before the target disappears from the frame we will use the contour of the target as the final result.
 
+Frame 1 (initial frame)
+----------------------------------- frame
+   x          o         
+-----------------------------------
 
-## 2024/10/16
-- Show keyboard instructions
-- Metrics to monitor
-- Processing time
-  - average
-  - max
-  - min
-- Current Camera FPS
-- Number of images in queue
-- Paused
-  - Current Frame Index
-  - show keyboard instructions under paused condition 
-- ROI
-  - Image size
-  - Size (x and y)
-  - Position
-- Circularities vector size 
-  - min
-  - max
-  - mean
-- Saving time
--       std::cout << "Saved " << bufferToSave.size() << " results to disk. "
-                      << "Total saved: " << shared.totalSavedResults
-                      << ". Time taken: " << duration.count() << " ms" << std::endl;
-## 2024/10/14
-### Features:
-- Save cell image, circularities
-  - Scatter plot is real time (not full extent of the data record)
-- Save entire experiment ~20GB of data ~100,000 images
+Frame 2 (moving at constant speed)
+----------------------------------- frame
+           x          o         
+-----------------------------------
+
+Frame 3 (new target appears)
+----------------------------------- frame
+   *                x          o         
+-----------------------------------
+
+Frame 4 (practically same as Frame 1)
+----------------------------------- frame
+             *             x                   
+-----------------------------------
+
+Metrics:
+- Each target will have a list of x position
+
+Known limitation:
+- if not all the frames produce valid contour it will be hard to track
