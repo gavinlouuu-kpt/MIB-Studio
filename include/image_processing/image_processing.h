@@ -24,6 +24,8 @@ struct ObjectTrack {
     std::vector<int> frameIndices;          // Corresponding frame indices for each position
     std::vector<cv::Rect> boundingBoxes;    // Bounding boxes across frames
     std::vector<double> areas;              // Areas across frames
+    bool predictedToLeaveFrame = false;     // Flag indicating if object is predicted to leave frame
+    std::vector<cv::Point> contour;         // The last valid contour before leaving frame
     
     // Constructor with initial position
     ObjectTrack(int objectId, const cv::Point& position, int frameIndex, 
@@ -33,6 +35,7 @@ struct ObjectTrack {
         frameIndices.push_back(frameIndex);
         boundingBoxes.push_back(bbox);
         areas.push_back(area);
+        predictedToLeaveFrame = false;
     }
     
     // Predict next position based on constant velocity assumption
@@ -62,6 +65,22 @@ struct ObjectTrack {
             positions[lastIdx].x + velocity.x * expectedFrameInterval,
             positions[lastIdx].y + velocity.y * expectedFrameInterval
         );
+    }
+    
+    // Check if the object is predicted to leave the frame boundaries in the next movement
+    bool willLeaveFrame(const cv::Size& frameSize) {
+        if (positions.empty()) return false;
+        
+        // Get the predicted next position
+        cv::Point predictedPos = predictNextPosition();
+        
+        // Only check if the object will cross the right edge with a 50-pixel margin
+        bool willLeave = (predictedPos.x >= frameSize.width - 50);
+        
+        // Update the flag
+        predictedToLeaveFrame = willLeave;
+        
+        return willLeave;
     }
     
     // Get average velocity (pixels per frame)
@@ -95,6 +114,56 @@ struct TrajectoryData {
     // Configuration parameters
     double maxMatchingDistance = 250.0;     // Maximum distance for matching objects between frames
     double minMovementThreshold = 100.0;     // Minimum movement required to consider a valid match
+    
+    // Check for objects predicted to leave frame from the right edge
+    void checkForObjectsLeavingFrame(const cv::Size& frameSize, 
+                                    const std::vector<std::vector<cv::Point>>& allContours,
+                                    int currentFrameIndex) {
+        std::lock_guard<std::mutex> lock(mutex);
+        
+        for (auto& track : tracks) {
+            // Skip objects that already have a contour saved
+            if (!track.contour.empty()) {
+                continue;
+            }
+            
+            // Check if this object is predicted to leave frame (right edge only)
+            if (track.willLeaveFrame(frameSize)) {
+                std::cout << "TRAJECTORY: Track " << track.id << " approaching right edge of frame" << std::endl;
+                
+                // Try to find and store the contour for this track
+                if (!track.positions.empty() && !allContours.empty()) {
+                    cv::Point currentPos = track.positions.back();
+                    double minDist = std::numeric_limits<double>::max();
+                    int closestContourIdx = -1;
+                    
+                    // Find closest contour
+                    for (size_t i = 0; i < allContours.size(); i++) {
+                        if (allContours[i].empty()) continue;
+                        
+                        // Calculate centroid of contour
+                        cv::Moments m = cv::moments(allContours[i]);
+                        if (m.m00 > 0) {
+                            cv::Point contourCenter(m.m10 / m.m00, m.m01 / m.m00);
+                            double dist = cv::norm(contourCenter - currentPos);
+                            
+                            if (dist < minDist) {
+                                minDist = dist;
+                                closestContourIdx = i;
+                            }
+                        }
+                    }
+                    
+                    // If we found a contour close enough
+                    if (closestContourIdx >= 0 && minDist < 50.0) { // Within 50 pixel threshold
+                        track.contour = allContours[closestContourIdx];
+                        std::cout << "TRAJECTORY: Captured contour for track " << track.id 
+                                  << " at frame " << currentFrameIndex << std::endl;
+                    }
+                }
+            }
+        }
+    }
     
     // Reset all tracking data
     void reset() {
@@ -292,6 +361,8 @@ struct TrajectoryData {
         std::cout << "TRAJECTORY: Updated lastFrameIndex from " << lastFrameIndex << " to " << frameIndex << std::endl;
         lastFrameIndex = frameIndex;
     }
+
+
 };
 
 struct ImageParams

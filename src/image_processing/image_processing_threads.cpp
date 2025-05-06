@@ -233,6 +233,7 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("  D: Next frame"),
                                                          text("  T: Toggle trajectory visualization"),
                                                          text("  R: Reset trajectory data"),
+                                                         text("  C: Save captured contours to file"),
                                                          text("Trajectory Configuration:"),
                                                          text("  [/]: Decrease/Increase min movement threshold"),
                                                          text("  -/=: Decrease/Increase max matching distance"),
@@ -738,6 +739,19 @@ void displayThreadTask(
                             cv::Point(lastPos.x + 10, lastPos.y),
                             cv::FONT_HERSHEY_SIMPLEX, 0.5, trackColor, 2);
                 
+                // Mark objects predicted to leave frame with an asterisk
+                if (track.predictedToLeaveFrame) {
+                    cv::putText(displayImage, "*",
+                                cv::Point(lastPos.x - 10, lastPos.y),
+                                cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
+                    
+                    // Draw the saved contour if available
+                    if (!track.contour.empty()) {
+                        std::vector<std::vector<cv::Point>> contours = {track.contour};
+                        cv::drawContours(displayImage, contours, 0, trackColor, 2);
+                    }
+                }
+                
                 // Draw frame index of last update next to ID
                 if (!track.frameIndices.empty()) {
                     std::string frameInfo = "f" + std::to_string(track.frameIndices.back());
@@ -948,6 +962,11 @@ void displayThreadTask(
                             if (hasNestedContours && !contours.empty() && !innerContours.empty()) {
                                 // Update trajectory data with new frame information
                                 shared.trajectoryData.updateTrack(index, contours, innerContours, parentIndices);
+                                
+                                // Check if any objects are predicted to leave frame in the next move
+                                shared.trajectoryData.checkForObjectsLeavingFrame(
+                                    cv::Size(static_cast<int>(width), static_cast<int>(height)),
+                                    contours, index);
                                 
                                 // Log the tracking state after processing
                                 {
