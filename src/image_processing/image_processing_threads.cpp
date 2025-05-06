@@ -229,13 +229,18 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("Space: Pause/Resume live feed"),
                                                          text("When Paused:"),
                                                          text("  B: Set current frame as background (logs timestamp)"),
-                                                         text("  A: Next frame"),
-                                                         text("  D: Previous frame"),
+                                                         text("  A: Previous frame"),
+                                                         text("  D: Next frame"),
+                                                         text("  T: Toggle trajectory visualization"),
+                                                         text("  R: Reset trajectory data"),
+                                                         text("Trajectory Configuration:"),
+                                                         text("  [/]: Decrease/Increase min movement threshold"),
+                                                         text("  -/=: Decrease/Increase max matching distance"),
                                                          text("Display Options:"),
                                                          text("  P: Toggle processed image overlay"),
                                                          text("  Q: Clear deformability buffer"),
                                                          text("Data Management:"),
-                                                         text("  R: Toggle data recording"),
+                                                         text("  R: Toggle data recording (when not paused)"),
                                                          text("  S: Save all frames to disk"),
                                                          text("  F: Configure eGrabber settings"),
                                                          text("ROI: Click and drag to select region"),
@@ -628,6 +633,9 @@ void displayThreadTask(
     cv::Mat processedImage(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
     cv::Mat displayImage(static_cast<int>(height), static_cast<int>(width), CV_8UC3);
 
+    // Store the previous frame index to detect changes
+    int previousFrameIndex = -1;
+
     cv::namedWindow("Live Feed", cv::WINDOW_AUTOSIZE);
     cv::resizeWindow("Live Feed", static_cast<int>(width), static_cast<int>(height));
 
@@ -661,6 +669,121 @@ void displayThreadTask(
         {
             std::lock_guard<std::mutex> roiLock(shared.roiMutex);
             cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
+        }
+
+        // Draw trajectories if enabled and in paused mode
+        if (shared.paused && shared.showTrajectories)
+        {
+            std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+            
+            // Create a copy of the display image for drawing trajectories with transparency
+            cv::Mat trajectoryLayer;
+            displayImage.copyTo(trajectoryLayer);
+            
+            // For each tracked object
+            for (const auto& track : shared.trajectoryData.tracks)
+            {
+                if (track.positions.size() < 2) continue;
+                
+                // Generate a unique color for this track based on its ID
+                cv::Scalar trackColor(
+                    (track.id * 50) % 255,      // B
+                    (track.id * 100) % 255,     // G
+                    (track.id * 150) % 255      // R
+                );
+                
+                // Draw trajectory line connecting all positions
+                for (size_t i = 1; i < track.positions.size(); i++)
+                {
+                    // Draw thicker line for recent matches to highlight active tracks
+                    int lineThickness = 2;
+                    if (i == track.positions.size() - 1 && 
+                        track.frameIndices.back() == shared.currentFrameIndex) {
+                        // This is the most recent match in current frame - highlight it
+                        lineThickness = 3;
+                    }
+                    
+                    // Draw solid line on the trajectory layer
+                    cv::line(trajectoryLayer, track.positions[i-1], track.positions[i], 
+                             trackColor, lineThickness);
+                    
+                    // Draw small circle at each point on the trajectory to show tracking points
+                    cv::circle(trajectoryLayer, track.positions[i], 2, trackColor, -1);
+                }
+            }
+            
+            // Blend the trajectory layer with the original image (30% opacity)
+            cv::addWeighted(trajectoryLayer, 0.3, displayImage, 0.7, 0, displayImage);
+            
+            // Now draw markers, IDs, and prediction lines on the blended image
+            for (const auto& track : shared.trajectoryData.tracks)
+            {
+                if (track.positions.empty()) continue;
+                
+                // Generate the same color for this track
+                cv::Scalar trackColor(
+                    (track.id * 50) % 255,      // B
+                    (track.id * 100) % 255,     // G
+                    (track.id * 150) % 255      // R
+                );
+                
+                // Get the last position
+                cv::Point lastPos = track.positions.back();
+                
+                // Draw marker at last position
+                cv::circle(displayImage, lastPos, 5, trackColor, -1);
+                
+                // Draw ID number next to marker
+                cv::putText(displayImage, std::to_string(track.id),
+                            cv::Point(lastPos.x + 10, lastPos.y),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, trackColor, 2);
+                
+                // Draw frame index of last update next to ID
+                if (!track.frameIndices.empty()) {
+                    std::string frameInfo = "f" + std::to_string(track.frameIndices.back());
+                    cv::putText(displayImage, frameInfo,
+                                cv::Point(lastPos.x + 10, lastPos.y + 20),
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, trackColor, 1);
+                }
+                
+                // Draw predicted next position with dashed line
+                cv::Point predictedPos = track.predictNextPosition();
+                
+                // Use dashed line from last position to predicted position
+                const int dashLength = 5;
+                cv::Point direction = predictedPos - lastPos;
+                double distance = cv::norm(direction);
+                
+                if (distance > 0) {
+                    // Normalize direction vector
+                    direction.x = static_cast<int>(direction.x * dashLength / distance);
+                    direction.y = static_cast<int>(direction.y * dashLength / distance);
+                    
+                    // Draw dashed line with enhanced visibility
+                    cv::Point currentPoint = lastPos;
+                    bool drawDash = true;
+                    
+                    while (cv::norm(currentPoint - lastPos) < distance) {
+                        cv::Point nextPoint = currentPoint + direction;
+                        
+                        if (drawDash) {
+                            // Draw the dash with full opacity for clear visibility
+                            cv::line(displayImage, currentPoint, nextPoint, trackColor, 1);
+                        }
+                        
+                        currentPoint = nextPoint;
+                        drawDash = !drawDash;
+                    }
+                    
+                    // Draw arrow at the predicted position for better visibility
+                    double arrowSize = 7.0;
+                    cv::arrowedLine(displayImage, 
+                                  cv::Point(predictedPos.x - direction.x, predictedPos.y - direction.y),
+                                  predictedPos, 
+                                  trackColor, 2, 8, 0, 0.4);
+                }
+            }
+            
         }
 
         cv::imshow("Live Feed", displayImage);
@@ -752,6 +875,12 @@ void displayThreadTask(
             if (shared.displayNeedsUpdate)
             {
                 int index = shared.currentFrameIndex;
+                
+                // Check if we need to update trajectory data
+                bool frameChanged = (index != previousFrameIndex);
+                bool frameIndexIncreased = (index > previousFrameIndex);
+                bool frameIndexDecreased = (index < previousFrameIndex);
+                
                 if (index >= 0 && index < circularBuffer.size())
                 {
                     // Reset state variables before processing
@@ -789,6 +918,59 @@ void displayThreadTask(
                         processFrame(image, shared, processedImage, mats);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
 
+                        // Get contours for trajectory tracking
+                        if (frameChanged) {
+                            auto [contours, hasNestedContours, innerContours, parentIndices] = findContours(processedImage);
+                            
+                            // Log the tracking state before processing this frame
+                            {
+                                std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+                                std::cout << "DISPLAY: Trajectory state before processing frame " << index 
+                                          << " - tracks: " << shared.trajectoryData.tracks.size()
+                                          << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
+                            }
+                            
+                            // Add debug info about contours
+                            std::cout << "TRAJECTORY: Frame " << index << " - Found " 
+                                << contours.size() << " contours, " 
+                                << innerContours.size() << " inner contours" << std::endl;
+                            
+                            // Check if we're going forward or backward
+                            if (frameIndexDecreased) {
+                                std::cout << "TRAJECTORY: Moving backward from frame " 
+                                    << previousFrameIndex << " to " << index << std::endl;
+                            } else if (frameIndexIncreased) {
+                                std::cout << "TRAJECTORY: Moving forward from frame " 
+                                    << previousFrameIndex << " to " << index << std::endl;
+                            }
+                            
+                            // Always calculate trajectory data for every frame (regardless of index change direction)
+                            if (hasNestedContours && !contours.empty() && !innerContours.empty()) {
+                                // Update trajectory data with new frame information
+                                shared.trajectoryData.updateTrack(index, contours, innerContours, parentIndices);
+                                
+                                // Log the tracking state after processing
+                                {
+                                    std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+                                    std::cout << "DISPLAY: Trajectory state after processing - tracks: " 
+                                              << shared.trajectoryData.tracks.size()
+                                              << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
+                                }
+                            } else {
+                                // Add debug message about why we're not calculating trajectories
+                                if (!hasNestedContours) {
+                                    std::cout << "TRAJECTORY: Frame " << index 
+                                        << " - No nested contours found, skipping trajectory update" << std::endl;
+                                } else if (contours.empty()) {
+                                    std::cout << "TRAJECTORY: Frame " << index 
+                                        << " - No contours found, skipping trajectory update" << std::endl;
+                                } else if (innerContours.empty()) {
+                                    std::cout << "TRAJECTORY: Frame " << index 
+                                        << " - No inner contours found, skipping trajectory update" << std::endl;
+                                }
+                            }
+                        }
+
                         // Update shared state variables
                         shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
                         shared.innerContourCount = filterResult.innerContourCount;
@@ -815,6 +997,9 @@ void displayThreadTask(
                         updateDisplay(image, processedImage, filterResult);
                         cv::setTrackbarPos("Frame", "Live Feed", index);
                         shouldUpdate = true;
+                        
+                        // Store current frame index for next iteration
+                        previousFrameIndex = index;
                     }
                 }
                 shared.displayNeedsUpdate = false;
@@ -1233,6 +1418,37 @@ void keyboardHandlingThread(
             shared.overlayMode = !shared.overlayMode;
             shared.displayNeedsUpdate = true;
         }
+        else if (key == 't' || key == 'T')
+        {
+            // Toggle trajectory visualization
+            shared.showTrajectories = !shared.showTrajectories;
+            std::cout << "USER ACTION: Trajectory visualization " 
+                      << (shared.showTrajectories ? "enabled" : "disabled") << std::endl;
+            shared.displayNeedsUpdate = true;
+        }
+        else if (key == 'r' || key == 'R')
+        {
+            if (shared.paused) {
+                // Log state before reset
+                {
+                    std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+                    std::cout << "USER ACTION: Manually resetting trajectory data" << std::endl;
+                    std::cout << "TRAJECTORY: Before reset - " << shared.trajectoryData.tracks.size() 
+                              << " tracks, lastFrameIndex = " << shared.trajectoryData.lastFrameIndex << std::endl;
+                }
+                
+                // Reset trajectory data
+                shared.trajectoryData.reset();
+                
+                // Log confirmation after reset
+                std::cout << "TRAJECTORY: All tracks cleared" << std::endl;
+                shared.displayNeedsUpdate = true;
+            } else {
+                // Toggle running state
+                shared.running = !shared.running;
+                std::cout << "DATA RECORDING: " << (shared.running ? "Started" : "Stopped") << std::endl;
+            }
+        }
         else if (key == 'q' || key == 'Q')
         {
             // Clear deformability buffer
@@ -1324,10 +1540,37 @@ void keyboardHandlingThread(
             shared.displayNeedsUpdate = true;
             shared.updated = true; // Ensure dashboard gets updated
         }
-        else if (key == 'r' || key == 'R')
-        {
-            // Toggle running state
-            shared.running = !shared.running;
+        else if (key == '[' && shared.paused) {
+            // Decrease minimum movement threshold
+            if (shared.trajectoryData.minMovementThreshold > 1.0) {
+                shared.trajectoryData.minMovementThreshold -= 1.0;
+                std::cout << "TRAJECTORY CONFIG: Decreased minimum movement threshold to " 
+                          << shared.trajectoryData.minMovementThreshold << std::endl;
+            }
+            shared.displayNeedsUpdate = true;
+        }
+        else if (key == ']' && shared.paused) {
+            // Increase minimum movement threshold
+            shared.trajectoryData.minMovementThreshold += 1.0;
+            std::cout << "TRAJECTORY CONFIG: Increased minimum movement threshold to " 
+                      << shared.trajectoryData.minMovementThreshold << std::endl;
+            shared.displayNeedsUpdate = true;
+        }
+        else if (key == '-' && shared.paused) {
+            // Decrease maximum matching distance
+            if (shared.trajectoryData.maxMatchingDistance > 20.0) {
+                shared.trajectoryData.maxMatchingDistance -= 10.0;
+                std::cout << "TRAJECTORY CONFIG: Decreased maximum matching distance to " 
+                          << shared.trajectoryData.maxMatchingDistance << std::endl;
+            }
+            shared.displayNeedsUpdate = true;
+        }
+        else if (key == '=' && shared.paused) {
+            // Increase maximum matching distance
+            shared.trajectoryData.maxMatchingDistance += 10.0;
+            std::cout << "TRAJECTORY CONFIG: Increased maximum matching distance to " 
+                      << shared.trajectoryData.maxMatchingDistance << std::endl;
+            shared.displayNeedsUpdate = true;
         }
         shared.updated = true;
     };
@@ -1503,10 +1746,10 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    threads.emplace_back(metricDisplayThread, std::ref(shared));
+    // threads.emplace_back(metricDisplayThread, std::ref(shared));
     
     // Add the validFramesDisplayThread to show the latest 5 valid frames
-    threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
+    // threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
 
     // Read from json to check if scatterplot and histogram are enabled
     json config = readConfig("config.json");

@@ -1,6 +1,7 @@
 # TODO
 
-## Line Process
+## Trajectory Process Thread
+
 Key assumptions
 1. Objects in image do not move from right to left
 2. Objects in image do not appear out of the right side of the image
@@ -43,3 +44,6 @@ Metrics:
 
 Known limitation:
 - if not all the frames produce valid contour it will be hard to track
+
+First Step:
+Implement the trajectory calculation for paused display thread. if the frame number increases then we continue the object id tracking and everything. if frame number decreases we reset the whole process.

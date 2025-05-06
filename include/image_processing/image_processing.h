@@ -17,6 +17,283 @@ using json = nlohmann::json;
 
 class CircularBuffer;
 
+// New structure for tracking object trajectories
+struct ObjectTrack {
+    int id;                                 // Unique identifier for the object
+    std::vector<cv::Point> positions;       // List of positions (centroids) across frames
+    std::vector<int> frameIndices;          // Corresponding frame indices for each position
+    std::vector<cv::Rect> boundingBoxes;    // Bounding boxes across frames
+    std::vector<double> areas;              // Areas across frames
+    
+    // Constructor with initial position
+    ObjectTrack(int objectId, const cv::Point& position, int frameIndex, 
+                const cv::Rect& bbox, double area) 
+        : id(objectId) {
+        positions.push_back(position);
+        frameIndices.push_back(frameIndex);
+        boundingBoxes.push_back(bbox);
+        areas.push_back(area);
+    }
+    
+    // Predict next position based on constant velocity assumption
+    cv::Point predictNextPosition() const {
+        if (positions.size() < 2) {
+            return positions.empty() ? cv::Point(0, 0) : positions.back();
+        }
+        
+        // For better prediction, use the actual frame indices to calculate velocity
+        int lastIdx = positions.size() - 1;
+        
+        // Calculate frame interval
+        int frameInterval = frameIndices[lastIdx] - frameIndices[lastIdx - 1];
+        if (frameInterval <= 0) frameInterval = 1; // Ensure positive interval
+        
+        // Calculate velocity based on the last two points
+        cv::Point velocity(
+            (positions[lastIdx].x - positions[lastIdx - 1].x) / frameInterval, 
+            (positions[lastIdx].y - positions[lastIdx - 1].y) / frameInterval
+        );
+        
+        // Scale velocity by the expected frame interval (assuming next frame = last frame + 1)
+        int expectedFrameInterval = 1;
+        
+        // Return prediction based on the last position plus scaled velocity
+        return cv::Point(
+            positions[lastIdx].x + velocity.x * expectedFrameInterval,
+            positions[lastIdx].y + velocity.y * expectedFrameInterval
+        );
+    }
+    
+    // Get average velocity (pixels per frame)
+    cv::Point getAverageVelocity() const {
+        if (positions.size() < 2) {
+            return cv::Point(0, 0);
+        }
+        
+        // Use first and last positions to get total displacement
+        cv::Point totalDisplacement = positions.back() - positions.front();
+        
+        // Calculate frames elapsed
+        int framesElapsed = frameIndices.back() - frameIndices.front();
+        if (framesElapsed == 0) return cv::Point(0, 0);
+        
+        // Return average velocity
+        return cv::Point(
+            totalDisplacement.x / framesElapsed,
+            totalDisplacement.y / framesElapsed
+        );
+    }
+};
+
+struct TrajectoryData {
+    std::vector<ObjectTrack> tracks;         // All object tracks
+    int lastFrameIndex = -1;                 // Last processed frame index
+    int nextObjectId = 0;                    // Counter for generating unique object IDs
+    std::mutex mutex;                        // Mutex for thread safety
+    std::vector<std::string> debugMessages;  // Store debug messages about trajectory processing
+    
+    // Configuration parameters
+    double maxMatchingDistance = 250.0;     // Maximum distance for matching objects between frames
+    double minMovementThreshold = 100.0;     // Minimum movement required to consider a valid match
+    
+    // Reset all tracking data
+    void reset() {
+        std::lock_guard<std::mutex> lock(mutex);
+        tracks.clear();
+        lastFrameIndex = -1;  // Make sure this is reset to -1
+        nextObjectId = 0;
+        debugMessages.clear();
+        std::cout << "TRAJECTORY: Tracking reset, lastFrameIndex = " << lastFrameIndex << std::endl;
+    }
+    
+    // Get last debug message
+    std::string getLastDebugMessage() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (debugMessages.empty()) {
+            return "No debug information available";
+        }
+        return debugMessages.back();
+    }
+    
+    // Add a debug message
+    void addDebugMessage(const std::string& message) {
+        // Log to console instead of storing in memory
+        std::cout << "TRAJECTORY: " << message << std::endl;
+        
+        // Still store a few recent messages for on-screen display
+        std::lock_guard<std::mutex> lock(mutex);
+        debugMessages.push_back(message);
+        // Keep only the last 5 messages
+        if (debugMessages.size() > 5) {
+            debugMessages.erase(debugMessages.begin());
+        }
+    }
+    
+    // Add a new position to an existing track or create a new track
+    void updateTrack(int frameIndex, 
+                    const std::vector<std::vector<cv::Point>>& contours,
+                    const std::vector<std::vector<cv::Point>>& innerContours,
+                    const std::vector<int>& parentIndices) {
+        std::lock_guard<std::mutex> lock(mutex);
+        
+        // Debug the current state before processing
+        std::cout << "TRAJECTORY: updateTrack called with frameIndex = " << frameIndex 
+                  << ", lastFrameIndex = " << lastFrameIndex << std::endl;
+        
+        // Skip if we're processing the same frame again
+        if (frameIndex == lastFrameIndex) {
+            std::cout << "TRAJECTORY: Frame " << frameIndex << " - Skipped (same as last processed frame)" << std::endl;
+            return;
+        }
+        
+        // If lastFrameIndex is invalid or unreasonably large, reset it
+        if (lastFrameIndex < 0 || lastFrameIndex > 5000) {
+            std::cout << "TRAJECTORY: Reset lastFrameIndex from " << lastFrameIndex << " to -1 (invalid value detected)" << std::endl;
+            lastFrameIndex = -1;
+        }
+        
+        // Now check if we're going backward (but only if lastFrameIndex is valid)
+        if (lastFrameIndex > 0 && frameIndex < lastFrameIndex) {
+            std::cout << "TRAJECTORY: Frame " << frameIndex << " - Skipped (going backward from " 
+                      << lastFrameIndex << ")" << std::endl;
+            return;
+        }
+        
+        // Calculate centroids and bounding boxes for all valid contours
+        std::vector<cv::Point> centroids;
+        std::vector<cv::Rect> boundingBoxes;
+        std::vector<double> areas;
+        
+        for (size_t i = 0; i < contours.size(); i++) {
+            // Check if this is a parent contour with an inner contour
+            bool hasInnerContour = false;
+            for (size_t j = 0; j < parentIndices.size(); j++) {
+                if (static_cast<int>(i) == parentIndices[j]) {
+                    hasInnerContour = true;
+                    break;
+                }
+            }
+            
+            if (hasInnerContour) {
+                // Calculate moments to get centroid
+                cv::Moments m = cv::moments(contours[i]);
+                if (m.m00 > 0) {
+                    cv::Point centroid(m.m10 / m.m00, m.m01 / m.m00);
+                    centroids.push_back(centroid);
+                    
+                    // Calculate bounding box
+                    cv::Rect bbox = cv::boundingRect(contours[i]);
+                    boundingBoxes.push_back(bbox);
+                    
+                    // Calculate area
+                    double area = cv::contourArea(contours[i]);
+                    areas.push_back(area);
+                }
+            }
+        }
+        
+        // Record number of detected objects
+        std::cout << "TRAJECTORY: Frame " << frameIndex << " - Detected " 
+                  << centroids.size() << " objects" << std::endl;
+        
+        // If this is the first frame or we reset
+        if (tracks.empty()) {
+            // Create new tracks for each detected object
+            for (size_t i = 0; i < centroids.size(); i++) {
+                tracks.emplace_back(nextObjectId++, centroids[i], frameIndex, 
+                                   boundingBoxes[i], areas[i]);
+            }
+            std::cout << "TRAJECTORY: Created " << centroids.size() << " new tracks (first frame)" << std::endl;
+        } else {
+            // Match existing tracks with new detections
+            std::vector<bool> assignedDetections(centroids.size(), false);
+            int matchCount = 0;
+            
+            // For each existing track
+            for (auto& track : tracks) {
+                // Skip tracks that haven't been updated recently
+                if (track.frameIndices.back() < lastFrameIndex - 5) {
+                    continue;
+                }
+                
+                // Predict where this track should be
+                cv::Point predictedPos = track.predictNextPosition();
+                
+                // Find the closest detection
+                int bestMatch = -1;
+                double minDistance = maxMatchingDistance; // Use class variable instead of hard-coded value
+                
+                for (size_t i = 0; i < centroids.size(); i++) {
+                    if (!assignedDetections[i]) {
+                        double distance = cv::norm(predictedPos - centroids[i]);
+                        
+                        // Calculate how far the object has moved from its last position
+                        double movementDistance = 0.0;
+                        if (!track.positions.empty()) {
+                            movementDistance = cv::norm(track.positions.back() - centroids[i]);
+                        }
+                        
+                        std::cout << "TRAJECTORY: Matching - Track " << track.id 
+                                  << " (last at " << track.positions.back().x << "," << track.positions.back().y 
+                                  << ", predicted at " << predictedPos.x << "," << predictedPos.y
+                                  << ") to object at (" << centroids[i].x << "," << centroids[i].y 
+                                  << ") distance = " << distance 
+                                  << ", movement = " << movementDistance << std::endl;
+                        
+                        // Only consider matches if object has moved enough
+                        if (movementDistance >= minMovementThreshold) {
+                            if (distance < minDistance) {
+                                minDistance = distance;
+                                bestMatch = i;
+                            }
+                        } else {
+                            std::cout << "TRAJECTORY: Discarding match - movement " << movementDistance 
+                                      << " is below threshold " << minMovementThreshold << std::endl;
+                        }
+                    }
+                }
+                
+                // If we found a match
+                if (bestMatch >= 0) {
+                    // Update the track
+                    track.positions.push_back(centroids[bestMatch]);
+                    track.frameIndices.push_back(frameIndex);
+                    track.boundingBoxes.push_back(boundingBoxes[bestMatch]);
+                    track.areas.push_back(areas[bestMatch]);
+                    assignedDetections[bestMatch] = true;
+                    matchCount++;
+                    std::cout << "TRAJECTORY: SUCCESS - Matched track " << track.id 
+                              << " to object at (" << centroids[bestMatch].x << "," << centroids[bestMatch].y 
+                              << ") with distance " << minDistance << std::endl;
+                } else {
+                    std::cout << "TRAJECTORY: FAILED - No match found for track " << track.id 
+                              << " (predicted at " << predictedPos.x << "," << predictedPos.y
+                              << ")" << std::endl;
+                }
+            }
+            
+            // Count new tracks created
+            int newTrackCount = 0;
+            
+            // Create new tracks for unassigned detections
+            for (size_t i = 0; i < centroids.size(); i++) {
+                if (!assignedDetections[i]) {
+                    tracks.emplace_back(nextObjectId++, centroids[i], frameIndex, 
+                                       boundingBoxes[i], areas[i]);
+                    newTrackCount++;
+                }
+            }
+            
+            std::cout << "TRAJECTORY: Frame " << frameIndex << " - Matched " << matchCount 
+                      << " existing tracks, created " << newTrackCount << " new tracks" << std::endl;
+        }
+        
+        // Update the last frame index with the current frame
+        std::cout << "TRAJECTORY: Updated lastFrameIndex from " << lastFrameIndex << " to " << frameIndex << std::endl;
+        lastFrameIndex = frameIndex;
+    }
+};
+
 struct ImageParams
 {
     size_t width;
@@ -127,6 +404,10 @@ struct SharedResources
     std::atomic<bool> clearHistogramData{false}; // Flag to clear histogram data
     std::atomic<double> averageRingRatio{0.0}; // Average ring ratio for dashboard display
     
+    // Trajectory tracking data
+    TrajectoryData trajectoryData;
+    std::atomic<bool> showTrajectories{true}; // Enable/disable trajectory visualization
+
     // Thread shutdown tracking
     std::atomic<int> activeThreadCount{0};
     std::atomic<int> threadsReadyToJoin{0};
