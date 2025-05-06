@@ -1754,8 +1754,8 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     // Read from json to check if scatterplot and histogram are enabled
     json config = readConfig("config.json");
     bool scatterPlotEnabled = config.value("scatter_plot_enabled", false);
-    bool histogramEnabled = config.value("histogram_enabled", true);  // Default to true
-
+    bool histogramEnabled = config.value("ring_ratio_histogram_enabled", false); 
+    
     if (scatterPlotEnabled)
     {
         threads.emplace_back(updateScatterPlot, std::ref(shared));
