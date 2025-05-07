@@ -1045,6 +1045,23 @@ void displayThreadTask(
                         processFrame(image, shared, processedImage, mats);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
 
+                        // Calculate trajectory data for the current frame in paused mode
+                        auto [contours, hasNestedContours, innerContours, parentIndices] = findContours(processedImage);
+                        
+                        // Only update trajectory data if we have valid contours
+                        if (hasNestedContours && !contours.empty() && !innerContours.empty()) {
+                            // Update trajectory data with the current frame
+                            shared.trajectoryData.updateTrack(index, contours, innerContours, parentIndices,
+                                                            cv::Size(static_cast<int>(width), static_cast<int>(height)));
+                            
+                            // Check if any objects are predicted to leave frame
+                            shared.trajectoryData.checkForObjectsLeavingFrame(
+                                cv::Size(static_cast<int>(width), static_cast<int>(height)),
+                                contours, index);
+                                
+                            std::cout << "TRAJECTORY: Updated trajectories in paused mode for frame " << index << std::endl;
+                        }
+
                         // Update shared state variables
                         shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
                         shared.innerContourCount = filterResult.innerContourCount;
@@ -1116,8 +1133,12 @@ void displayThreadTask(
 void onTrackbar(int pos, void *userdata)
 {
     auto *shared = static_cast<SharedResources *>(userdata);
-    shared->currentFrameIndex = pos;
-    shared->displayNeedsUpdate = true;
+    // Only update if the position actually changed
+    if (shared->currentFrameIndex != pos) {
+        shared->currentFrameIndex = pos;
+        std::cout << "TRACKBAR: Changed frame to " << pos << std::endl;
+        shared->displayNeedsUpdate = true;
+    }
 }
 
 void updateScatterPlot(SharedResources &shared)
@@ -1472,11 +1493,13 @@ void keyboardHandlingThread(
         }
         else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < static_cast<int>(circularBuffer.size() - 1))
         {
+            std::cout << "USER ACTION: Moving to next frame" << std::endl;
             shared.currentFrameIndex++;
             shared.displayNeedsUpdate = true;
         }
         else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex > 0)
         {
+            std::cout << "USER ACTION: Moving to previous frame" << std::endl;
             shared.currentFrameIndex--;
             shared.displayNeedsUpdate = true;
         }
