@@ -513,7 +513,7 @@ void processingThreadTask(
             inputImage = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
 
             // Check if ROI is the same as the full image
-            if (static_cast<size_t>(shared.roi.width) != width && static_cast<size_t>(shared.roi.height) != height)
+            if (static_cast<size_t>(shared.roi.width) == width && static_cast<size_t>(shared.roi.height) == height)
             {
                 // Preprocess Image using the optimized processFrame function
                 processFrame(inputImage, shared, processedImage, mats);
@@ -657,27 +657,27 @@ void calculateTrajectoryData(
     if (frameChanged) {
         auto [contours, hasNestedContours, innerContours, parentIndices] = findContours(processedImage);
         
-        // Log the tracking state before processing this frame
-        {
-            std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
-            std::cout << "DISPLAY: Trajectory state before processing frame " << frameIndex 
-                      << " - tracks: " << shared.trajectoryData.tracks.size()
-                      << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
-        }
+        // // Log the tracking state before processing this frame
+        // {
+        //     std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+        //     std::cout << "DISPLAY: Trajectory state before processing frame " << frameIndex 
+        //               << " - tracks: " << shared.trajectoryData.tracks.size()
+        //               << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
+        // }
         
-        // Add debug info about contours
-        std::cout << "TRAJECTORY: Frame " << frameIndex << " - Found " 
-            << contours.size() << " contours, " 
-            << innerContours.size() << " inner contours" << std::endl;
+        // // Add debug info about contours
+        // std::cout << "TRAJECTORY: Frame " << frameIndex << " - Found " 
+        //     << contours.size() << " contours, " 
+        //     << innerContours.size() << " inner contours" << std::endl;
         
-        // Check if we're going forward or backward
-        if (frameIndexDecreased) {
-            std::cout << "TRAJECTORY: Moving backward from frame " 
-                << previousFrameIndex << " to " << frameIndex << std::endl;
-        } else if (frameIndexIncreased) {
-            std::cout << "TRAJECTORY: Moving forward from frame " 
-                << previousFrameIndex << " to " << frameIndex << std::endl;
-        }
+        // // Check if we're going forward or backward
+        // if (frameIndexDecreased) {
+        //     std::cout << "TRAJECTORY: Moving backward from frame " 
+        //         << previousFrameIndex << " to " << frameIndex << std::endl;
+        // } else if (frameIndexIncreased) {
+        //     std::cout << "TRAJECTORY: Moving forward from frame " 
+        //         << previousFrameIndex << " to " << frameIndex << std::endl;
+        // }
         
         // Always calculate trajectory data for every frame (regardless of index change direction)
         if (hasNestedContours && !contours.empty() && !innerContours.empty()) {
@@ -690,25 +690,25 @@ void calculateTrajectoryData(
                 cv::Size(static_cast<int>(width), static_cast<int>(height)),
                 contours, frameIndex);
             
-            // Log the tracking state after processing
-            {
-                std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
-                std::cout << "DISPLAY: Trajectory state after processing - tracks: " 
-                          << shared.trajectoryData.tracks.size()
-                          << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
-            }
+            // // Log the tracking state after processing
+            // {
+            //     std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+            //     std::cout << "DISPLAY: Trajectory state after processing - tracks: " 
+            //               << shared.trajectoryData.tracks.size()
+            //               << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
+            // }
         } else {
             // Add debug message about why we're not calculating trajectories
-            if (!hasNestedContours) {
-                std::cout << "TRAJECTORY: Frame " << frameIndex 
-                    << " - No nested contours found, skipping trajectory update" << std::endl;
-            } else if (contours.empty()) {
-                std::cout << "TRAJECTORY: Frame " << frameIndex 
-                    << " - No contours found, skipping trajectory update" << std::endl;
-            } else if (innerContours.empty()) {
-                std::cout << "TRAJECTORY: Frame " << frameIndex 
-                    << " - No inner contours found, skipping trajectory update" << std::endl;
-            }
+            // if (!hasNestedContours) {
+            //     std::cout << "TRAJECTORY: Frame " << frameIndex 
+            //         << " - No nested contours found, skipping trajectory update" << std::endl;
+            // } else if (contours.empty()) {
+            //     std::cout << "TRAJECTORY: Frame " << frameIndex 
+            //         << " - No contours found, skipping trajectory update" << std::endl;
+            // } else if (innerContours.empty()) {
+            //     std::cout << "TRAJECTORY: Frame " << frameIndex 
+            //         << " - No inner contours found, skipping trajectory update" << std::endl;
+            // }
         }
     }
 }
@@ -1059,7 +1059,7 @@ void displayThreadTask(
                                 cv::Size(static_cast<int>(width), static_cast<int>(height)),
                                 contours, index);
                                 
-                            std::cout << "TRAJECTORY: Updated trajectories in paused mode for frame " << index << std::endl;
+                            // std::cout << "TRAJECTORY: Updated trajectories in paused mode for frame " << index << std::endl;
                         }
 
                         // Update shared state variables
@@ -1136,7 +1136,7 @@ void onTrackbar(int pos, void *userdata)
     // Only update if the position actually changed
     if (shared->currentFrameIndex != pos) {
         shared->currentFrameIndex = pos;
-        std::cout << "TRACKBAR: Changed frame to " << pos << std::endl;
+        // std::cout << "TRACKBAR: Changed frame to " << pos << std::endl;
         shared->displayNeedsUpdate = true;
     }
 }
@@ -1493,13 +1493,13 @@ void keyboardHandlingThread(
         }
         else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < static_cast<int>(circularBuffer.size() - 1))
         {
-            std::cout << "USER ACTION: Moving to next frame" << std::endl;
+            // std::cout << "USER ACTION: Moving to next frame" << std::endl;
             shared.currentFrameIndex++;
             shared.displayNeedsUpdate = true;
         }
         else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex > 0)
         {
-            std::cout << "USER ACTION: Moving to previous frame" << std::endl;
+            // std::cout << "USER ACTION: Moving to previous frame" << std::endl;
             shared.currentFrameIndex--;
             shared.displayNeedsUpdate = true;
         }
@@ -1516,31 +1516,31 @@ void keyboardHandlingThread(
         {
             // Toggle trajectory visualization
             shared.showTrajectories = !shared.showTrajectories;
-            std::cout << "USER ACTION: Trajectory visualization " 
-                      << (shared.showTrajectories ? "enabled" : "disabled") << std::endl;
+            // std::cout << "USER ACTION: Trajectory visualization " 
+            //           << (shared.showTrajectories ? "enabled" : "disabled") << std::endl;
             shared.displayNeedsUpdate = true;
         }
         else if (key == 'r' || key == 'R')
         {
             if (shared.paused) {
                 // Log state before reset
-                {
-                    std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
-                    std::cout << "USER ACTION: Manually resetting trajectory data" << std::endl;
-                    std::cout << "TRAJECTORY: Before reset - " << shared.trajectoryData.tracks.size() 
-                              << " tracks, lastFrameIndex = " << shared.trajectoryData.lastFrameIndex << std::endl;
-                }
+                // {
+                //     std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+                //     std::cout << "USER ACTION: Manually resetting trajectory data" << std::endl;
+                //     std::cout << "TRAJECTORY: Before reset - " << shared.trajectoryData.tracks.size() 
+                //               << " tracks, lastFrameIndex = " << shared.trajectoryData.lastFrameIndex << std::endl;
+                // }
                 
                 // Reset trajectory data
                 shared.trajectoryData.reset();
                 
                 // Log confirmation after reset
-                std::cout << "TRAJECTORY: All tracks cleared" << std::endl;
+                // std::cout << "TRAJECTORY: All tracks cleared" << std::endl;
                 shared.displayNeedsUpdate = true;
             } else {
                 // Toggle running state
                 shared.running = !shared.running;
-                std::cout << "DATA RECORDING: " << (shared.running ? "Started" : "Stopped") << std::endl;
+                // std::cout << "DATA RECORDING: " << (shared.running ? "Started" : "Stopped") << std::endl;
             }
         }
         else if (key == 'q' || key == 'Q')
@@ -1551,7 +1551,7 @@ void keyboardHandlingThread(
             
             // Set flag to clear histogram data
             shared.clearHistogramData = true;
-            std::cout << "Clearing histogram data..." << std::endl;
+            // std::cout << "Clearing histogram data..." << std::endl;
         }
         else if (key == 'S')
         {
@@ -1840,7 +1840,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    // threads.emplace_back(metricDisplayThread, std::ref(shared));
+    threads.emplace_back(metricDisplayThread, std::ref(shared));
     
     // Add the validFramesDisplayThread to show the latest 5 valid frames
     // threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
