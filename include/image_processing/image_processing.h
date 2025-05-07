@@ -309,15 +309,28 @@ struct TrajectoryData {
                                   << ") distance = " << distance 
                                   << ", movement = " << movementDistance << std::endl;
                         
-                        // Only consider matches if object has moved enough
-                        if (movementDistance >= minMovementThreshold) {
+                        // Check if the object is moving backwards (to the left on x-axis)
+                        bool isMovingBackward = false;
+                        if (!track.positions.empty()) {
+                            isMovingBackward = centroids[i].x < track.positions.back().x;
+                        }
+                        
+                        // Only consider matches if:
+                        // 1. Object has moved enough AND
+                        // 2. Object is NOT moving backward on x-axis
+                        if (movementDistance >= minMovementThreshold && !isMovingBackward) {
                             if (distance < minDistance) {
                                 minDistance = distance;
                                 bestMatch = i;
                             }
                         } else {
-                            std::cout << "TRAJECTORY: Discarding match - movement " << movementDistance 
-                                      << " is below threshold " << minMovementThreshold << std::endl;
+                            if (isMovingBackward) {
+                                std::cout << "TRAJECTORY: Discarding match - object moving backward on x-axis from "
+                                          << track.positions.back().x << " to " << centroids[i].x << std::endl;
+                            } else {
+                                std::cout << "TRAJECTORY: Discarding match - movement " << movementDistance 
+                                          << " is below threshold " << minMovementThreshold << std::endl;
+                            }
                         }
                     }
                 }
