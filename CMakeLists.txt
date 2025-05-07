@@ -18,6 +18,7 @@ set(SOURCES
     src/image_processing/image_processing_core.cpp
     src/image_processing/image_processing_utils.cpp
     src/image_processing/image_processing_threads.cpp
+    src/image_processing/trajectory_processing.cpp
     src/menu_system/menu_system.cpp
     src/CircularBuffer/CircularBuffer.cpp
     src/mib_grabber/mib_grabber.cpp
@@ -54,6 +55,7 @@ foreach(test_source ${TEST_SOURCES})
         src/image_processing/image_processing_core.cpp
         src/image_processing/image_processing_utils.cpp
         src/image_processing/image_processing_threads.cpp
+        src/image_processing/trajectory_processing.cpp
         src/menu_system/menu_system.cpp
         src/CircularBuffer/CircularBuffer.cpp
         src/mib_grabber/mib_grabber.cpp

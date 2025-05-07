@@ -41,7 +41,7 @@ void simulateCameraThread(
     auto lastFrameTime = clock::now();
     auto fpsStartTime = clock::now();
     size_t frameCount = 0;
-    const int simCameraTargetFPS = 5000;
+    const int simCameraTargetFPS = 10;
     const std::chrono::nanoseconds frameInterval(1000000000 / simCameraTargetFPS);
 
     while (!shared.done)
@@ -479,12 +479,15 @@ void processingThreadTask(
     cv::Mat processedImage(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
     ThreadLocalMats mats = initializeThreadMats(static_cast<int>(height), static_cast<int>(width), shared);
     const size_t BUFFER_THRESHOLD = 1000; // Adjust as needed
-    // const size_t area_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
     shared.processTrigger = false;
     
     // Initialize frame counter
     size_t frameCounter = 0;
+    
+    // Store previous frame's processed image for trajectory calculation
+    cv::Mat previousProcessedImage;
+    int previousFrameIndex = -1;
 
     while (!shared.done)
     {
@@ -497,7 +500,7 @@ void processingThreadTask(
 
         if (!framesToProcess.empty() && !shared.paused)
         {
-            // size_t frame = framesToProcess.front(); //retrieve content of queue
+            size_t frame = framesToProcess.front();
             framesToProcess.pop();
             lock.unlock();
 
@@ -512,6 +515,27 @@ void processingThreadTask(
                 // Preprocess Image using the optimized processFrame function
                 processFrame(inputImage, shared, processedImage, mats);
                 auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
+
+                // Calculate trajectory data in real-time
+                if (!previousProcessedImage.empty()) {
+                    // Get contours from both current and previous frames
+                    auto [currentContours, currentHasNested, currentInnerContours, currentParentIndices] = 
+                        findContours(processedImage);
+                    auto [prevContours, prevHasNested, prevInnerContours, prevParentIndices] = 
+                        findContours(previousProcessedImage);
+
+                    // Update trajectory data with current frame information
+                    shared.trajectoryData.updateTrack(frameCounter, currentContours, currentInnerContours, currentParentIndices);
+                    
+                    // Check if any objects are predicted to leave frame
+                    shared.trajectoryData.checkForObjectsLeavingFrame(
+                        cv::Size(static_cast<int>(width), static_cast<int>(height)),
+                        currentContours, frameCounter);
+                }
+
+                // Store current processed image for next iteration
+                processedImage.copyTo(previousProcessedImage);
+                previousFrameIndex = frameCounter;
 
                 // Use the isValid flag directly from filterResult without creating a redundant local variable
                 if (filterResult.isValid)
@@ -613,6 +637,77 @@ void processingThreadTask(
     std::cout << "Processing thread interrupted." << std::endl;
 }
 
+void calculateTrajectoryData(
+    SharedResources& shared,
+    const cv::Mat& processedImage,
+    int frameIndex,
+    int previousFrameIndex,
+    size_t width,
+    size_t height)
+{
+    // Check if we need to update trajectory data
+    bool frameChanged = (frameIndex != previousFrameIndex);
+    bool frameIndexIncreased = (frameIndex > previousFrameIndex);
+    bool frameIndexDecreased = (frameIndex < previousFrameIndex);
+    
+    if (frameChanged) {
+        auto [contours, hasNestedContours, innerContours, parentIndices] = findContours(processedImage);
+        
+        // Log the tracking state before processing this frame
+        {
+            std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+            std::cout << "DISPLAY: Trajectory state before processing frame " << frameIndex 
+                      << " - tracks: " << shared.trajectoryData.tracks.size()
+                      << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
+        }
+        
+        // Add debug info about contours
+        std::cout << "TRAJECTORY: Frame " << frameIndex << " - Found " 
+            << contours.size() << " contours, " 
+            << innerContours.size() << " inner contours" << std::endl;
+        
+        // Check if we're going forward or backward
+        if (frameIndexDecreased) {
+            std::cout << "TRAJECTORY: Moving backward from frame " 
+                << previousFrameIndex << " to " << frameIndex << std::endl;
+        } else if (frameIndexIncreased) {
+            std::cout << "TRAJECTORY: Moving forward from frame " 
+                << previousFrameIndex << " to " << frameIndex << std::endl;
+        }
+        
+        // Always calculate trajectory data for every frame (regardless of index change direction)
+        if (hasNestedContours && !contours.empty() && !innerContours.empty()) {
+            // Update trajectory data with new frame information
+            shared.trajectoryData.updateTrack(frameIndex, contours, innerContours, parentIndices);
+            
+            // Check if any objects are predicted to leave frame in the next move
+            shared.trajectoryData.checkForObjectsLeavingFrame(
+                cv::Size(static_cast<int>(width), static_cast<int>(height)),
+                contours, frameIndex);
+            
+            // Log the tracking state after processing
+            {
+                std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
+                std::cout << "DISPLAY: Trajectory state after processing - tracks: " 
+                          << shared.trajectoryData.tracks.size()
+                          << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
+            }
+        } else {
+            // Add debug message about why we're not calculating trajectories
+            if (!hasNestedContours) {
+                std::cout << "TRAJECTORY: Frame " << frameIndex 
+                    << " - No nested contours found, skipping trajectory update" << std::endl;
+            } else if (contours.empty()) {
+                std::cout << "TRAJECTORY: Frame " << frameIndex 
+                    << " - No contours found, skipping trajectory update" << std::endl;
+            } else if (innerContours.empty()) {
+                std::cout << "TRAJECTORY: Frame " << frameIndex 
+                    << " - No inner contours found, skipping trajectory update" << std::endl;
+            }
+        }
+    }
+}
+
 void displayThreadTask(
     std::queue<size_t> &framesToDisplay,
     std::mutex &displayQueueMutex,
@@ -633,9 +728,6 @@ void displayThreadTask(
     cv::Mat image(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
     cv::Mat processedImage(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
     cv::Mat displayImage(static_cast<int>(height), static_cast<int>(width), CV_8UC3);
-
-    // Store the previous frame index to detect changes
-    int previousFrameIndex = -1;
 
     cv::namedWindow("Live Feed", cv::WINDOW_AUTOSIZE);
     cv::resizeWindow("Live Feed", static_cast<int>(width), static_cast<int>(height));
@@ -672,8 +764,8 @@ void displayThreadTask(
             cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
         }
 
-        // Draw trajectories if enabled and in paused mode
-        if (shared.paused && shared.showTrajectories)
+        // Draw trajectories if enabled
+        if (shared.showTrajectories)
         {
             std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
             
@@ -797,7 +889,6 @@ void displayThreadTask(
                                   trackColor, 2, 8, 0, 0.4);
                 }
             }
-            
         }
 
         cv::imshow("Live Feed", displayImage);
@@ -890,11 +981,6 @@ void displayThreadTask(
             {
                 int index = shared.currentFrameIndex;
                 
-                // Check if we need to update trajectory data
-                bool frameChanged = (index != previousFrameIndex);
-                bool frameIndexIncreased = (index > previousFrameIndex);
-                bool frameIndexDecreased = (index < previousFrameIndex);
-                
                 if (index >= 0 && index < circularBuffer.size())
                 {
                     // Reset state variables before processing
@@ -932,64 +1018,6 @@ void displayThreadTask(
                         processFrame(image, shared, processedImage, mats);
                         auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
 
-                        // Get contours for trajectory tracking
-                        if (frameChanged) {
-                            auto [contours, hasNestedContours, innerContours, parentIndices] = findContours(processedImage);
-                            
-                            // Log the tracking state before processing this frame
-                            {
-                                std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
-                                std::cout << "DISPLAY: Trajectory state before processing frame " << index 
-                                          << " - tracks: " << shared.trajectoryData.tracks.size()
-                                          << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
-                            }
-                            
-                            // Add debug info about contours
-                            std::cout << "TRAJECTORY: Frame " << index << " - Found " 
-                                << contours.size() << " contours, " 
-                                << innerContours.size() << " inner contours" << std::endl;
-                            
-                            // Check if we're going forward or backward
-                            if (frameIndexDecreased) {
-                                std::cout << "TRAJECTORY: Moving backward from frame " 
-                                    << previousFrameIndex << " to " << index << std::endl;
-                            } else if (frameIndexIncreased) {
-                                std::cout << "TRAJECTORY: Moving forward from frame " 
-                                    << previousFrameIndex << " to " << index << std::endl;
-                            }
-                            
-                            // Always calculate trajectory data for every frame (regardless of index change direction)
-                            if (hasNestedContours && !contours.empty() && !innerContours.empty()) {
-                                // Update trajectory data with new frame information
-                                shared.trajectoryData.updateTrack(index, contours, innerContours, parentIndices);
-                                
-                                // Check if any objects are predicted to leave frame in the next move
-                                shared.trajectoryData.checkForObjectsLeavingFrame(
-                                    cv::Size(static_cast<int>(width), static_cast<int>(height)),
-                                    contours, index);
-                                
-                                // Log the tracking state after processing
-                                {
-                                    std::lock_guard<std::mutex> lock(shared.trajectoryData.mutex);
-                                    std::cout << "DISPLAY: Trajectory state after processing - tracks: " 
-                                              << shared.trajectoryData.tracks.size()
-                                              << ", lastFrameIndex: " << shared.trajectoryData.lastFrameIndex << std::endl;
-                                }
-                            } else {
-                                // Add debug message about why we're not calculating trajectories
-                                if (!hasNestedContours) {
-                                    std::cout << "TRAJECTORY: Frame " << index 
-                                        << " - No nested contours found, skipping trajectory update" << std::endl;
-                                } else if (contours.empty()) {
-                                    std::cout << "TRAJECTORY: Frame " << index 
-                                        << " - No contours found, skipping trajectory update" << std::endl;
-                                } else if (innerContours.empty()) {
-                                    std::cout << "TRAJECTORY: Frame " << index 
-                                        << " - No inner contours found, skipping trajectory update" << std::endl;
-                                }
-                            }
-                        }
-
                         // Update shared state variables
                         shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
                         shared.innerContourCount = filterResult.innerContourCount;
@@ -1016,9 +1044,6 @@ void displayThreadTask(
                         updateDisplay(image, processedImage, filterResult);
                         cv::setTrackbarPos("Frame", "Live Feed", index);
                         shouldUpdate = true;
-                        
-                        // Store current frame index for next iteration
-                        previousFrameIndex = index;
                     }
                 }
                 shared.displayNeedsUpdate = false;
