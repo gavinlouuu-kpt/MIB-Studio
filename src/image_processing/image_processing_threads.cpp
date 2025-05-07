@@ -528,7 +528,8 @@ void processingThreadTask(
                         findContours(previousProcessedImage);
 
                     // Update trajectory data with current frame information
-                    shared.trajectoryData.updateTrack(frameCounter, currentContours, currentInnerContours, currentParentIndices);
+                    shared.trajectoryData.updateTrack(frameCounter, currentContours, currentInnerContours, currentParentIndices,
+                                                     cv::Size(static_cast<int>(width), static_cast<int>(height)));
                     
                     // Check if any objects are predicted to leave frame
                     shared.trajectoryData.checkForObjectsLeavingFrame(
@@ -681,7 +682,8 @@ void calculateTrajectoryData(
         // Always calculate trajectory data for every frame (regardless of index change direction)
         if (hasNestedContours && !contours.empty() && !innerContours.empty()) {
             // Update trajectory data with new frame information
-            shared.trajectoryData.updateTrack(frameIndex, contours, innerContours, parentIndices);
+            shared.trajectoryData.updateTrack(frameIndex, contours, innerContours, parentIndices,
+                                             cv::Size(static_cast<int>(width), static_cast<int>(height)));
             
             // Check if any objects are predicted to leave frame in the next move
             shared.trajectoryData.checkForObjectsLeavingFrame(
@@ -891,6 +893,28 @@ void displayThreadTask(
                                   predictedPos, 
                                   trackColor, 2, 8, 0, 0.4);
                 }
+            }
+            
+            // Visualize late detections (detections rejected for being beyond 50% of x-axis)
+            for (const auto& latePoint : shared.trajectoryData.lateDetections) {
+                // Draw a red X at each late detection point
+                const int markerSize = 10;
+                cv::Scalar lateColor(0, 0, 255); // Red
+                
+                // Draw the X
+                cv::line(displayImage, 
+                        cv::Point(latePoint.x - markerSize, latePoint.y - markerSize),
+                        cv::Point(latePoint.x + markerSize, latePoint.y + markerSize),
+                        lateColor, 2);
+                cv::line(displayImage, 
+                        cv::Point(latePoint.x - markerSize, latePoint.y + markerSize),
+                        cv::Point(latePoint.x + markerSize, latePoint.y - markerSize),
+                        lateColor, 2);
+                
+                // Draw "LATE" text next to it
+                cv::putText(displayImage, "LATE", 
+                          cv::Point(latePoint.x + markerSize + 5, latePoint.y),
+                          cv::FONT_HERSHEY_SIMPLEX, 0.5, lateColor, 2);
             }
         }
 

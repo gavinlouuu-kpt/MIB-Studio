@@ -50,6 +50,7 @@ struct TrajectoryData {
     int nextObjectId = 0;                    // Counter for generating unique object IDs
     std::mutex mutex;                        // Mutex for thread safety
     std::vector<std::string> debugMessages;  // Store debug messages about trajectory processing
+    std::vector<cv::Point> lateDetections;   // Store positions of detections on the right side that were rejected
     
     // Configuration parameters
     double maxMatchingDistance = 250.0;     // Maximum distance for matching objects between frames
@@ -65,7 +66,8 @@ struct TrajectoryData {
     void updateTrack(int frameIndex, 
                     const std::vector<std::vector<cv::Point>>& contours,
                     const std::vector<std::vector<cv::Point>>& innerContours,
-                    const std::vector<int>& parentIndices);
+                    const std::vector<int>& parentIndices,
+                    const cv::Size& frameSize);
 };
 
 struct ImageParams

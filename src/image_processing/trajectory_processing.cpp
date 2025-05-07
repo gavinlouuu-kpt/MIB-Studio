@@ -121,6 +121,7 @@ void TrajectoryData::reset() {
     lastFrameIndex = -1;  // Make sure this is reset to -1
     nextObjectId = 0;
     debugMessages.clear();
+    lateDetections.clear(); // Clear late detections
     std::cout << "TRAJECTORY: Tracking reset, lastFrameIndex = " << lastFrameIndex << std::endl;
 }
 
@@ -148,8 +149,12 @@ void TrajectoryData::addDebugMessage(const std::string& message) {
 void TrajectoryData::updateTrack(int frameIndex, 
                                const std::vector<std::vector<cv::Point>>& contours,
                                const std::vector<std::vector<cv::Point>>& innerContours,
-                               const std::vector<int>& parentIndices) {
+                               const std::vector<int>& parentIndices,
+                               const cv::Size& frameSize) {
     std::lock_guard<std::mutex> lock(mutex);
+    
+    // Clear late detections from previous frames
+    lateDetections.clear();
     
     // Debug the current state before processing
     std::cout << "TRAJECTORY: updateTrack called with frameIndex = " << frameIndex 
@@ -293,6 +298,22 @@ void TrajectoryData::updateTrack(int frameIndex,
         // Create new tracks for unassigned detections
         for (size_t i = 0; i < centroids.size(); i++) {
             if (!assignedDetections[i]) {
+                // Check if the new detection is beyond 50% of x axis
+                // This indicates a target that should have been recognized earlier
+                if (centroids[i].x > frameSize.width / 2) {
+                    std::cout << "TRAJECTORY: WARNING - Potential late detection at (" 
+                             << centroids[i].x << "," << centroids[i].y 
+                             << ") beyond 50% of x-axis (width: " << frameSize.width
+                             << "). Not creating new track." << std::endl;
+                    
+                    // Store the late detection for visualization
+                    lateDetections.push_back(centroids[i]);
+                    
+                    // Skip creating a new track for this detection
+                    continue;
+                }
+                
+                // Only create tracks for detections in the left half of the frame
                 tracks.emplace_back(nextObjectId++, centroids[i], frameIndex, 
                                    boundingBoxes[i], areas[i]);
                 newTrackCount++;
