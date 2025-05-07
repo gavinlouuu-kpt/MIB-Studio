@@ -219,7 +219,9 @@ namespace MenuSystem
             CircularBuffer cameraBuffer(params.bufferCount, params.imageSize);
             CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
             CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
-            loadImages(imageDirectory, cameraBuffer, true);
+            json config = readConfig("config.json");
+            bool reverseOrder = config.value("simulated_camera.reverse_order", false);
+            loadImages(imageDirectory, cameraBuffer, reverseOrder);
 
             SharedResources shared;
             initializeMockBackgroundFrame(shared, params, cameraBuffer);

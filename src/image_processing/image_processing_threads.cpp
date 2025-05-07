@@ -1821,13 +1821,6 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                           std::vector<std::thread> threads;
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
 
-                          // Read config to get image loading direction
-                          json config = readConfig("config.json");
-                          bool reverseOrder = config.value("simulated_camera.reverse_order", false);
-                          
-                          // Load images with the configured direction
-                          loadImages(params.directory, cameraBuffer, reverseOrder);
-
                           threads.emplace_back(simulateCameraThread,
                                                std::ref(cameraBuffer), std::ref(shared), std::ref(params));
 
