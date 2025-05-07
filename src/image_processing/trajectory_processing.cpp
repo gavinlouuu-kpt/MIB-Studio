@@ -91,16 +91,14 @@ void TrajectoryData::checkForObjectsLeavingFrame(const cv::Size& frameSize,
                 for (size_t i = 0; i < allContours.size(); i++) {
                     if (allContours[i].empty()) continue;
                     
-                    // Calculate centroid of contour
-                    cv::Moments m = cv::moments(allContours[i]);
-                    if (m.m00 > 0) {
-                        cv::Point contourCenter(m.m10 / m.m00, m.m01 / m.m00);
-                        double dist = cv::norm(contourCenter - currentPos);
-                        
-                        if (dist < minDist) {
-                            minDist = dist;
-                            closestContourIdx = i;
-                        }
+                    // Calculate center of contour's bounding box 
+                    cv::Rect bbox = cv::boundingRect(allContours[i]);
+                    cv::Point contourCenter(bbox.x + bbox.width/2, bbox.y + bbox.height/2);
+                    double dist = cv::norm(contourCenter - currentPos);
+                    
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestContourIdx = i;
                     }
                 }
                 
@@ -195,20 +193,17 @@ void TrajectoryData::updateTrack(int frameIndex,
         }
         
         if (hasInnerContour) {
-            // Calculate moments to get centroid
-            cv::Moments m = cv::moments(contours[i]);
-            if (m.m00 > 0) {
-                cv::Point centroid(m.m10 / m.m00, m.m01 / m.m00);
-                centroids.push_back(centroid);
-                
-                // Calculate bounding box
-                cv::Rect bbox = cv::boundingRect(contours[i]);
-                boundingBoxes.push_back(bbox);
-                
-                // Calculate area
-                double area = cv::contourArea(contours[i]);
-                areas.push_back(area);
-            }
+            // Calculate bounding box first
+            cv::Rect bbox = cv::boundingRect(contours[i]);
+            boundingBoxes.push_back(bbox);
+            
+            // Use center of bounding box as centroid
+            cv::Point centroid(bbox.x + bbox.width/2, bbox.y + bbox.height/2);
+            centroids.push_back(centroid);
+            
+            // Calculate area
+            double area = cv::contourArea(contours[i]);
+            areas.push_back(area);
         }
     }
     
