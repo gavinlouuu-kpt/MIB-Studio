@@ -44,7 +44,7 @@ void simulateCameraThread(
     
     // Read target FPS from config.json
     json config = readConfig("config.json");
-    int targetFPS = config.value("simulated_camera.target_fps", 10); // Default to 10 if not specified
+    int targetFPS = config["simulated_camera"]["target_fps"]; // Default to 10 if not specified
     const std::chrono::nanoseconds frameInterval(1000000000 / targetFPS);
 
     while (!shared.done)

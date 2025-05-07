@@ -220,7 +220,7 @@ namespace MenuSystem
             CircularBuffer circularBuffer(params.bufferCount, params.imageSize);
             CircularBuffer processingBuffer(params.bufferCount, params.imageSize);
             json config = readConfig("config.json");
-            bool reverseOrder = config.value("simulated_camera.reverse_order", false);
+            bool reverseOrder = config["simulated_camera"]["reverse_order"];
             loadImages(imageDirectory, cameraBuffer, reverseOrder);
 
             SharedResources shared;

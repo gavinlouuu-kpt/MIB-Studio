@@ -444,8 +444,8 @@ json readConfig(const std::string &filename)
             {"scatter_plot_enabled", false},
             {"ring_ratio_histogram_enabled", false},
             {"simulated_camera", {
-                {"playback_direction", "forward"},  // "forward" or "reverse"
-                {"fps", 10}  // frames per second
+                {"reverse_order", false},  // "forward" or "reverse"
+                {"target_fps", 10}  // frames per second
             }},
             {"image_processing", image_processing}};
 
