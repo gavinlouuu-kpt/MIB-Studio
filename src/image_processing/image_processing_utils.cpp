@@ -108,7 +108,10 @@ std::string selectSaveDirectory(const std::string &configPath)
 ImageParams initializeImageParams(const std::string &directory)
 {
     ImageParams params;
-    params.bufferCount = 5000;
+    // Read target FPS from config.json
+    json config = readConfig("config.json");
+    const int simCameraTargetFPS = config.value("simCameraTargetFPS", 5000); // Default to 5000 if not specified
+    params.bufferCount = simCameraTargetFPS;
 
     for (const auto &entry : std::filesystem::directory_iterator(directory))
     {
@@ -447,7 +450,9 @@ json readConfig(const std::string &filename)
         config = {
             {"save_directory", "updated_results"},
             {"buffer_threshold", 1000},
-            {"target_fps", 5000},
+            {"displayFPS", 100},
+            {"cameraTargetFPS", 15000},
+            {"simCameraTargetFPS", 15000},
             {"scatter_plot_enabled", false},
             {"histogram_enabled", true},
             {"image_processing", image_processing}};

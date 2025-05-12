@@ -41,7 +41,10 @@ void simulateCameraThread(
     auto lastFrameTime = clock::now();
     auto fpsStartTime = clock::now();
     size_t frameCount = 0;
-    const int simCameraTargetFPS = 5000;
+    
+    // Read target FPS from config.json
+    json config = readConfig("config.json");
+    const int simCameraTargetFPS = config.value("simCameraTargetFPS", 5000); // Default to 5000 if not specified
     const std::chrono::nanoseconds frameInterval(1000000000 / simCameraTargetFPS);
 
     while (!shared.done)
@@ -55,7 +58,7 @@ void simulateCameraThread(
                 shared.latestCameraFrame.store(currentIndex, std::memory_order_release);
                 currentIndex = (currentIndex + 1) % totalFrames;
                 lastFrameTime = now;
-                if (++frameCount % 5000 == 0)
+                if (++frameCount % simCameraTargetFPS == 0)
                 {
                 }
             }
@@ -617,7 +620,9 @@ void displayThreadTask(
     size_t bufferCount,
     SharedResources &shared)
 {
-    const double displayFPS = 60.0;
+    // Read target FPS from config.json
+    json config = readConfig("config.json");
+    const int displayFPS = config.value("displayFPS", 60); // Default to 5000 if not specified
     const uint8_t processedColor = 255; // grey scaled cell color
 
     const std::chrono::duration<double> frameDuration(1.0 / displayFPS); // Increase to 60 FPS for smoother response
