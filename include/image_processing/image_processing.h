@@ -42,11 +42,11 @@ struct ProcessingConfig
 {
     ProcessingConfig(
         int gaussian = 3,
-        int threshold = 10,
+        int threshold = 8,
         int kernel = 3,
         int iterations = 1,
-        int min_area = 100,
-        int max_area = 600,
+        int min_area = 250,
+        int max_area = 1000,
         bool check_borders = true,
         bool check_multiple_contours = true,
         bool check_area_range = true,

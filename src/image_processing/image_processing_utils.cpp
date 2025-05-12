@@ -13,30 +13,30 @@ void createDefaultConfigIfMissing(const std::filesystem::path &configPath)
     if (!std::filesystem::exists(configPath))
     {
         std::ofstream file(configPath);
-        file << "// Decrease the resolution before increasing the frame rate\n\n"
-             << "// Make sure to remove offset before changing the resolution\n\n"
-             << " var g = grabbers[0];\n"
-             << " g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
-             << " g.InterfacePort.set(\"LineMode\", \"Output\");\n"
-             << " g.InterfacePort.set(\"LineSource\", \"Low\");\n"
-             << " g.RemotePort.set(\"Width\", 512);\n"
-             << " g.RemotePort.set(\"Height\", 96);\n"
-             << " g.RemotePort.set(\"OffsetY\", 500);\n"
-             << " g.RemotePort.set(\"OffsetX\", 704);\n"
-             << " g.RemotePort.set(\"ExposureTime\", 2);\n"
-             << " g.RemotePort.set(\"AcquisitionFrameRate\", 5000);\n\n"
-             << "\n\n"
-             << "// Decrease the frame rate before upscaling to 1920x1080\n\n"
-             << "// var g = grabbers[0];\n"
-             << "// g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");\n"
-             << "// g.InterfacePort.set(\"LineMode\", \"Output\");\n"
-             << "// g.InterfacePort.set(\"LineSource\", \"Low\");\n"
-             << "// g.RemotePort.set(\"AcquisitionFrameRate\", 25);\n"
-             << "// g.RemotePort.set(\"ExposureTime\", 20);\n"
-             << "// g.RemotePort.set(\"OffsetY\", 0);\n"
-             << "// g.RemotePort.set(\"OffsetX\", 0);\n"
-             << "// g.RemotePort.set(\"Width\", 1920);\n"
-             << "// g.RemotePort.set(\"Height\", 1080);\n";
+        file 
+                << "var g = grabbers[0];\n"
+                << "g.RemotePort.execute(\"AcquisitionStop\");\n"
+                << "g.InterfacePort.set(\"LineSelector\", \"TTLIO12\");//Trigger\n"
+                << "g.InterfacePort.set(\"LineMode\", \"Output\");\n"
+                << "g.InterfacePort.set(\"LineSource\", \"Low\");\n"
+                << "g.InterfacePort.set(\"LineSelector\", \"TTLIO11\"); //LED\n"
+                << "g.InterfacePort.set(\"LineMode\", \"Output\");\n"
+                << "g.InterfacePort.set(\"LineInverter\", true);\n"
+                << "g.InterfacePort.set(\"LineSource\", \"Device0Strobe\");\n"
+                << "g.RemotePort.set(\"Width\", 512);\n"
+                << "g.RemotePort.set(\"Height\", 96);\n"
+                << "g.RemotePort.set(\"OffsetY\", 500);\n"
+                << "g.RemotePort.set(\"OffsetX\", 704);\n"
+                << "g.RemotePort.set(\"ExposureTime\", 3);\n"
+                << "g.DevicePort.set(\"CameraControlMethod\", \"RC\");\n"
+                << "g.DevicePort.set(\"ExposureRecoveryTime\", \"200\");\n"
+                << "g.DevicePort.set(\"CycleMinimumPeriod\", \"200\");\n"
+                << "g.DevicePort.set(\"StrobeDelay\", \"-4\");\n"
+                << "g.DevicePort.set(\"StrobeDuration\", \"12\");\n"
+                << "g.RemotePort.set(\"TriggerMode\", \"On\");\n"
+                << "g.RemotePort.set(\"TriggerSource\", \"LinkTrigger0\");\n"
+                << "g.RemotePort.execute(\"AcquisitionStart\");\n";
+
         file.close();
     }
 }
@@ -218,34 +218,31 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     json condition_config = readConfig("config.json");
     std::string condition = condition_config["save_directory"];
     
-    std::string batchDir = directory + "/batch_" + std::to_string(shared.currentBatchNumber);
-    std::filesystem::create_directories(batchDir);
-
-    std::string csvFilePath = batchDir + "/batch_data.csv";
-    std::ofstream csvFile(csvFilePath);
-    
-    // Create/open master CSV file in parent directory
+    // Create master file paths
     std::string masterCsvPath = directory + "/" + condition + "_data.csv";
-    bool masterFileExists = std::filesystem::exists(masterCsvPath);
-    std::ofstream masterCsvFile(masterCsvPath, std::ios::app); // Open in append mode
-
-    // Create/open master images binary file in parent directory
     std::string masterImagesPath = directory + "/" + condition + "_images.bin";
-    std::ofstream masterImageFile(masterImagesPath, std::ios::binary | std::ios::app); // Binary + append mode
-
-    // Create/open master background images binary file
     std::string masterBackgroundsPath = directory + "/" + condition + "_backgrounds.bin";
-    bool masterBackgroundFileExists = std::filesystem::exists(masterBackgroundsPath);
-    std::ofstream masterBackgroundFile(masterBackgroundsPath, std::ios::binary | std::ios::app); // Binary + append mode
-
-    // Create/open master ROI CSV file
     std::string masterROIPath = directory + "/" + condition + "_roi.csv";
-    bool masterROIFileExists = std::filesystem::exists(masterROIPath);
-    std::ofstream masterROIFile(masterROIPath, std::ios::app); // Append mode
-    
-    // Create/open master config JSON file
     std::string masterConfigPath = directory + "/" + condition + "_processing_config.json";
+    
+    // Check if master files exist
+    bool masterFileExists = std::filesystem::exists(masterCsvPath);
+    bool masterROIFileExists = std::filesystem::exists(masterROIPath);
     bool masterConfigFileExists = std::filesystem::exists(masterConfigPath);
+    
+    // Open master CSV file in append mode
+    std::ofstream masterCsvFile(masterCsvPath, std::ios::app);
+    
+    // Open master images binary file in binary + append mode
+    std::ofstream masterImageFile(masterImagesPath, std::ios::binary | std::ios::app);
+    
+    // Open master background images binary file in binary + append mode
+    std::ofstream masterBackgroundFile(masterBackgroundsPath, std::ios::binary | std::ios::app);
+    
+    // Open master ROI CSV file in append mode
+    std::ofstream masterROIFile(masterROIPath, std::ios::app);
+    
+    // Initialize master config
     json masterConfig;
     
     // Load existing master config if it exists
@@ -269,22 +266,14 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
         masterROIFile << "Batch,x,y,width,height\n";
     }
 
-    std::ofstream imageFile(batchDir + "/images.bin", std::ios::binary);
-    
-    // Write CSV header
-    csvFile << "Condition,Timestamp_us,Deformability,Area,RingRatio\n";
-
-    // Save current batch's data to master files
+    // Save batch data to master files
     if (!results.empty())
     {
-        // Save clean background to batch folder
-        cv::imwrite(batchDir + "/background_clean.tiff", shared.backgroundFrame);
-        
-        // Save background to master binary file
+        // Save background to master file
         int rows = shared.backgroundFrame.rows;
         int cols = shared.backgroundFrame.cols;
         int type = shared.backgroundFrame.type();
-        masterBackgroundFile.write(reinterpret_cast<const char *>(&shared.currentBatchNumber), sizeof(int)); // Store batch number
+        masterBackgroundFile.write(reinterpret_cast<const char *>(&shared.currentBatchNumber), sizeof(int));
         masterBackgroundFile.write(reinterpret_cast<const char *>(&rows), sizeof(int));
         masterBackgroundFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
         masterBackgroundFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
@@ -298,31 +287,17 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                                           cols * shared.backgroundFrame.elemSize());
             }
         }
-
-        // Save ROI coordinates to batch CSV
-        std::ofstream roiFile(batchDir + "/roi.csv");
-        roiFile << "x,y,width,height\n";
-        roiFile << shared.roi.x << ","
-                << shared.roi.y << ","
-                << shared.roi.width << ","
-                << shared.roi.height;
-        roiFile.close();
         
-        // Append ROI to master ROI file
+        // Save ROI to master file
         masterROIFile << shared.currentBatchNumber << ","
                       << shared.roi.x << ","
                       << shared.roi.y << ","
                       << shared.roi.width << ","
                       << shared.roi.height << "\n";
 
-        // Save processing configuration to batch folder
-        json config = readConfig("config.json");
-        std::ofstream configFile(batchDir + "/processing_config.json");
-        configFile << std::setw(4) << config["image_processing"] << std::endl;
-        configFile.close();
-        
         // Add batch config to master config
         std::string batchKey = "batch_" + std::to_string(shared.currentBatchNumber);
+        json config = readConfig("config.json");
         masterConfig[batchKey] = config["image_processing"];
         
         // Write updated master config file
@@ -332,14 +307,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
     for (const auto &result : results)
     {
-        // Write data to batch CSV
-        csvFile << condition << ","
-                << result.timestamp << ","
-                << result.deformability << ","
-                << result.area << ","
-                << result.ringRatio << "\n";
-        
-        // Also write to master CSV with batch number
+        // Write to master CSV
         masterCsvFile << shared.currentBatchNumber << ","
                       << condition << ","
                       << result.timestamp << ","
@@ -347,51 +315,36 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                       << result.area << ","
                       << result.ringRatio << "\n";
 
-        // Save image metadata and data to batch image file
+        // Write to master images file
         int rows = result.originalImage.rows;
         int cols = result.originalImage.cols;
         int type = result.originalImage.type();
-        imageFile.write(reinterpret_cast<const char *>(&rows), sizeof(int));
-        imageFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
-        imageFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
-
-        if (result.originalImage.isContinuous())
-        {
-            imageFile.write(reinterpret_cast<const char *>(result.originalImage.data), result.originalImage.total() * result.originalImage.elemSize());
-        }
-        else
-        {
-            for (int r = 0; r < rows; ++r)
-            {
-                imageFile.write(reinterpret_cast<const char *>(result.originalImage.ptr(r)), cols * result.originalImage.elemSize());
-            }
-        }
         
-        // Also write to master images file with the same format
         masterImageFile.write(reinterpret_cast<const char *>(&rows), sizeof(int));
         masterImageFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
         masterImageFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
 
         if (result.originalImage.isContinuous())
         {
-            masterImageFile.write(reinterpret_cast<const char *>(result.originalImage.data), result.originalImage.total() * result.originalImage.elemSize());
+            masterImageFile.write(reinterpret_cast<const char *>(result.originalImage.data), 
+                                 result.originalImage.total() * result.originalImage.elemSize());
         }
         else
         {
             for (int r = 0; r < rows; ++r)
             {
-                masterImageFile.write(reinterpret_cast<const char *>(result.originalImage.ptr(r)), cols * result.originalImage.elemSize());
+                masterImageFile.write(reinterpret_cast<const char *>(result.originalImage.ptr(r)), 
+                                     cols * result.originalImage.elemSize());
             }
         }
     }
-    csvFile.close();
+    
     masterCsvFile.close();
-    imageFile.close();
     masterImageFile.close();
     masterBackgroundFile.close();
     masterROIFile.close();
 
-    // std::cout << "Saved " << results.size() << " results to " << batchDir << std::endl;
+    std::cout << "Saved " << results.size() << " results to master files in " << directory << std::endl;
 }
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
@@ -429,11 +382,11 @@ json readConfig(const std::string &filename)
         // Create default config with a more structured approach
         json image_processing = {
             {"gaussian_blur_size", 3},
-            {"bg_subtract_threshold", 10},
+            {"bg_subtract_threshold", 8},
             {"morph_kernel_size", 3},
             {"morph_iterations", 1},
-            {"area_threshold_min", 100},
-            {"area_threshold_max", 600},
+            {"area_threshold_min", 250},
+            {"area_threshold_max", 1000},
             {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_area_range_check", true}, {"require_single_inner_contour", true}}},
             {"contrast_enhancement", {{"enable_contrast", true}, {"alpha", 1.2}, {"beta", 10}}}};
 
@@ -442,6 +395,7 @@ json readConfig(const std::string &filename)
             {"buffer_threshold", 1000},
             {"target_fps", 5000},
             {"scatter_plot_enabled", false},
+            {"histogram_enabled", true},
             {"image_processing", image_processing}};
 
         // Write default config to file
@@ -788,8 +742,6 @@ void displayKeyboardInstructions() {
     std::cout << "c: Toggle configuration display" << std::endl;
     std::cout << "a: Previous image" << std::endl;
     std::cout << "d: Next image" << std::endl;
-    std::cout << "q: Previous batch (when available)" << std::endl;
-    std::cout << "e: Next batch (when available)" << std::endl;
     std::cout << "-----------------------------------\n" << std::endl;
 }
 
