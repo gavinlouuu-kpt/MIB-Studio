@@ -221,6 +221,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     // Create master file paths
     std::string masterCsvPath = directory + "/" + condition + "_data.csv";
     std::string masterImagesPath = directory + "/" + condition + "_images.bin";
+    std::string masterMasksPath = directory + "/" + condition + "_masks.bin";
     std::string masterBackgroundsPath = directory + "/" + condition + "_backgrounds.bin";
     std::string masterROIPath = directory + "/" + condition + "_roi.csv";
     std::string masterConfigPath = directory + "/" + condition + "_processing_config.json";
@@ -235,6 +236,9 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     
     // Open master images binary file in binary + append mode
     std::ofstream masterImageFile(masterImagesPath, std::ios::binary | std::ios::app);
+    
+    // Open master masks binary file in binary + append mode
+    std::ofstream masterMaskFile(masterMasksPath, std::ios::binary | std::ios::app);
     
     // Open master background images binary file in binary + append mode
     std::ofstream masterBackgroundFile(masterBackgroundsPath, std::ios::binary | std::ios::app);
@@ -337,14 +341,38 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                                      cols * result.originalImage.elemSize());
             }
         }
+        
+        // Write to master masks file
+        rows = result.processedImage.rows;
+        cols = result.processedImage.cols;
+        type = result.processedImage.type();
+        
+        masterMaskFile.write(reinterpret_cast<const char *>(&rows), sizeof(int));
+        masterMaskFile.write(reinterpret_cast<const char *>(&cols), sizeof(int));
+        masterMaskFile.write(reinterpret_cast<const char *>(&type), sizeof(int));
+
+        if (result.processedImage.isContinuous())
+        {
+            masterMaskFile.write(reinterpret_cast<const char *>(result.processedImage.data), 
+                                result.processedImage.total() * result.processedImage.elemSize());
+        }
+        else
+        {
+            for (int r = 0; r < rows; ++r)
+            {
+                masterMaskFile.write(reinterpret_cast<const char *>(result.processedImage.ptr(r)), 
+                                    cols * result.processedImage.elemSize());
+            }
+        }
     }
     
     masterCsvFile.close();
     masterImageFile.close();
+    masterMaskFile.close();
     masterBackgroundFile.close();
     masterROIFile.close();
 
-    std::cout << "Saved " << results.size() << " results to master files in " << directory << std::endl;
+    // std::cout << "Saved " << results.size() << " results to master files in " << directory << std::endl;
 }
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
@@ -371,6 +399,32 @@ void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, cons
     }
 
     std::cout << "Converted " << imageCount << " images to TIFF format in " << outputDirectory << std::endl;
+}
+
+void convertSavedMasksToStandardFormat(const std::string &binaryMaskFile, const std::string &outputDirectory)
+{
+    std::ifstream maskFile(binaryMaskFile, std::ios::binary);
+    std::filesystem::create_directories(outputDirectory);
+
+    int maskCount = 0;
+    while (maskFile.good())
+    {
+        int rows, cols, type;
+        maskFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+        maskFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+        maskFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+
+        if (maskFile.eof())
+            break;
+
+        cv::Mat mask(rows, cols, type);
+        maskFile.read(reinterpret_cast<char *>(mask.data), rows * cols * mask.elemSize());
+
+        std::string outputPath = outputDirectory + "/mask_" + std::to_string(maskCount++) + ".tiff";
+        cv::imwrite(outputPath, mask);
+    }
+
+    std::cout << "Converted " << maskCount << " masks to TIFF format in " << outputDirectory << std::endl;
 }
 
 json readConfig(const std::string &filename)

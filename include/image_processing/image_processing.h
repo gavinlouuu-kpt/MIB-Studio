@@ -36,6 +36,9 @@ struct QualifiedResult
     double ringRatio; // Ratio of inner contour area to outer contour area
 
     cv::Mat originalImage;
+    cv::Mat processedImage; // Store the binary mask
+    
+    QualifiedResult() : timestamp(0), areaRatio(0), area(0), deformability(0), ringRatio(0) {}
 };
 
 struct ProcessingConfig
@@ -225,6 +228,7 @@ void onTrackbar(int pos, void *userdata);
 void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, const std::string &directory, const SharedResources &shared);
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
+void convertSavedMasksToStandardFormat(const std::string &binaryMaskFile, const std::string &outputDirectory);
 json readConfig(const std::string &filename);
 ProcessingConfig getProcessingConfig(const json &config);
 

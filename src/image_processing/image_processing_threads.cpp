@@ -538,6 +538,7 @@ void processingThreadTask(
                             qualifiedResult.deformability = filterResult.deformability;
                             qualifiedResult.ringRatio = filterResult.ringRatio;
                             qualifiedResult.originalImage = inputImage.clone();
+                            qualifiedResult.processedImage = processedImage.clone();
 
                             std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
                             auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1
