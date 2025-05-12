@@ -265,7 +265,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
     // Write header to master CSV if it's a new file
     if (!masterFileExists) {
-        masterCsvFile << "Batch,Condition,Timestamp_us,Deformability,Area,RingRatio\n";
+        masterCsvFile << "Batch,Condition,Timestamp_us,Deformability,Area,RingRatio,Brightness_Q1,Brightness_Q2,Brightness_Q3,Brightness_Q4\n";
     }
     
     // Write header to master ROI CSV if it's a new file
@@ -320,7 +320,11 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
                       << result.timestamp << ","
                       << result.deformability << ","
                       << result.area << ","
-                      << result.ringRatio << "\n";
+                      << result.ringRatio << ","
+                      << result.brightness.q1 << ","
+                      << result.brightness.q2 << ","
+                      << result.brightness.q3 << ","
+                      << result.brightness.q4 << "\n";
 
         // Write to master images file
         int rows = result.originalImage.rows;
@@ -1169,7 +1173,8 @@ void reviewSavedData()
             
             // First try with the current contour detection method
             FilterResult filterResult = filterProcessedImage(processedImage, shared.roi, 
-                                                            shared.processingConfig, 255);
+                                                            shared.processingConfig, 255, 
+                                                            filteredImages[currentImageIndex]);
             recalcDeformability = filterResult.deformability;
             recalcArea = filterResult.area;
             recalcValid = filterResult.isValid;
@@ -1419,7 +1424,8 @@ void reviewSavedData()
             
             // First try with the current contour detection method
             FilterResult filterResult = filterProcessedImage(processedImage, shared.roi, 
-                                                           shared.processingConfig, 255);
+                                                           shared.processingConfig, 255, 
+                                                           images[currentImageIndex]);
             recalcDeformability = filterResult.deformability;
             recalcArea = filterResult.area;
             recalcValid = filterResult.isValid;

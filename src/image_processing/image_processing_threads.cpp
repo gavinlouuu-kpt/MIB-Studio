@@ -508,7 +508,7 @@ void processingThreadTask(
             {
                 // Preprocess Image using the optimized processFrame function
                 processFrame(inputImage, shared, processedImage, mats);
-                auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
+                auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, inputImage);
 
                 // Use the isValid flag directly from filterResult without creating a redundant local variable
                 if (filterResult.isValid)
@@ -540,6 +540,7 @@ void processingThreadTask(
                             qualifiedResult.area = filterResult.area;
                             qualifiedResult.deformability = filterResult.deformability;
                             qualifiedResult.ringRatio = filterResult.ringRatio;
+                            qualifiedResult.brightness = filterResult.brightness;
                             qualifiedResult.originalImage = inputImage.clone();
                             qualifiedResult.processedImage = processedImage.clone();
 
@@ -717,7 +718,7 @@ void displayThreadTask(
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                     processFrame(image, shared, processedImage, mats);
-                    auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
+                    auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, image);
 
                     // Update shared state variables
                     shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
@@ -793,7 +794,7 @@ void displayThreadTask(
 
                         image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats);
-                        auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig);
+                        auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, image);
 
                         // Update shared state variables
                         shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;

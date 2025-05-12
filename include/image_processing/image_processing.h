@@ -26,6 +26,15 @@ struct ImageParams
     size_t bufferCount;
 };
 
+struct BrightnessQuantiles {
+    double q1; // 25th percentile
+    double q2; // 50th percentile (median)
+    double q3; // 75th percentile
+    double q4; // 100th percentile (max)
+    
+    BrightnessQuantiles() : q1(0), q2(0), q3(0), q4(0) {}
+};
+
 struct QualifiedResult
 {
     // ContourResult contourResult;
@@ -34,6 +43,7 @@ struct QualifiedResult
     double area;
     double deformability;
     double ringRatio; // Ratio of inner contour area to outer contour area
+    BrightnessQuantiles brightness; // Brightness quantiles in the masked area
 
     cv::Mat originalImage;
     cv::Mat processedImage; // Store the binary mask
@@ -113,6 +123,7 @@ struct FilterResult
     double area;
     double areaRatio;
     double ringRatio; // Ratio of inner contour area to outer contour area
+    BrightnessQuantiles brightness; // Brightness distribution in the masked area
 };
 
 struct SharedResources
@@ -252,10 +263,13 @@ ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &sha
 void reviewSavedData();
 
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
-                                  const ProcessingConfig &config, const uint8_t processedColor = 255);
+                                 const ProcessingConfig &config, const uint8_t processedColor = 255,
+                                 const cv::Mat &originalImage = cv::Mat());
 
 // Function to determine overlay color based on FilterResult
 cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);
 
 void createDefaultConfigIfMissing(const std::filesystem::path &configPath);
 std::string selectSaveDirectory(const std::string &configPath);
+
+BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, const cv::Mat &mask);
