@@ -153,6 +153,20 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
 //     }
 // }
 
+void autoFocusThread()
+{
+    // autofocus can be enabled or disabled with a key press
+    // if enabled, this thread will open the port and baudrate according to the config.json
+    // currently the ringratio is stored in buffer for histogram plotting
+    // after 1000 samples we will calculate the average ringratio
+    // if the ringratio is less than a setpoint defined in config.json we will send a command to the auto focus module to increase the volage
+    // and we will wait for another 1000 samples to see if the ringratio is still less than the setpoint
+    // vice versa 
+    // in config.json we can set the focus direction to account for the case where increase voltage does not increase ringratio
+}
+
+
+
 void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
     if (shared.processTrigger && shared.validProcessingFrame)

@@ -12,6 +12,13 @@ find_package(nlohmann_json CONFIG REQUIRED)
 set(OpenCV_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
 find_package(OpenCV REQUIRED)
 
+# Find the XMT_DLL_SER library
+find_library(XMT_DLL_SER_LIB XMT_DLL_SER 
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/Coremor"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    NO_DEFAULT_PATH
+)
+
 # List all your source files here
 set(SOURCES
     src/main.cpp
@@ -30,6 +37,7 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/Coremor
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${OpenCV_INCLUDE_DIRS}
 )
@@ -44,6 +52,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ftxui::component
     nlohmann_json::nlohmann_json
     ${OpenCV_LIBS}
+    ${XMT_DLL_SER_LIB}
+)
+
+# Copy the Coremor DLL to the output directory
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/Coremor/XMT_DLL_SER.dll"
+    $<TARGET_FILE_DIR:${PROJECT_NAME}>
 )
 
 # Build test executables
@@ -63,6 +79,7 @@ foreach(test_source ${TEST_SOURCES})
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/include/EGrabber
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/Coremor
         # "C:/Program Files/Euresys/eGrabber/include"
         ${OpenCV_INCLUDE_DIRS}
     )
@@ -73,5 +90,6 @@ foreach(test_source ${TEST_SOURCES})
         ftxui::component
         nlohmann_json::nlohmann_json
         ${OpenCV_LIBS}
+        ${XMT_DLL_SER_LIB}
     )
 endforeach()
