@@ -206,6 +206,7 @@ struct SharedResources
     std::atomic<double> frameAreas;
     std::atomic<double> frameAreaRatios;
     std::atomic<double> frameRingRatios;
+    std::atomic<double> currentVoltage{0.0}; // Current voltage for autofocus control
     // std::atomic<size_t> totalFramesProcessed;
     std::atomic<bool> updated;
     std::atomic<bool> validProcessingFrame{false};
