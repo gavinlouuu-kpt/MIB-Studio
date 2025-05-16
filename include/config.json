@@ -19,6 +19,11 @@
         "morph_iterations": 1,
         "morph_kernel_size": 3
     },
+    "calibration": {
+        "pixels_per_unit": 1.0,
+        "known_distance": 1.0,
+        "unit": "mm"
+    },
     "save_directory": "testing",
     "scatter_plot_enabled": true,
     "target_fps": 5000

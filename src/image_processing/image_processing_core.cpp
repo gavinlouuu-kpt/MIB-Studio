@@ -161,13 +161,34 @@ std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contou
     return std::make_tuple(deformability, area);
 }
 
+std::tuple<double, double> calculateRealWorldMetrics(const std::vector<cv::Point> &contour, double pixelsPerUnit)
+{
+    // Calculate area in pixels
+    double pixelArea = cv::contourArea(contour);
+    // Calculate perimeter in pixels
+    double pixelPerimeter = cv::arcLength(contour, true);
+    
+    // Convert to real-world units
+    double realArea = 0.0;
+    double realPerimeter = 0.0;
+    
+    if (pixelsPerUnit > 0) {
+        // Area is proportional to the square of distance
+        realArea = pixelArea / (pixelsPerUnit * pixelsPerUnit);
+        // Perimeter is directly proportional to distance
+        realPerimeter = pixelPerimeter / pixelsPerUnit;
+    }
+    
+    return std::make_tuple(realArea, realPerimeter);
+}
+
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                   const ProcessingConfig &config, const uint8_t processedColor,
-                                  const cv::Mat &originalImage)
+                                  const cv::Mat &originalImage, const double pixelsPerUnit)
 {
     // Initialize result with default values
     // isValid is now false by default, will be set to true if criteria are met
-    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0, 0.0, BrightnessQuantiles()};
+    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0, 0.0, BrightnessQuantiles(), 0.0, 0.0};
 
     // Get ROI from processed image
     cv::Mat roiImage = processedImage(roi);
@@ -199,75 +220,38 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
         // If we have inner contours, check if the inner contour touches the border
         if (!innerContours.empty())
         {
-            // We only care about the first inner contour (we've already checked for single inner contour above)
-            const auto &innerContour = innerContours[0];
-
-            // Check if any point of the inner contour is too close to the border
-            for (const auto &point : innerContour)
+            for (const auto &point : innerContours[0])
             {
-                // Convert point to ROI coordinates
-                int x = point.x - roi.x;
-                int y = point.y - roi.y;
-
-                // Check if point is within the ROI (safety check)
-                if (x >= 0 && x < roi.width && y >= 0 && y < roi.height)
+                if (point.x <= roi.x + borderThreshold || point.x >= roi.x + roi.width - borderThreshold ||
+                    point.y <= roi.y + borderThreshold || point.y >= roi.y + roi.height - borderThreshold)
                 {
-                    // Check if point is too close to any border
-                    if (x < borderThreshold || x >= roi.width - borderThreshold ||
-                        y < borderThreshold || y >= roi.height - borderThreshold)
-                    {
-                        result.touchesBorder = true;
-                        break;
-                    }
-                }
-                else
-                {
-                    // Point is outside ROI, definitely touching border
                     result.touchesBorder = true;
                     break;
                 }
             }
         }
+        // Otherwise check all contours
         else if (!contours.empty())
         {
-            // If no inner contours, check outer contours
             for (const auto &contour : contours)
             {
-                // Check if any point of the contour is too close to the border
                 for (const auto &point : contour)
                 {
-                    // Convert point to ROI coordinates
-                    int x = point.x - roi.x;
-                    int y = point.y - roi.y;
-
-                    // Check if point is within the ROI (safety check)
-                    if (x >= 0 && x < roi.width && y >= 0 && y < roi.height)
+                    if (point.x <= roi.x + borderThreshold || point.x >= roi.x + roi.width - borderThreshold ||
+                        point.y <= roi.y + borderThreshold || point.y >= roi.y + roi.height - borderThreshold)
                     {
-                        // Check if point is too close to any border
-                        if (x < borderThreshold || x >= roi.width - borderThreshold ||
-                            y < borderThreshold || y >= roi.height - borderThreshold)
-                        {
-                            result.touchesBorder = true;
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        // Point is outside ROI, definitely touching border
                         result.touchesBorder = true;
                         break;
                     }
                 }
-
                 if (result.touchesBorder)
                 {
-                    break; // No need to check other contours
+                    break;
                 }
             }
         }
     }
 
-    // Only proceed with contour analysis if no border pixels were found or border check is disabled
     if (!result.touchesBorder || !config.enable_border_check)
     {
         // If we have a single inner contour, use it for metrics
@@ -288,6 +272,13 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
             auto [deformability, area] = calculateMetrics(innerContours[0]);
             result.deformability = deformability;
             result.area = area;
+
+            // Calculate real-world metrics if calibration is available
+            if (pixelsPerUnit > 0.0) {
+                auto [realArea, realPerimeter] = calculateRealWorldMetrics(innerContours[0], pixelsPerUnit);
+                result.realArea = realArea;
+                result.realPerimeter = realPerimeter;
+            }
 
             // Calculate ring ratio using the parent contour information
             if (result.hasSingleInnerContour && parentIndices.size() > 0)
@@ -340,6 +331,13 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
             auto [deformability, area] = calculateMetrics(contours[largestIdx]);
             result.deformability = deformability;
             result.area = area;
+
+            // Calculate real-world metrics if calibration is available
+            if (pixelsPerUnit > 0.0) {
+                auto [realArea, realPerimeter] = calculateRealWorldMetrics(contours[largestIdx], pixelsPerUnit);
+                result.realArea = realArea;
+                result.realPerimeter = realPerimeter;
+            }
 
             // Check area range only if that check is enabled
             if (!config.enable_area_range_check ||
@@ -428,4 +426,18 @@ BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, c
     result.q4 = brightness[q4_pos];
     
     return result;
+}
+
+double calculateRealDistance(const cv::Point &p1, const cv::Point &p2, double pixelsPerUnit)
+{
+    // Calculate pixel distance
+    double pixelDistance = cv::norm(p1 - p2);
+    
+    // Convert to real-world distance
+    double realDistance = 0.0;
+    if (pixelsPerUnit > 0) {
+        realDistance = pixelDistance / pixelsPerUnit;
+    }
+    
+    return realDistance;
 }

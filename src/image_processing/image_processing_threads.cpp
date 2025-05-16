@@ -234,6 +234,8 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("  B: Set current frame as background (logs timestamp)"),
                                                          text("  A: Next frame"),
                                                          text("  D: Previous frame"),
+                                                         text("  C: Toggle calibration mode"),
+                                                         text("  +/-: Adjust known distance (in calibration mode)"),
                                                          text("Display Options:"),
                                                          text("  P: Toggle processed image overlay"),
                                                          text("  Q: Clear deformability buffer"),
@@ -241,7 +243,8 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("  R: Toggle data recording"),
                                                          text("  S: Save all frames to disk"),
                                                          text("  F: Configure eGrabber settings"),
-                                                         text("ROI: Click and drag to select region"),
+                                                         text("ROI: Click and drag to select region (when not in calibration mode)"),
+                                                         text("Calibration: Left-click and drag to measure distance (in calibration mode)"),
                                                      }));
     };
 
@@ -423,6 +426,23 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
                                     cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
                     }
                     
+                    // Add real-world measurements if calibration is available
+                    if (validFramesCache[i].result.isValid && shared.pixelsPerUnit > 1.0) {
+                        // Read unit from config
+                        json config = readConfig("config.json");
+                        std::string unit = config["calibration"]["unit"].get<std::string>();
+                        
+                        ss.str("");
+                        ss << "Area: " << std::fixed << std::setprecision(2) << validFramesCache[i].result.realArea << " " << unit << "²";
+                        cv::putText(colorFrame, ss.str(), cv::Point(10, 100), 
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                        
+                        ss.str("");
+                        ss << "Perimeter: " << std::fixed << std::setprecision(2) << validFramesCache[i].result.realPerimeter << " " << unit;
+                        cv::putText(colorFrame, ss.str(), cv::Point(10, 120), 
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                    }
+                    
                     // Copy to the combined display
                     colorFrame.copyTo(displayRegion);
                 }
@@ -508,7 +528,7 @@ void processingThreadTask(
             {
                 // Preprocess Image using the optimized processFrame function
                 processFrame(inputImage, shared, processedImage, mats);
-                auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, inputImage);
+                auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, inputImage, shared.pixelsPerUnit);
 
                 // Use the isValid flag directly from filterResult without creating a redundant local variable
                 if (filterResult.isValid)
@@ -529,33 +549,40 @@ void processingThreadTask(
                         if (shared.running) {
                             shared.recordedItemsCount.fetch_add(1, std::memory_order_relaxed);
                         }
+                    }
 
-                        if (shared.running)
+                    // For valid frames, check if recording has been started
+                    if (shared.running)
+                    {
+                        // Add qualified result to buffer
+                        QualifiedResult qualifiedResult;
+                        qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                   std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+                        qualifiedResult.areaRatio = filterResult.areaRatio;
+                        qualifiedResult.area = filterResult.area;
+                        qualifiedResult.deformability = filterResult.deformability;
+                        qualifiedResult.ringRatio = filterResult.ringRatio;
+                        qualifiedResult.brightness = filterResult.brightness;
+                        qualifiedResult.originalImage = inputImage.clone();
+                        qualifiedResult.processedImage = processedImage.clone();
+                        
+                        // Add real-world measurements 
+                        if (shared.pixelsPerUnit > 1.0) {
+                            qualifiedResult.realArea = filterResult.realArea;
+                            qualifiedResult.realPerimeter = filterResult.realPerimeter;
+                        }
+
+                        std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
+                        auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1
+                                                                  : shared.qualifiedResultsBuffer2;
+                        currentBuffer.push_back(std::move(qualifiedResult));
+
+                        if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
                         {
-                            QualifiedResult qualifiedResult;
-                            qualifiedResult.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
-                                                            std::chrono::system_clock::now().time_since_epoch())
-                                                            .count();
-                            qualifiedResult.areaRatio = filterResult.areaRatio;
-                            qualifiedResult.area = filterResult.area;
-                            qualifiedResult.deformability = filterResult.deformability;
-                            qualifiedResult.ringRatio = filterResult.ringRatio;
-                            qualifiedResult.brightness = filterResult.brightness;
-                            qualifiedResult.originalImage = inputImage.clone();
-                            qualifiedResult.processedImage = processedImage.clone();
-
-                            std::lock_guard<std::mutex> qualifiedResultsLock(shared.qualifiedResultsMutex);
-                            auto &currentBuffer = shared.usingBuffer1 ? shared.qualifiedResultsBuffer1
-                                                                      : shared.qualifiedResultsBuffer2;
-                            currentBuffer.push_back(std::move(qualifiedResult));
-
-                            if (currentBuffer.size() >= BUFFER_THRESHOLD && !shared.savingInProgress)
-                            {
-                                shared.usingBuffer1 = !shared.usingBuffer1;
-                                shared.savingInProgress = true;
-                                shared.currentBatchNumber++;
-                                shared.savingCondition.notify_one();
-                            }
+                            shared.usingBuffer1 = !shared.usingBuffer1;
+                            shared.savingInProgress = true;
+                            shared.currentBatchNumber++;
+                            shared.savingCondition.notify_one();
                         }
                     }
                     
@@ -670,30 +697,141 @@ void displayThreadTask(
             cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
         }
 
-        cv::imshow("Live Feed", displayImage);
+        // Display real-world measurements if calibration is available
+        if (shared.pixelsPerUnit > 1.0 && filterResult.isValid) {
+            // Read unit from config
+            json config = readConfig("config.json");
+            std::string unit = config["calibration"]["unit"].get<std::string>();
+            
+            std::stringstream ss;
+            ss << std::fixed << std::setprecision(2);
+            
+            // Display real-world area
+            ss << "Area: " << filterResult.realArea << " " << unit << "²";
+            cv::putText(displayImage, ss.str(), 
+                      cv::Point(10, displayImage.rows - 40), 
+                      cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+            
+            // Display real-world perimeter
+            ss.str("");
+            ss << "Perimeter: " << filterResult.realPerimeter << " " << unit;
+            cv::putText(displayImage, ss.str(), 
+                      cv::Point(10, displayImage.rows - 20), 
+                      cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+        }
+
+        // Draw calibration line if in calibration mode
+        {
+            std::lock_guard<std::mutex> calibrationLock(shared.calibrationMutex);
+            if (shared.calibrationMode)
+            {
+                // Draw the calibration line
+                cv::line(displayImage, shared.calibrationStartPoint, shared.calibrationEndPoint, cv::Scalar(0, 0, 255), 2);
+                
+                // Calculate pixel distance
+                double pixelDistance = cv::norm(shared.calibrationStartPoint - shared.calibrationEndPoint);
+                
+                // Get the known distance and unit from config
+                json config = readConfig("config.json");
+                double knownDistance = config["calibration"]["known_distance"].get<double>();
+                std::string unit = config.contains("calibration") && config["calibration"].contains("unit") ? 
+                                   config["calibration"]["unit"].get<std::string>() : "unit";
+                
+                // Calculate real-world distance if calibration is available
+                std::string realDistanceText = "";
+                if (shared.pixelsPerUnit > 1.0) {
+                    double realDistance = calculateRealDistance(shared.calibrationStartPoint, 
+                                                              shared.calibrationEndPoint, 
+                                                              shared.pixelsPerUnit);
+                    realDistanceText = ", Real distance: " + std::to_string(realDistance).substr(0, 6) + " " + unit;
+                }
+                
+                // Show distance text
+                std::string distanceText = "Pixel distance: " + std::to_string(static_cast<int>(pixelDistance)) + 
+                                           " px, Known distance: " + std::to_string(knownDistance) + " " + unit +
+                                           realDistanceText;
+                
+                cv::putText(displayImage, distanceText, 
+                          cv::Point(10, displayImage.rows - 10), 
+                          cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 255), 1);
+            }
+        }
     };
 
-    // Function to handle mouse events for ROI selection
+    // Function to handle mouse events for ROI selection and calibration
     auto onMouse = [](int event, int x, int y, int flags, void *userdata)
     {
         static cv::Point startPoint;
         auto *sharedResources = static_cast<SharedResources *>(userdata);
 
-        if (event == cv::EVENT_LBUTTONDOWN)
-        {
-            startPoint = cv::Point(x, y);
-        }
-        else if (event == cv::EVENT_LBUTTONUP)
-        {
-            cv::Point endPoint(x, y);
-            double distance = cv::norm(startPoint - endPoint);
+        // Only enable ROI selection and calibration when paused
+        if (!sharedResources->paused)
+            return;
 
-            if (distance > 5)
+        // When in calibration mode, use left-click for calibration
+        if (sharedResources->calibrationMode) {
+            if (event == cv::EVENT_LBUTTONDOWN)
             {
-                cv::Rect newRoi(startPoint, endPoint);
-                std::lock_guard<std::mutex> lock(sharedResources->roiMutex);
-                sharedResources->roi = newRoi;
+                std::lock_guard<std::mutex> lock(sharedResources->calibrationMutex);
+                sharedResources->calibrationStartPoint = cv::Point(x, y);
+            }
+            else if (event == cv::EVENT_MOUSEMOVE && (flags & cv::EVENT_FLAG_LBUTTON))
+            {
+                std::lock_guard<std::mutex> lock(sharedResources->calibrationMutex);
+                sharedResources->calibrationEndPoint = cv::Point(x, y);
                 sharedResources->displayNeedsUpdate = true;
+            }
+            else if (event == cv::EVENT_LBUTTONUP)
+            {
+                std::lock_guard<std::mutex> lock(sharedResources->calibrationMutex);
+                sharedResources->calibrationEndPoint = cv::Point(x, y);
+                
+                // Calculate pixel distance
+                double pixelDistance = cv::norm(sharedResources->calibrationStartPoint - sharedResources->calibrationEndPoint);
+                
+                // Get the known distance from config
+                json config = readConfig("config.json");
+                double knownDistance = config["calibration"]["known_distance"].get<double>();
+                
+                // Calculate pixels per unit
+                if (knownDistance > 0 && pixelDistance > 0)
+                {
+                    double pixelsPerUnit = pixelDistance / knownDistance;
+                    
+                    // Update shared resource
+                    sharedResources->pixelsPerUnit = pixelsPerUnit;
+                    sharedResources->knownDistance = knownDistance;
+                    
+                    // Update config
+                    json calibrationConfig;
+                    calibrationConfig["pixels_per_unit"] = pixelsPerUnit;
+                    calibrationConfig["known_distance"] = knownDistance;
+                    updateConfig("config.json", "calibration", calibrationConfig);
+                    
+                    std::cout << "Calibration completed: " << pixelsPerUnit << " pixels per unit" << std::endl;
+                }
+                
+                sharedResources->displayNeedsUpdate = true;
+            }
+        }
+        // When not in calibration mode, use left-click for ROI selection
+        else {
+            if (event == cv::EVENT_LBUTTONDOWN)
+            {
+                startPoint = cv::Point(x, y);
+            }
+            else if (event == cv::EVENT_LBUTTONUP)
+            {
+                cv::Point endPoint(x, y);
+                double distance = cv::norm(startPoint - endPoint);
+
+                if (distance > 5)
+                {
+                    cv::Rect newRoi(startPoint, endPoint);
+                    std::lock_guard<std::mutex> lock(sharedResources->roiMutex);
+                    sharedResources->roi = newRoi;
+                    sharedResources->displayNeedsUpdate = true;
+                }
             }
         }
     };
@@ -718,7 +856,7 @@ void displayThreadTask(
                     auto imageData = circularBuffer.get(0);
                     image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                     processFrame(image, shared, processedImage, mats);
-                    auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, image);
+                    auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, image, shared.pixelsPerUnit);
 
                     // Update shared state variables
                     shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
@@ -794,7 +932,7 @@ void displayThreadTask(
 
                         image = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
                         processFrame(image, shared, processedImage, mats);
-                        auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, image);
+                        auto filterResult = filterProcessedImage(processedImage, shared.roi, shared.processingConfig, 255, image, shared.pixelsPerUnit);
 
                         // Update shared state variables
                         shared.hasSingleInnerContour = filterResult.hasSingleInnerContour;
@@ -1240,6 +1378,76 @@ void keyboardHandlingThread(
             shared.overlayMode = !shared.overlayMode;
             shared.displayNeedsUpdate = true;
         }
+        else if (key == 'c' || key == 'C')
+        {
+            // Toggle calibration mode
+            if (shared.paused)
+            {
+                std::cout << "Calibration mode ";
+                if (!shared.calibrationMode)
+                {
+                    std::cout << "enabled. Left-click and drag to measure distance." << std::endl;
+                    std::cout << "Press + or - to adjust the known distance value." << std::endl;
+                    
+                    // Read current calibration settings
+                    json config = readConfig("config.json");
+                    double knownDistance = config["calibration"]["known_distance"].get<double>();
+                    std::string unit = config.contains("calibration") && config["calibration"].contains("unit") ? 
+                                      config["calibration"]["unit"].get<std::string>() : "unit";
+                    
+                    std::cout << "Current known distance: " << knownDistance << " " << unit << std::endl;
+                }
+                else
+                {
+                    std::cout << "disabled." << std::endl;
+                }
+                
+                shared.calibrationMode = !shared.calibrationMode;
+                shared.displayNeedsUpdate = true;
+            }
+            else
+            {
+                std::cout << "Calibration mode can only be enabled when paused. Press Space to pause first." << std::endl;
+            }
+        }
+        else if ((key == '+' || key == '=') && shared.paused && shared.calibrationMode)
+        {
+            // Increase known distance value by 0.1
+            json config = readConfig("config.json");
+            double knownDistance = config["calibration"]["known_distance"].get<double>();
+            std::string unit = config.contains("calibration") && config["calibration"].contains("unit") ? 
+                              config["calibration"]["unit"].get<std::string>() : "unit";
+            
+            knownDistance += 0.1;
+            shared.knownDistance = knownDistance;
+            
+            // Update config
+            json calibrationConfig = config["calibration"];
+            calibrationConfig["known_distance"] = knownDistance;
+            updateConfig("config.json", "calibration", calibrationConfig);
+            
+            std::cout << "Known distance increased to: " << knownDistance << " " << unit << std::endl;
+            shared.displayNeedsUpdate = true;
+        }
+        else if ((key == '-' || key == '_') && shared.paused && shared.calibrationMode)
+        {
+            // Decrease known distance value by 0.1, but ensure it's positive
+            json config = readConfig("config.json");
+            double knownDistance = config["calibration"]["known_distance"].get<double>();
+            std::string unit = config.contains("calibration") && config["calibration"].contains("unit") ? 
+                              config["calibration"]["unit"].get<std::string>() : "unit";
+            
+            knownDistance = std::max(0.1, knownDistance - 0.1);
+            shared.knownDistance = knownDistance;
+            
+            // Update config
+            json calibrationConfig = config["calibration"];
+            calibrationConfig["known_distance"] = knownDistance;
+            updateConfig("config.json", "calibration", calibrationConfig);
+            
+            std::cout << "Known distance decreased to: " << knownDistance << " " << unit << std::endl;
+            shared.displayNeedsUpdate = true;
+        }
         else if (key == 'q' || key == 'Q')
         {
             // Clear deformability buffer
@@ -1510,7 +1718,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    threads.emplace_back(metricDisplayThread, std::ref(shared));
+    // threads.emplace_back(metricDisplayThread, std::ref(shared));
     
     // Add the validFramesDisplayThread to show the latest 5 valid frames
     threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));

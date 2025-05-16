@@ -44,11 +44,16 @@ struct QualifiedResult
     double deformability;
     double ringRatio; // Ratio of inner contour area to outer contour area
     BrightnessQuantiles brightness; // Brightness quantiles in the masked area
+    
+    // Real-world measurements (calibrated)
+    double realArea;
+    double realPerimeter;
 
     cv::Mat originalImage;
     cv::Mat processedImage; // Store the binary mask
     
-    QualifiedResult() : timestamp(0), areaRatio(0), area(0), deformability(0), ringRatio(0) {}
+    QualifiedResult() : timestamp(0), areaRatio(0), area(0), deformability(0), ringRatio(0), 
+                        realArea(0), realPerimeter(0) {}
 };
 
 struct ProcessingConfig
@@ -124,6 +129,10 @@ struct FilterResult
     double areaRatio;
     double ringRatio; // Ratio of inner contour area to outer contour area
     BrightnessQuantiles brightness; // Brightness distribution in the masked area
+    
+    // Real-world measurements (calibrated)
+    double realArea;
+    double realPerimeter;
 };
 
 struct SharedResources
@@ -221,6 +230,14 @@ struct SharedResources
     std::mutex processingConfigMutex;
     // std::atomic<bool> triggerOut{false};
     std::atomic<bool> processTrigger{false};
+
+    // Calibration related fields
+    std::atomic<bool> calibrationMode{false};
+    cv::Point calibrationStartPoint;
+    cv::Point calibrationEndPoint;
+    std::mutex calibrationMutex;
+    std::atomic<double> pixelsPerUnit{1.0}; // Pixels per unit of measurement (e.g., pixels per mm)
+    std::atomic<double> knownDistance{1.0}; // Known real-world distance in chosen units
 };
 
 // Function declarations
@@ -231,6 +248,8 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
                   cv::Mat &outputImage, ThreadLocalMats &mats);
 std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>, std::vector<int>> findContours(const cv::Mat &processedImage);
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour);
+std::tuple<double, double> calculateRealWorldMetrics(const std::vector<cv::Point> &contour, double pixelsPerUnit);
+double calculateRealDistance(const cv::Point &p1, const cv::Point &p2, double pixelsPerUnit);
 
 void onTrackbar(int pos, void *userdata);
 // void updateScatterPlot(cv::Mat &plot, const std::vector<std::tuple<double, double>> &circularities);
@@ -264,7 +283,7 @@ void reviewSavedData();
 
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                  const ProcessingConfig &config, const uint8_t processedColor = 255,
-                                 const cv::Mat &originalImage = cv::Mat());
+                                 const cv::Mat &originalImage = cv::Mat(), const double pixelsPerUnit = 1.0);
 
 // Function to determine overlay color based on FilterResult
 cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);
