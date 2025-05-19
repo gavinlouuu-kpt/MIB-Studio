@@ -404,6 +404,13 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
     std::string absInputDir = inputDirPath.string();
     std::cout << "Absolute path: " << absInputDir << std::endl;
     
+    // Create overlays directory for saving images with mask overlays
+    std::filesystem::path overlaysDir = inputDirPath / "overlays";
+    if (!std::filesystem::exists(overlaysDir)) {
+        std::filesystem::create_directories(overlaysDir);
+        std::cout << "Created directory for overlay images: " << overlaysDir.string() << std::endl;
+    }
+    
     // Auto-detect the file prefix from the directory contents
     std::string condition = "";
     for (const auto& entry : std::filesystem::directory_iterator(absInputDir)) {
@@ -879,6 +886,49 @@ prefix_found:
                     storedDeformability = def;
                     storedArea = ar;
                 }
+
+                // Create and save overlay image with processed mask
+                if (isValid) {
+                    // Create a color version of the original image for overlay
+                    cv::Mat overlayImage;
+                    cv::cvtColor(batchImages[i], overlayImage, cv::COLOR_GRAY2BGR);
+                    
+                    // Create a color version of the processed image (red mask)
+                    cv::Mat colorMask(processedImage.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+                    for (int y = 0; y < processedImage.rows; y++) {
+                        for (int x = 0; x < processedImage.cols; x++) {
+                            if (processedImage.at<uchar>(y, x) > 0) {
+                                // Set to red with 50% transparency
+                                colorMask.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 255);
+                            }
+                        }
+                    }
+                    
+                    // Blend the mask with the original image
+                    cv::addWeighted(overlayImage, 0.7, colorMask, 0.3, 0, overlayImage);
+                    
+                    // Draw ROI rectangle
+                    cv::rectangle(overlayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
+                    
+                    // Add text with metrics
+                    std::string metricsText = "Batch: " + std::to_string(batchNum) + 
+                                             " | Def: " + std::to_string(deformability) +
+                                             " | Area: " + std::to_string(area) +
+                                             " | Method: " + methodUsed;
+                    cv::putText(overlayImage, metricsText, 
+                               cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                               cv::Scalar(0, 255, 255), 1);
+                    
+                    // Save the overlay image
+                    std::filesystem::path overlayPath = overlaysDir / ("batch_" + std::to_string(batchNum) + 
+                                                                     "_img_" + std::to_string(i) + ".png");
+                    cv::imwrite(overlayPath.string(), overlayImage);
+                    
+                    // Every 100 images, report how many overlays we've saved
+                    if ((i+1) % 100 == 0) {
+                        std::cout << "Saved " << (i+1) << " overlay images for batch " << batchNum << std::endl;
+                    }
+                }
                 
                 // Write metrics to CSV
                 outputFile << batchNum << ","
@@ -1107,6 +1157,49 @@ prefix_found:
                 // Get timestamp for this image if available
                 long long timestamp = (timestamps.count(imageIndex)) ? timestamps[imageIndex] : 0;
                 
+                // Create and save overlay image with processed mask
+                if (isValid) {
+                    // Create a color version of the original image for overlay
+                    cv::Mat overlayImage;
+                    cv::cvtColor(image, overlayImage, cv::COLOR_GRAY2BGR);
+                    
+                    // Create a color version of the processed image (red mask)
+                    cv::Mat colorMask(processedImage.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+                    for (int y = 0; y < processedImage.rows; y++) {
+                        for (int x = 0; x < processedImage.cols; x++) {
+                            if (processedImage.at<uchar>(y, x) > 0) {
+                                // Set to red with 50% transparency
+                                colorMask.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 255);
+                            }
+                        }
+                    }
+                    
+                    // Blend the mask with the original image
+                    cv::addWeighted(overlayImage, 0.7, colorMask, 0.3, 0, overlayImage);
+                    
+                    // Draw ROI rectangle
+                    cv::rectangle(overlayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
+                    
+                    // Add text with metrics
+                    std::string metricsText = "Batch: " + std::to_string(batchNum) + 
+                                             " | Def: " + std::to_string(deformability) +
+                                             " | Area: " + std::to_string(area) +
+                                             " | Method: " + methodUsed;
+                    cv::putText(overlayImage, metricsText, 
+                               cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                               cv::Scalar(0, 255, 255), 1);
+                    
+                    // Save the overlay image
+                    std::filesystem::path overlayPath = overlaysDir / ("batch_" + std::to_string(batchNum) + 
+                                                                     "_img_" + std::to_string(imageIndex) + ".png");
+                    cv::imwrite(overlayPath.string(), overlayImage);
+                    
+                    // Every 100 images, report how many overlays we've saved
+                    if ((imageIndex+1) % 100 == 0 || imageIndex == 0) {
+                        std::cout << "Saved " << (imageIndex+1) << " overlay images for batch " << batchNum << std::endl;
+                    }
+                }
+
                 // Write metrics to CSV
                 outputFile << batchNum << ","
                           << storedCondition << ","
@@ -1131,6 +1224,7 @@ prefix_found:
     
     outputFile.close();
     std::cout << "Metrics calculation complete. Results saved to: " << outputFilePath << std::endl;
+    std::cout << "Overlay images with masks saved to: " << overlaysDir.string() << std::endl;
 }
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
