@@ -399,14 +399,49 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
 {
     std::cout << "Calculating metrics from saved data in: " << inputDirectory << std::endl;
     
-    // Check if this is a consolidated dataset with master files
-    json condition_config = readConfig("config.json");
-    std::string condition = condition_config["save_directory"];
+    // Ensure we have an absolute path for reliable file checks
+    std::filesystem::path inputDirPath = std::filesystem::absolute(inputDirectory);
+    std::string absInputDir = inputDirPath.string();
+    std::cout << "Absolute path: " << absInputDir << std::endl;
+    
+    // Auto-detect the file prefix from the directory contents
+    std::string condition = "";
+    for (const auto& entry : std::filesystem::directory_iterator(absInputDir)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.size() > 16 && filename.substr(filename.size() - 16) == "_backgrounds.bin") {
+            condition = filename.substr(0, filename.size() - 16);
+            std::cout << "Auto-detected file prefix: " << condition << std::endl;
+            break;
+        }
+    }
+    
+    if (condition.empty()) {
+        // Try alternative detection with other common file extensions
+        for (const auto& suffix : {"_processing_config.json", "_roi.csv", "_images.bin", "_data.csv"}) {
+            for (const auto& entry : std::filesystem::directory_iterator(absInputDir)) {
+                std::string filename = entry.path().filename().string();
+                if (filename.size() > strlen(suffix) && 
+                    filename.substr(filename.size() - strlen(suffix)) == suffix) {
+                    condition = filename.substr(0, filename.size() - strlen(suffix));
+                    std::cout << "Auto-detected file prefix from " << suffix << ": " << condition << std::endl;
+                    goto prefix_found;  // Break out of nested loops
+                }
+            }
+        }
+    }
+    
+prefix_found:
+    if (condition.empty()) {
+        std::cerr << "Could not auto-detect file prefix. No data files found." << std::endl;
+        return;
+    }
+    
     bool hasMasterFiles = false;
-    std::string masterConfigPath = inputDirectory + "/" + condition + "_processing_config.json";
-    std::string masterROIPath = inputDirectory + "/" + condition + "_roi.csv";
-    std::string masterBackgroundsPath = inputDirectory + "/" + condition + "_backgrounds.bin";
-    std::string masterImagesPath = inputDirectory + "/" + condition + "_images.bin";
+    std::string masterConfigPath = absInputDir + "/" + condition + "_processing_config.json";
+    std::string masterROIPath = absInputDir + "/" + condition + "_roi.csv";
+    std::string masterBackgroundsPath = absInputDir + "/" + condition + "_backgrounds.bin";
+    std::string masterImagesPath = absInputDir + "/" + condition + "_images.bin";
+    std::string masterDataPath = absInputDir + "/" + condition + "_data.csv";
     
     // Check if all master files exist
     if (std::filesystem::exists(masterConfigPath) && 
@@ -415,6 +450,31 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
         std::filesystem::exists(masterImagesPath)) {
         hasMasterFiles = true;
         std::cout << "Found consolidated master files. Using them for metrics calculation." << std::endl;
+    } else {
+        // Try alternative format (older datasets might have different naming)
+        std::string altConfigPath = absInputDir + "/" + condition + ".json";
+        std::string altDataPath = absInputDir + "/" + condition + ".csv";
+        std::string altImagesPath = absInputDir + "/" + condition + ".bin";
+        
+        if (std::filesystem::exists(altImagesPath) && std::filesystem::exists(altDataPath)) {
+            std::cout << "Found alternative format master files. Attempting to use them." << std::endl;
+            // Use these files instead
+            masterImagesPath = altImagesPath;
+            masterDataPath = altDataPath;
+            if (std::filesystem::exists(altConfigPath)) {
+                masterConfigPath = altConfigPath;
+            }
+            hasMasterFiles = true;
+        } else {
+            // Print detailed information about which files are missing
+            std::cout << "Not using master files because some are missing:" << std::endl;
+            std::cout << "  Config: " << (std::filesystem::exists(masterConfigPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  ROI: " << (std::filesystem::exists(masterROIPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  Backgrounds: " << (std::filesystem::exists(masterBackgroundsPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  Images: " << (std::filesystem::exists(masterImagesPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  Data: " << (std::filesystem::exists(masterDataPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "Will try to use individual batch directories instead." << std::endl;
+        }
     }
     
     // Create output CSV file
@@ -581,10 +641,66 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
     
     if (hasMasterFiles) {
         // Process all images from the master images file
+        std::vector<cv::Mat> allImages;
+        std::vector<std::tuple<int, std::string, long long, double, double>> allMeasurements;
         std::set<int> availableBatches;
         
-        // First pass: find all available batch numbers
-        {
+        // Load all measurements from the master CSV if available
+        if (std::filesystem::exists(masterDataPath)) {
+            std::ifstream csvFile(masterDataPath);
+            std::string headerLine;
+            std::getline(csvFile, headerLine); // Get header line
+            
+            // Parse headers to find column indices
+            auto headers = parseCSVHeaders(headerLine);
+            
+            // Check for required columns
+            if (headers.count("Batch") && headers.count("Timestamp_us") && 
+                headers.count("Deformability") && headers.count("Area")) {
+                
+                // Get column indices
+                int batchIdx = headers["Batch"];
+                int conditionIdx = headers.count("Condition") ? headers["Condition"] : -1;
+                int timestampIdx = headers["Timestamp_us"];
+                int deformabilityIdx = headers["Deformability"];
+                int areaIdx = headers["Area"];
+                
+                std::string line;
+                while (std::getline(csvFile, line)) {
+                    std::stringstream lineStream(line);
+                    std::string cell;
+                    std::vector<std::string> values;
+                    
+                    while (std::getline(lineStream, cell, ',')) {
+                        values.push_back(cell);
+                    }
+                    
+                    if (values.size() > std::max({batchIdx, conditionIdx, timestampIdx, deformabilityIdx, areaIdx})) {
+                        try {
+                            int batchNum = std::stoi(values[batchIdx]);
+                            std::string condition = (conditionIdx >= 0) ? values[conditionIdx] : "unknown";
+                            
+                            allMeasurements.emplace_back(
+                                batchNum,
+                                condition,
+                                std::stoll(values[timestampIdx]),
+                                std::stod(values[deformabilityIdx]),
+                                std::stod(values[areaIdx])
+                            );
+                            
+                            availableBatches.insert(batchNum);
+                        } catch (const std::exception& e) {
+                            std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
+                        }
+                    }
+                }
+            } else {
+                std::cerr << "Master data CSV is missing required columns. Proceeding without stored measurements." << std::endl;
+            }
+        }
+        
+        // First pass: find all available batch numbers if not already loaded from master data
+        if (availableBatches.empty()) {
             std::ifstream roiFile(masterROIPath);
             std::string header;
             std::getline(roiFile, header); // Skip header
@@ -610,6 +726,25 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
         }
         
         std::cout << "Found " << availableBatches.size() << " batches in master files." << std::endl;
+        
+        // Load all images from the master images binary file
+        std::ifstream imageFile(masterImagesPath, std::ios::binary);
+        while (imageFile.good()) {
+            int rows, cols, type;
+            imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+            imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+            imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+            
+            if (imageFile.eof()) {
+                break;
+            }
+            
+            cv::Mat image(rows, cols, type);
+            imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+            allImages.push_back(image.clone());
+        }
+        
+        std::cout << "Loaded " << allImages.size() << " images from master files." << std::endl;
         
         // Process each batch
         for (int batchNum : availableBatches) {
@@ -639,36 +774,60 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
             
             // Initialize thread mats for processing
             ThreadLocalMats mats = initializeThreadMats(shared.backgroundFrame.rows, 
-                                                      shared.backgroundFrame.cols, shared);
+                                                       shared.backgroundFrame.cols, shared);
             
-            // Load all images from the master images binary file
-            std::ifstream imageFile(masterImagesPath, std::ios::binary);
-            int imageIndex = 0;
+            // Filter images for this batch
+            std::vector<cv::Mat> batchImages;
+            std::vector<std::tuple<std::string, long long, double, double>> batchMeasurements;
             
-            // Prepare a temporary file to store metadata about the images
-            std::vector<std::tuple<int, long long>> imageMetadata; // rows, cols, type for each image
-            
-            while (imageFile.good()) {
-                int rows, cols, type;
-                imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
-                imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
-                imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
-                
-                if (imageFile.eof()) {
-                    break;
+            // Extract all measurements for this batch
+            for (const auto &measurement : allMeasurements) {
+                if (std::get<0>(measurement) == batchNum) {
+                    batchMeasurements.emplace_back(
+                        std::get<1>(measurement),  // condition
+                        std::get<2>(measurement),  // timestamp
+                        std::get<3>(measurement),  // deformability
+                        std::get<4>(measurement)   // area
+                    );
                 }
+            }
+            
+            // Count images for this batch and create a mapping if timestamps are available
+            int imageCount = 0;
+            for (const auto &m : allMeasurements) {
+                if (std::get<0>(m) == batchNum) {
+                    imageCount++;
+                }
+            }
+            
+            // If we know exactly how many images we should have for this batch,
+            // select that many images from the full set
+            if (imageCount > 0 && imageCount <= allImages.size()) {
+                batchImages.assign(allImages.begin(), allImages.begin() + imageCount);
+            } else {
+                // Otherwise, just use an estimated proportion of the images based on batch number
+                // This is a heuristic and might not be accurate for all datasets
+                int batchSize = allImages.size() / availableBatches.size();
+                int startIdx = (batchNum - 1) * batchSize;
+                int endIdx = std::min((int)allImages.size(), startIdx + batchSize);
                 
-                cv::Mat image(rows, cols, type);
-                long long position = imageFile.tellg(); // Save current position
-                imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+                if (startIdx < 0) startIdx = 0;
+                if (startIdx >= allImages.size()) startIdx = 0;
+                if (endIdx > allImages.size()) endIdx = allImages.size();
                 
-                // Process the image and calculate metrics
-                cv::Mat processedImage(rows, cols, CV_8UC1);
-                processFrame(image, shared, processedImage, mats);
+                batchImages.assign(allImages.begin() + startIdx, allImages.begin() + endIdx);
+            }
+            
+            std::cout << "Processing " << batchImages.size() << " images for batch " << batchNum << std::endl;
+            
+            // Process each image in this batch
+            for (size_t i = 0; i < batchImages.size(); i++) {
+                cv::Mat processedImage(batchImages[i].rows, batchImages[i].cols, CV_8UC1);
+                processFrame(batchImages[i], shared, processedImage, mats);
                 
                 // First try with the current contour detection method
                 FilterResult filterResult = filterProcessedImage(processedImage, shared.roi,
-                                                              shared.processingConfig, 255);
+                                                               shared.processingConfig, 255);
                 
                 // Default to current method
                 std::string methodUsed = "Current";
@@ -680,7 +839,7 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
                 // If not valid, try with legacy contour detection for older data
                 if (!isValid) {
                     FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, 
-                                                                   shared.processingConfig);
+                                                                    shared.processingConfig);
                     
                     if (legacyResult.isValid) {
                         methodUsed = "Legacy";
@@ -691,11 +850,25 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
                     }
                 }
                 
+                // Get stored metrics if available
+                std::string storedCondition = condition;
+                long long timestamp = 0;
+                double storedDeformability = 0.0;
+                double storedArea = 0.0;
+                
+                if (i < batchMeasurements.size()) {
+                    auto [cond, ts, def, ar] = batchMeasurements[i];
+                    storedCondition = cond;
+                    timestamp = ts;
+                    storedDeformability = def;
+                    storedArea = ar;
+                }
+                
                 // Write metrics to CSV
                 outputFile << batchNum << ","
-                          << condition << ","
-                          << imageIndex << ","
-                          << "0," // No timestamp information for image files
+                          << storedCondition << ","
+                          << i << ","
+                          << timestamp << ","
                           << deformability << ","
                           << area << ","
                           << ringRatio << ","
@@ -703,26 +876,35 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
                           << methodUsed << ","
                           << configToString(shared.processingConfig) << "\n";
                 
-                imageIndex++;
-                if (imageIndex % 100 == 0) {
-                    std::cout << "Processed " << imageIndex << " images from batch " << batchNum << std::endl;
+                if ((i+1) % 100 == 0 || i == batchImages.size() - 1) {
+                    std::cout << "Processed " << (i+1) << "/" << batchImages.size() << " images from batch " << batchNum << std::endl;
                 }
             }
             
-            std::cout << "Completed batch " << batchNum << ". Processed " << imageIndex << " images." << std::endl;
+            std::cout << "Completed batch " << batchNum << "." << std::endl;
         }
     } else {
         // Process individual batch directories
         std::vector<std::filesystem::path> batchDirs;
         
-        for (const auto &entry : std::filesystem::directory_iterator(inputDirectory)) {
+        std::cout << "Searching for batch directories in: " << absInputDir << std::endl;
+        
+        for (const auto &entry : std::filesystem::directory_iterator(absInputDir)) {
             if (entry.is_directory() && entry.path().filename().string().find("batch_") != std::string::npos) {
                 batchDirs.push_back(entry.path());
+                std::cout << "  Found batch directory: " << entry.path().filename().string() << std::endl;
+            } else if (entry.is_directory()) {
+                std::cout << "  Found directory (not a batch dir): " << entry.path().filename().string() << std::endl;
             }
         }
         
         if (batchDirs.empty()) {
-            std::cout << "No batch directories found in " << inputDirectory << std::endl;
+            std::cout << "No batch directories found in " << absInputDir << std::endl;
+            std::cout << "Directory contents:" << std::endl;
+            for (const auto &entry : std::filesystem::directory_iterator(absInputDir)) {
+                std::cout << "  " << entry.path().filename().string() 
+                          << (entry.is_directory() ? " (directory)" : " (file)") << std::endl;
+            }
             return;
         }
         
@@ -793,6 +975,10 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
             
             // Load CSV data to get timestamps
             std::map<int, long long> timestamps;
+            std::map<int, std::string> conditions;
+            std::map<int, double> storedDeformabilities;
+            std::map<int, double> storedAreas;
+            
             std::ifstream csvFile((batchDir / "batch_data.csv").string());
             if (csvFile.is_open()) {
                 std::string header;
@@ -800,9 +986,12 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
                 
                 // Parse headers to find column indices
                 auto headers = parseCSVHeaders(header);
+                int conditionIdx = headers.count("Condition") ? headers["Condition"] : -1;
                 int timestampIdx = headers.count("Timestamp_us") ? headers["Timestamp_us"] : -1;
+                int deformabilityIdx = headers.count("Deformability") ? headers["Deformability"] : -1;
+                int areaIdx = headers.count("Area") ? headers["Area"] : -1;
                 
-                if (timestampIdx >= 0) {
+                if (timestampIdx >= 0 || deformabilityIdx >= 0 || areaIdx >= 0) {
                     int idx = 0;
                     std::string line;
                     while (std::getline(csvFile, line)) {
@@ -814,13 +1003,35 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
                             values.push_back(cell);
                         }
                         
-                        if (values.size() > timestampIdx) {
+                        if (conditionIdx >= 0 && values.size() > conditionIdx) {
+                            conditions[idx] = values[conditionIdx];
+                        }
+                        
+                        if (timestampIdx >= 0 && values.size() > timestampIdx) {
                             try {
-                                timestamps[idx++] = std::stoll(values[timestampIdx]);
+                                timestamps[idx] = std::stoll(values[timestampIdx]);
                             } catch (...) {
                                 // Skip invalid entries
                             }
                         }
+                        
+                        if (deformabilityIdx >= 0 && values.size() > deformabilityIdx) {
+                            try {
+                                storedDeformabilities[idx] = std::stod(values[deformabilityIdx]);
+                            } catch (...) {
+                                // Skip invalid entries
+                            }
+                        }
+                        
+                        if (areaIdx >= 0 && values.size() > areaIdx) {
+                            try {
+                                storedAreas[idx] = std::stod(values[areaIdx]);
+                            } catch (...) {
+                                // Skip invalid entries
+                            }
+                        }
+                        
+                        idx++;
                     }
                 }
             }
@@ -871,12 +1082,18 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
                     }
                 }
                 
+                // Get stored condition for this image if available (default to condition from config)
+                std::string storedCondition = condition;
+                if (conditions.count(imageIndex)) {
+                    storedCondition = conditions[imageIndex];
+                }
+                
                 // Get timestamp for this image if available
                 long long timestamp = (timestamps.count(imageIndex)) ? timestamps[imageIndex] : 0;
                 
                 // Write metrics to CSV
                 outputFile << batchNum << ","
-                          << condition << ","
+                          << storedCondition << ","
                           << imageIndex << ","
                           << timestamp << ","
                           << deformability << ","
@@ -887,7 +1104,7 @@ void calculateMetricsFromSavedData(const std::string &inputDirectory, const std:
                           << configToString(shared.processingConfig) << "\n";
                 
                 imageIndex++;
-                if (imageIndex % 100 == 0) {
+                if (imageIndex % 100 == 0 || imageIndex == 1) {
                     std::cout << "Processed " << imageIndex << " images from batch " << batchNum << std::endl;
                 }
             }
@@ -1322,15 +1539,45 @@ void reviewSavedData()
     std::vector<std::filesystem::path> batchDirs;
     ProcessingConfig processingConfig;
 
+    // Auto-detect the file prefix from the directory contents
+    std::string condition = "";
+    for (const auto& entry : std::filesystem::directory_iterator(projectPath)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.size() > 16 && filename.substr(filename.size() - 16) == "_backgrounds.bin") {
+            condition = filename.substr(0, filename.size() - 16);
+            std::cout << "Auto-detected file prefix: " << condition << std::endl;
+            break;
+        }
+    }
+    
+    if (condition.empty()) {
+        // Try alternative detection with other common file extensions
+        for (const auto& suffix : {"_processing_config.json", "_roi.csv", "_images.bin", "_data.csv"}) {
+            for (const auto& entry : std::filesystem::directory_iterator(projectPath)) {
+                std::string filename = entry.path().filename().string();
+                if (filename.size() > strlen(suffix) && 
+                    filename.substr(filename.size() - strlen(suffix)) == suffix) {
+                    condition = filename.substr(0, filename.size() - strlen(suffix));
+                    std::cout << "Auto-detected file prefix from " << suffix << ": " << condition << std::endl;
+                    goto prefix_found_review;  // Break out of nested loops
+                }
+            }
+        }
+    }
+    
+prefix_found_review:
+    if (condition.empty()) {
+        std::cerr << "Could not auto-detect file prefix. No data files found." << std::endl;
+        return;
+    }
+
     // Check if this is a consolidated dataset with master files
-    json condition_config = readConfig("config.json");
-    std::string condition = condition_config["save_directory"];
     bool hasMasterFiles = false;
     std::string masterConfigPath = projectPath + "/" + condition + "_processing_config.json";
     std::string masterROIPath = projectPath + "/" + condition + "_roi.csv";
     std::string masterBackgroundsPath = projectPath + "/" + condition + "_backgrounds.bin";
-    std::string masterDataPath = projectPath + "/" + condition + "_data.csv";
     std::string masterImagesPath = projectPath + "/" + condition + "_images.bin";
+    std::string masterDataPath = projectPath + "/" + condition + "_data.csv";
     
     // Check if master files exist
     if (std::filesystem::exists(masterConfigPath) && 
@@ -2052,4 +2299,14 @@ void reviewSavedData()
     }
 
     cv::destroyAllWindows();
+}
+
+std::string autoDetectPrefix(const std::string& dir) {
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        std::string fname = entry.path().filename().string();
+        if (fname.size() > 16 && fname.substr(fname.size() - 16) == "_backgrounds.bin") {
+            return fname.substr(0, fname.size() - 16);
+        }
+    }
+    return "";
 }
