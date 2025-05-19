@@ -746,9 +746,22 @@ prefix_found:
         
         std::cout << "Loaded " << allImages.size() << " images from master files." << std::endl;
         
+        // Create a map to track how many images belong to each batch
+        std::map<int, int> batchImageCounts;
+        for (const auto &measurement : allMeasurements) {
+            batchImageCounts[std::get<0>(measurement)]++;
+        }
+        
+        // Create a map to track the starting index for each batch's images
+        std::map<int, size_t> batchStartIndices;
+        size_t currentIndex = 0;
+        
         // Process each batch
         for (int batchNum : availableBatches) {
             std::cout << "Processing batch " << batchNum << "..." << std::endl;
+            
+            // Store the starting index for this batch
+            batchStartIndices[batchNum] = currentIndex;
             
             // Load background, ROI, and processing config for this batch
             SharedResources shared;
@@ -792,30 +805,33 @@ prefix_found:
                 }
             }
             
-            // Count images for this batch and create a mapping if timestamps are available
-            int imageCount = 0;
-            for (const auto &m : allMeasurements) {
-                if (std::get<0>(m) == batchNum) {
-                    imageCount++;
-                }
-            }
+            // Count images for this batch
+            int imageCount = batchImageCounts[batchNum];
             
             // If we know exactly how many images we should have for this batch,
-            // select that many images from the full set
-            if (imageCount > 0 && imageCount <= allImages.size()) {
-                batchImages.assign(allImages.begin(), allImages.begin() + imageCount);
+            // select that many images from the full set starting from currentIndex
+            if (imageCount > 0 && currentIndex + imageCount <= allImages.size()) {
+                batchImages.assign(allImages.begin() + currentIndex, 
+                                  allImages.begin() + currentIndex + imageCount);
+                // Update currentIndex for the next batch
+                currentIndex += imageCount;
             } else {
-                // Otherwise, just use an estimated proportion of the images based on batch number
+                // Otherwise, just use an estimated proportion of the images
                 // This is a heuristic and might not be accurate for all datasets
                 int batchSize = allImages.size() / availableBatches.size();
-                int startIdx = (batchNum - 1) * batchSize;
-                int endIdx = std::min((int)allImages.size(), startIdx + batchSize);
+                int endIdx = std::min((int)allImages.size(), (int)currentIndex + batchSize);
                 
-                if (startIdx < 0) startIdx = 0;
-                if (startIdx >= allImages.size()) startIdx = 0;
-                if (endIdx > allImages.size()) endIdx = allImages.size();
+                if (currentIndex >= allImages.size()) {
+                    // If we've somehow gone past all images, reset to beginning
+                    std::cerr << "Warning: Not enough images for batch " << batchNum 
+                             << ". Using first available images instead." << std::endl;
+                    currentIndex = 0;
+                    endIdx = std::min(batchSize, (int)allImages.size());
+                }
                 
-                batchImages.assign(allImages.begin() + startIdx, allImages.begin() + endIdx);
+                batchImages.assign(allImages.begin() + currentIndex, allImages.begin() + endIdx);
+                // Update currentIndex for the next batch
+                currentIndex = endIdx;
             }
             
             std::cout << "Processing " << batchImages.size() << " images for batch " << batchNum << std::endl;
