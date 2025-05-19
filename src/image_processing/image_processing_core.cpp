@@ -1,6 +1,7 @@
 #include "image_processing/image_processing.h"
 #include "CircularBuffer/CircularBuffer.h"
 #include <cmath>
+#include <algorithm> // For std::sort and std::nth_element
 
 ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &shared)
 {
@@ -161,11 +162,12 @@ std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contou
 }
 
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
-                                  const ProcessingConfig &config, const uint8_t processedColor)
+                                  const ProcessingConfig &config, const uint8_t processedColor,
+                                  const cv::Mat &originalImage)
 {
     // Initialize result with default values
     // isValid is now false by default, will be set to true if criteria are met
-    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0, 0.0};
+    FilterResult result = {false, false, false, false, 0, 0.0, 0.0, 0.0, 0.0, BrightnessQuantiles()};
 
     // Get ROI from processed image
     cv::Mat roiImage = processedImage(roi);
@@ -176,6 +178,11 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
     // Update inner contour information
     result.innerContourCount = static_cast<int>(innerContours.size());
     result.hasSingleInnerContour = (innerContours.size() == 1);
+
+    // Calculate brightness quantiles if the original image is provided
+    if (!originalImage.empty()) {
+        result.brightness = calculateBrightnessQuantiles(originalImage, processedImage);
+    }
 
     // If we require a single inner contour and don't have exactly one, return early
     if (config.require_single_inner_contour && !result.hasSingleInnerContour)
@@ -372,4 +379,53 @@ cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid)
         // Gray for invalid frames without inner contours (lowest priority)
         return cv::Scalar(128, 128, 128); // BGR: Gray
     }
+}
+
+BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, const cv::Mat &mask)
+{
+    BrightnessQuantiles result;
+    
+    // Convert original image to grayscale if it's not already
+    cv::Mat grayImage;
+    if (originalImage.channels() == 3) {
+        cv::cvtColor(originalImage, grayImage, cv::COLOR_BGR2GRAY);
+    } else {
+        grayImage = originalImage.clone();
+    }
+    
+    // Extract brightness values from the masked area
+    std::vector<uchar> brightness;
+    brightness.reserve(grayImage.rows * grayImage.cols / 4); // Approximate size
+    
+    for (int y = 0; y < grayImage.rows; y++) {
+        for (int x = 0; x < grayImage.cols; x++) {
+            // Check if this pixel is part of the mask
+            if (mask.at<uchar>(y, x) > 0) {
+                brightness.push_back(grayImage.at<uchar>(y, x));
+            }
+        }
+    }
+    
+    // If no masked pixels were found, return zeros
+    if (brightness.empty()) {
+        return result;
+    }
+    
+    // Sort the values to compute quantiles
+    std::sort(brightness.begin(), brightness.end());
+    
+    // Calculate quantile positions
+    size_t n = brightness.size();
+    size_t q1_pos = n / 4;
+    size_t q2_pos = n / 2;
+    size_t q3_pos = (3 * n) / 4;
+    size_t q4_pos = n - 1;
+    
+    // Extract quantile values
+    result.q1 = brightness[q1_pos];
+    result.q2 = brightness[q2_pos];
+    result.q3 = brightness[q3_pos];
+    result.q4 = brightness[q4_pos];
+    
+    return result;
 }

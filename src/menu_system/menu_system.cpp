@@ -269,16 +269,62 @@ namespace MenuSystem
     {
         namespace fs = std::filesystem;
 
+        // First check for master files in the save directory
+        std::string condition;
+        try {
+            json config = readConfig("config.json");
+            condition = config["save_directory"];
+        } catch (const std::exception &e) {
+            std::cerr << "Error reading config: " << e.what() << std::endl;
+            condition = "results"; // Default condition name
+        }
+        
+        std::string masterImagesPath = saveDirectory + "/" + condition + "_images.bin";
+        std::string masterMasksPath = saveDirectory + "/" + condition + "_masks.bin";
+        
+        // Process master images if they exist
+        if (fs::exists(masterImagesPath))
+        {
+            std::string masterImagesDir = saveDirectory + "/master_images";
+            std::cout << "Processing master images: " << masterImagesPath << std::endl;
+            try
+            {
+                convertSavedImagesToStandardFormat(masterImagesPath, masterImagesDir);
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Error processing " << masterImagesPath << ": " << e.what() << std::endl;
+            }
+        }
+        
+        // Process master masks if they exist
+        if (fs::exists(masterMasksPath))
+        {
+            std::string masterMasksDir = saveDirectory + "/master_masks";
+            std::cout << "Processing master masks: " << masterMasksPath << std::endl;
+            try
+            {
+                convertSavedMasksToStandardFormat(masterMasksPath, masterMasksDir);
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Error processing " << masterMasksPath << ": " << e.what() << std::endl;
+            }
+        }
+
+        // Process individual batch folders
         for (const auto &entry : fs::directory_iterator(saveDirectory))
         {
             if (entry.is_directory() && entry.path().filename().string().find("batch_") == 0)
             {
                 std::string batchPath = entry.path().string();
                 std::string imagesBinPath = batchPath + "/images.bin";
+                std::string masksBinPath = batchPath + "/masks.bin";
 
+                // Process images if they exist
                 if (fs::exists(imagesBinPath))
                 {
-                    std::cout << "Processing: " << imagesBinPath << std::endl;
+                    std::cout << "Processing images: " << imagesBinPath << std::endl;
                     try
                     {
                         convertSavedImagesToStandardFormat(imagesBinPath, batchPath);
@@ -291,6 +337,24 @@ namespace MenuSystem
                 else
                 {
                     std::cout << "Skipping " << batchPath << ": images.bin not found" << std::endl;
+                }
+                
+                // Process masks if they exist
+                if (fs::exists(masksBinPath))
+                {
+                    std::cout << "Processing masks: " << masksBinPath << std::endl;
+                    try
+                    {
+                        convertSavedMasksToStandardFormat(masksBinPath, batchPath);
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::cerr << "Error processing " << masksBinPath << ": " << e.what() << std::endl;
+                    }
+                }
+                else
+                {
+                    std::cout << "Skipping " << batchPath << ": masks.bin not found" << std::endl;
                 }
             }
         }

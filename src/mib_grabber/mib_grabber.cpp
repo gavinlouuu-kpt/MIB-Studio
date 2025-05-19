@@ -121,7 +121,10 @@ ImageParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
     params.height = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_HEIGHT);
     params.pixelFormat = firstBuffer.getInfo<uint64_t>(gc::BUFFER_INFO_PIXELFORMAT);
     params.imageSize = firstBuffer.getInfo<size_t>(gc::BUFFER_INFO_SIZE);
-    params.bufferCount = 5000; // You can adjust this as needed
+    // Read target FPS from config.json
+    json config = readConfig("config.json");
+    const int cameraTargetFPS = config.value("cameraTargetFPS", 5000); // Default to 5000 if not specified
+    params.bufferCount = cameraTargetFPS; // You can adjust this as needed
 
     grabber.stop();
     return params;
