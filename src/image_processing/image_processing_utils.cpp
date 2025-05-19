@@ -515,7 +515,7 @@ prefix_found:
             config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
                 config["filters"]["require_single_inner_contour"].get<bool>() : true,
             config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
-                config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : false,
             config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
                 config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
             config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
@@ -616,7 +616,7 @@ prefix_found:
             config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
                 config["filters"]["require_single_inner_contour"].get<bool>() : true,
             config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
-                config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : false,
             config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
                 config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
             config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
@@ -1370,7 +1370,7 @@ json readConfig(const std::string &filename)
             {"area_threshold_min", 250},
             {"area_threshold_max", 1000},
             {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_area_range_check", true}, {"require_single_inner_contour", true}}},
-            {"contrast_enhancement", {{"enable_contrast", true}, {"alpha", 1.2}, {"beta", 10}}}};
+            {"contrast_enhancement", {{"enable_contrast", false}, {"alpha", 1.2}, {"beta", 10}}}};
 
         config = {
             {"save_directory", "updated_results"},
