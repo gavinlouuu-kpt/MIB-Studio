@@ -240,6 +240,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
 void convertSavedMasksToStandardFormat(const std::string &binaryMaskFile, const std::string &outputDirectory);
+void convertSavedBackgroundsToStandardFormat(const std::string &binaryBackgroundFile, const std::string &outputDirectory);
 json readConfig(const std::string &filename);
 ProcessingConfig getProcessingConfig(const json &config);
 

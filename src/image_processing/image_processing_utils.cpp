@@ -1355,6 +1355,35 @@ void convertSavedMasksToStandardFormat(const std::string &binaryMaskFile, const 
     std::cout << "Converted " << maskCount << " masks to TIFF format in " << outputDirectory << std::endl;
 }
 
+void convertSavedBackgroundsToStandardFormat(const std::string &binaryBackgroundFile, const std::string &outputDirectory)
+{
+    std::ifstream bgFile(binaryBackgroundFile, std::ios::binary);
+    std::filesystem::create_directories(outputDirectory);
+
+    int backgroundCount = 0;
+    while (bgFile.good())
+    {
+        int batchNum, rows, cols, type;
+        bgFile.read(reinterpret_cast<char *>(&batchNum), sizeof(int));
+        
+        if (bgFile.eof())
+            break;
+            
+        bgFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+        bgFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+        bgFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+
+        cv::Mat background(rows, cols, type);
+        bgFile.read(reinterpret_cast<char *>(background.data), rows * cols * background.elemSize());
+
+        std::string outputPath = outputDirectory + "/background_batch_" + std::to_string(batchNum) + ".tiff";
+        cv::imwrite(outputPath, background);
+        backgroundCount++;
+    }
+
+    std::cout << "Converted " << backgroundCount << " background images to TIFF format in " << outputDirectory << std::endl;
+}
+
 json readConfig(const std::string &filename)
 {
     json config;

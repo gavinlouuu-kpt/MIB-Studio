@@ -311,6 +311,22 @@ namespace MenuSystem
                 std::cerr << "Error processing " << masterMasksPath << ": " << e.what() << std::endl;
             }
         }
+        
+        // Process master backgrounds if they exist
+        std::string masterBackgroundsPath = saveDirectory + "/" + condition + "_backgrounds.bin";
+        if (fs::exists(masterBackgroundsPath))
+        {
+            std::string masterBackgroundsDir = saveDirectory + "/master_backgrounds";
+            std::cout << "Processing master backgrounds: " << masterBackgroundsPath << std::endl;
+            try
+            {
+                convertSavedBackgroundsToStandardFormat(masterBackgroundsPath, masterBackgroundsDir);
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Error processing " << masterBackgroundsPath << ": " << e.what() << std::endl;
+            }
+        }
 
         // Process individual batch folders
         for (const auto &entry : fs::directory_iterator(saveDirectory))
@@ -355,6 +371,17 @@ namespace MenuSystem
                 else
                 {
                     std::cout << "Skipping " << batchPath << ": masks.bin not found" << std::endl;
+                }
+                
+                // Process backgrounds if they exist - in batch folders backgrounds are usually stored as a single TIFF
+                std::string backgroundPath = batchPath + "/background_clean.tiff";
+                if (fs::exists(backgroundPath))
+                {
+                    std::cout << "Background file already exists in TIFF format: " << backgroundPath << std::endl;
+                }
+                else
+                {
+                    std::cout << "Note: No background.tiff found in batch folder " << batchPath << std::endl;
                 }
             }
         }
