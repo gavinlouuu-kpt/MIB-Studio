@@ -898,6 +898,50 @@ prefix_found:
                     // Draw ROI rectangle
                     cv::rectangle(overlayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
                     
+                    // Find contours to draw the convex hull
+                    std::vector<std::vector<cv::Point>> contours;
+                    std::vector<cv::Vec4i> hierarchy;
+                    cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                    
+                    // Look for inner contours using hierarchy
+                    std::vector<std::vector<cv::Point>> innerContours;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                        if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                            innerContours.push_back(contours[c]);
+                        }
+                    }
+                    
+                    // If we have exactly one inner contour, use it (preferred case)
+                    if (innerContours.size() == 1) {
+                        // Calculate convex hull from inner contour
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(innerContours[0], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
+                    // Otherwise fall back to largest contour
+                    else if (!contours.empty()) {
+                        // Find the largest contour
+                        int largestIdx = 0;
+                        double largestArea = 0;
+                        for (size_t c = 0; c < contours.size(); c++) {
+                            double area = cv::contourArea(contours[c]);
+                            if (area > largestArea) {
+                                largestArea = area;
+                                largestIdx = c;
+                            }
+                        }
+                        
+                        // Calculate convex hull
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(contours[largestIdx], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
+                    
                     // Add text with metrics
                     std::string metricsText = "Batch: " + std::to_string(batchNum) + 
                                              " | Def: " + std::to_string(deformability) +
@@ -1167,6 +1211,50 @@ prefix_found:
                     
                     // Draw ROI rectangle
                     cv::rectangle(overlayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
+                    
+                    // Find contours to draw the convex hull
+                    std::vector<std::vector<cv::Point>> contours;
+                    std::vector<cv::Vec4i> hierarchy;
+                    cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                    
+                    // Look for inner contours using hierarchy
+                    std::vector<std::vector<cv::Point>> innerContours;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                        if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                            innerContours.push_back(contours[c]);
+                        }
+                    }
+                    
+                    // If we have exactly one inner contour, use it (preferred case)
+                    if (innerContours.size() == 1) {
+                        // Calculate convex hull from inner contour
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(innerContours[0], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
+                    // Otherwise fall back to largest contour
+                    else if (!contours.empty()) {
+                        // Find the largest contour
+                        int largestIdx = 0;
+                        double largestArea = 0;
+                        for (size_t c = 0; c < contours.size(); c++) {
+                            double area = cv::contourArea(contours[c]);
+                            if (area > largestArea) {
+                                largestArea = area;
+                                largestIdx = c;
+                            }
+                        }
+                        
+                        // Calculate convex hull
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(contours[largestIdx], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
                     
                     // Add text with metrics
                     std::string metricsText = "Batch: " + std::to_string(batchNum) + 
@@ -2061,8 +2149,52 @@ prefix_found_review:
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
                 cv::addWeighted(displayImage, 0.7, processedOverlay, 0.3, 0, displayImage);
+                
+                // Find contours to draw the convex hull
+                std::vector<std::vector<cv::Point>> contours;
+                std::vector<cv::Vec4i> hierarchy;
+                cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                
+                // Look for inner contours using hierarchy
+                std::vector<std::vector<cv::Point>> innerContours;
+                for (size_t c = 0; c < contours.size(); c++) {
+                    // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                    if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                        innerContours.push_back(contours[c]);
+                    }
+                }
+                
+                // If we have exactly one inner contour, use it (preferred case)
+                if (innerContours.size() == 1) {
+                    // Calculate convex hull from inner contour
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(innerContours[0], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
+                // Otherwise fall back to largest contour
+                else if (!contours.empty()) {
+                    // Find the largest contour
+                    int largestIdx = 0;
+                    double largestArea = 0;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        double area = cv::contourArea(contours[c]);
+                        if (area > largestArea) {
+                            largestArea = area;
+                            largestIdx = c;
+                        }
+                    }
+                    
+                    // Calculate convex hull
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(contours[largestIdx], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
             }
-            
+
             // Draw ROI rectangle
             cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 2);
             
@@ -2314,6 +2446,50 @@ prefix_found_review:
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
                 cv::addWeighted(displayImage, 0.7, processedOverlay, 0.3, 0, displayImage);
+                
+                // Find contours to draw the convex hull
+                std::vector<std::vector<cv::Point>> contours;
+                std::vector<cv::Vec4i> hierarchy;
+                cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                
+                // Look for inner contours using hierarchy
+                std::vector<std::vector<cv::Point>> innerContours;
+                for (size_t c = 0; c < contours.size(); c++) {
+                    // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                    if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                        innerContours.push_back(contours[c]);
+                    }
+                }
+                
+                // If we have exactly one inner contour, use it (preferred case)
+                if (innerContours.size() == 1) {
+                    // Calculate convex hull from inner contour
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(innerContours[0], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
+                // Otherwise fall back to largest contour
+                else if (!contours.empty()) {
+                    // Find the largest contour
+                    int largestIdx = 0;
+                    double largestArea = 0;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        double area = cv::contourArea(contours[c]);
+                        if (area > largestArea) {
+                            largestArea = area;
+                            largestIdx = c;
+                        }
+                    }
+                    
+                    // Calculate convex hull
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(contours[largestIdx], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
             }
 
             // Draw ROI rectangle
