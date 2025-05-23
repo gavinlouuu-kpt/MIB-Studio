@@ -152,9 +152,14 @@ std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv
 
 std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contour)
 {
-    cv::Moments m = cv::moments(contour);
-    double area = m.m00;
-    double perimeter = cv::arcLength(contour, true);
+    // Calculate convex hull first
+    std::vector<cv::Point> hull;
+    cv::convexHull(contour, hull);
+    
+    // Use hull for both area and perimeter calculations
+    double area = cv::contourArea(hull);
+    double perimeter = cv::arcLength(hull, true);
+    
     // Updated formula: sqrt(4 * pi * area) / perimeter
     double circularity = (perimeter > 0) ? std::sqrt(4 * M_PI * area) / perimeter : 0.0; // DO NOT CHANGE THIS FORMULA
     double deformability = 1.0 - circularity;
@@ -274,23 +279,32 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
         if (result.hasSingleInnerContour)
         {
             // We have exactly one inner contour - use it for metrics
-            // Calculate contour area
+            // Calculate contour area of the original (non-hull) contour
             double contourArea = cv::contourArea(innerContours[0]);
 
-            // Calculate convex hull
+            // Calculate convex hull once
             std::vector<cv::Point> hull;
             cv::convexHull(innerContours[0], hull);
+            
+            // Get the hull area
             double hullArea = cv::contourArea(hull);
 
             // Calculate area ratio (R = Ahull/Acontour)
             result.areaRatio = hullArea / contourArea;
 
-            auto [deformability, area] = calculateMetrics(innerContours[0]);
+            // Calculate perimeter of the hull
+            double perimeter = cv::arcLength(hull, true);
+            
+            // Use the formula: sqrt(4 * pi * area) / perimeter
+            double circularity = (perimeter > 0) ? std::sqrt(4 * M_PI * hullArea) / perimeter : 0.0;
+            double deformability = 1.0 - circularity;
+            
+            // Store metrics
             result.deformability = deformability;
-            result.area = area;
+            result.area = hullArea;
 
             // Calculate ring ratio using the parent contour information
-            if (result.hasSingleInnerContour && parentIndices.size() > 0)
+            if (parentIndices.size() > 0)
             {
                 int parentIdx = parentIndices[0];
                 if (parentIdx >= 0 && parentIdx < contours.size())
@@ -302,7 +316,7 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 
             // Check area range only if that check is enabled
             if (!config.enable_area_range_check ||
-                (area >= config.area_threshold_min && area <= config.area_threshold_max))
+                (hullArea >= config.area_threshold_min && hullArea <= config.area_threshold_max))
             {
                 result.inRange = true;
                 // Set isValid to true for frames with exactly one inner contour
@@ -326,24 +340,33 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
                 }
             }
 
-            // Calculate contour area
+            // Calculate contour area of the original (non-hull) contour
             double contourArea = cv::contourArea(contours[largestIdx]);
 
-            // Calculate convex hull
+            // Calculate convex hull once
             std::vector<cv::Point> hull;
             cv::convexHull(contours[largestIdx], hull);
+            
+            // Get the hull area
             double hullArea = cv::contourArea(hull);
 
             // Calculate area ratio (R = Ahull/Acontour)
             result.areaRatio = hullArea / contourArea;
 
-            auto [deformability, area] = calculateMetrics(contours[largestIdx]);
+            // Calculate perimeter of the hull
+            double perimeter = cv::arcLength(hull, true);
+            
+            // Use the formula: sqrt(4 * pi * area) / perimeter
+            double circularity = (perimeter > 0) ? std::sqrt(4 * M_PI * hullArea) / perimeter : 0.0;
+            double deformability = 1.0 - circularity;
+            
+            // Store metrics
             result.deformability = deformability;
-            result.area = area;
+            result.area = hullArea;
 
             // Check area range only if that check is enabled
             if (!config.enable_area_range_check ||
-                (area >= config.area_threshold_min && area <= config.area_threshold_max))
+                (hullArea >= config.area_threshold_min && hullArea <= config.area_threshold_max))
             {
                 result.inRange = true;
                 result.isValid = true;

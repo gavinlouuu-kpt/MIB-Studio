@@ -241,6 +241,7 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory);
 void convertSavedMasksToStandardFormat(const std::string &binaryMaskFile, const std::string &outputDirectory);
+void convertSavedBackgroundsToStandardFormat(const std::string &binaryBackgroundFile, const std::string &outputDirectory);
 json readConfig(const std::string &filename);
 ProcessingConfig getProcessingConfig(const json &config);
 
@@ -263,9 +264,15 @@ ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &sha
 
 void reviewSavedData();
 
+void calculateMetricsFromSavedData(const std::string &inputDirectory, const std::string &outputFilePath);
+
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
                                  const ProcessingConfig &config, const uint8_t processedColor = 255,
                                  const cv::Mat &originalImage = cv::Mat());
+
+FilterResult legacyContourAnalysis(const cv::Mat &processedImage, const cv::Rect &roi, const ProcessingConfig &config);
+
+std::map<std::string, int> parseCSVHeaders(const std::string& headerLine);
 
 // Function to determine overlay color based on FilterResult
 cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);
@@ -274,3 +281,6 @@ void createDefaultConfigIfMissing(const std::filesystem::path &configPath);
 std::string selectSaveDirectory(const std::string &configPath);
 
 BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, const cv::Mat &mask);
+
+// Auto-detect condition prefix from filenames in a directory
+std::string autoDetectPrefix(const std::string& dir);

@@ -382,27 +382,1001 @@ void saveQualifiedResultsToDisk(const std::vector<QualifiedResult> &results, con
     // std::cout << "Saved " << results.size() << " results to master files in " << directory << std::endl;
 }
 
+// New utility function to calculate metrics from saved images and output to CSV
+void calculateMetricsFromSavedData(const std::string &inputDirectory, const std::string &outputFilePath)
+{
+    std::cout << "Calculating metrics from saved data in: " << inputDirectory << std::endl;
+    
+    // Ensure we have an absolute path for reliable file checks
+    std::filesystem::path inputDirPath = std::filesystem::absolute(inputDirectory);
+    std::string absInputDir = inputDirPath.string();
+    std::cout << "Absolute path: " << absInputDir << std::endl;
+    
+    // Create overlays directory for saving images with mask overlays
+    std::filesystem::path overlaysDir = inputDirPath / "overlays";
+    if (!std::filesystem::exists(overlaysDir)) {
+        std::filesystem::create_directories(overlaysDir);
+        std::cout << "Created directory for overlay images: " << overlaysDir.string() << std::endl;
+    }
+    
+    // Auto-detect the file prefix from the directory contents
+    std::string condition = "";
+    for (const auto& entry : std::filesystem::directory_iterator(absInputDir)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.size() > 16 && filename.substr(filename.size() - 16) == "_backgrounds.bin") {
+            condition = filename.substr(0, filename.size() - 16);
+            std::cout << "Auto-detected file prefix: " << condition << std::endl;
+            break;
+        }
+    }
+    
+    if (condition.empty()) {
+        // Try alternative detection with other common file extensions
+        for (const auto& suffix : {"_processing_config.json", "_roi.csv", "_images.bin", "_data.csv"}) {
+            for (const auto& entry : std::filesystem::directory_iterator(absInputDir)) {
+                std::string filename = entry.path().filename().string();
+                if (filename.size() > strlen(suffix) && 
+                    filename.substr(filename.size() - strlen(suffix)) == suffix) {
+                    condition = filename.substr(0, filename.size() - strlen(suffix));
+                    std::cout << "Auto-detected file prefix from " << suffix << ": " << condition << std::endl;
+                    goto prefix_found;  // Break out of nested loops
+                }
+            }
+        }
+    }
+    
+prefix_found:
+    if (condition.empty()) {
+        std::cerr << "Could not auto-detect file prefix. No data files found." << std::endl;
+        return;
+    }
+    
+    bool hasMasterFiles = false;
+    std::string masterConfigPath = absInputDir + "/" + condition + "_processing_config.json";
+    std::string masterROIPath = absInputDir + "/" + condition + "_roi.csv";
+    std::string masterBackgroundsPath = absInputDir + "/" + condition + "_backgrounds.bin";
+    std::string masterImagesPath = absInputDir + "/" + condition + "_images.bin";
+    std::string masterDataPath = absInputDir + "/" + condition + "_data.csv";
+    
+    // Check if all master files exist
+    if (std::filesystem::exists(masterConfigPath) && 
+        std::filesystem::exists(masterROIPath) && 
+        std::filesystem::exists(masterBackgroundsPath) &&
+        std::filesystem::exists(masterImagesPath)) {
+        hasMasterFiles = true;
+        std::cout << "Found consolidated master files. Using them for metrics calculation." << std::endl;
+    } else {
+        // Try alternative format (older datasets might have different naming)
+        std::string altConfigPath = absInputDir + "/" + condition + ".json";
+        std::string altDataPath = absInputDir + "/" + condition + ".csv";
+        std::string altImagesPath = absInputDir + "/" + condition + ".bin";
+        
+        if (std::filesystem::exists(altImagesPath) && std::filesystem::exists(altDataPath)) {
+            std::cout << "Found alternative format master files. Attempting to use them." << std::endl;
+            // Use these files instead
+            masterImagesPath = altImagesPath;
+            masterDataPath = altDataPath;
+            if (std::filesystem::exists(altConfigPath)) {
+                masterConfigPath = altConfigPath;
+            }
+            hasMasterFiles = true;
+        } else {
+            // Print detailed information about which files are missing
+            std::cout << "Not using master files because some are missing:" << std::endl;
+            std::cout << "  Config: " << (std::filesystem::exists(masterConfigPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  ROI: " << (std::filesystem::exists(masterROIPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  Backgrounds: " << (std::filesystem::exists(masterBackgroundsPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  Images: " << (std::filesystem::exists(masterImagesPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "  Data: " << (std::filesystem::exists(masterDataPath) ? "Found" : "Missing") << std::endl;
+            std::cout << "Will try to use individual batch directories instead." << std::endl;
+        }
+    }
+    
+    // Create output CSV file
+    std::ofstream outputFile(outputFilePath);
+    if (!outputFile.is_open()) {
+        std::cerr << "Failed to create output file: " << outputFilePath << std::endl;
+        return;
+    }
+    
+    // Write CSV header
+    outputFile << "Batch,Condition,ImageIndex,Timestamp_us,Deformability,Area,RingRatio,Valid,Method,ProcessingConfig\n";
+    
+    // Helper function to load processing config for a batch
+    auto loadMasterConfig = [](const std::string &configPath, int batchNum) -> ProcessingConfig {
+        std::ifstream configFile(configPath);
+        if (!configFile.is_open()) {
+            throw std::runtime_error("Failed to load master processing config from: " + configPath);
+        }
+        json masterConfig;
+        configFile >> masterConfig;
+        
+        // Get the config for the specified batch
+        std::string batchKey = "batch_" + std::to_string(batchNum);
+        if (!masterConfig.contains(batchKey)) {
+            throw std::runtime_error("Master config file does not contain configuration for batch " + std::to_string(batchNum));
+        }
+        
+        json config = masterConfig[batchKey];
+
+        return ProcessingConfig{
+            config["gaussian_blur_size"],
+            config["bg_subtract_threshold"],
+            config["morph_kernel_size"],
+            config["morph_iterations"],
+            config["area_threshold_min"],
+            config["area_threshold_max"],
+            config.contains("filters") && config["filters"].contains("enable_border_check") ? 
+                config["filters"]["enable_border_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? 
+                config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_area_range_check") ? 
+                config["filters"]["enable_area_range_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
+                config["filters"]["require_single_inner_contour"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : false,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
+                config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
+                config["contrast_enhancement"]["beta"].get<int>() : 10
+        };
+    };
+    
+    // Helper function to load ROI for a batch from master CSV
+    auto loadROIFromMasterCSV = [](const std::string &roiPath, int batchNum) -> cv::Rect {
+        std::ifstream roiFile(roiPath);
+        if (!roiFile.is_open()) {
+            throw std::runtime_error("Failed to open master ROI file: " + roiPath);
+        }
+        
+        std::string header;
+        std::getline(roiFile, header); // Skip header
+        
+        std::string line;
+        while (std::getline(roiFile, line)) {
+            std::stringstream ss(line);
+            std::string value;
+            std::vector<std::string> values;
+            
+            while (std::getline(ss, value, ',')) {
+                values.push_back(value);
+            }
+            
+            if (values.size() >= 5 && std::stoi(values[0]) == batchNum) {
+                return cv::Rect(
+                    std::stoi(values[1]), // x
+                    std::stoi(values[2]), // y
+                    std::stoi(values[3]), // width
+                    std::stoi(values[4])  // height
+                );
+            }
+        }
+        
+        throw std::runtime_error("Failed to find ROI for batch " + std::to_string(batchNum) + " in master ROI file");
+    };
+    
+    // Helper function to load background for a batch from master binary file
+    auto loadBackgroundFromMasterBin = [](const std::string &bgPath, int batchNum) -> cv::Mat {
+        std::ifstream bgFile(bgPath, std::ios::binary);
+        if (!bgFile.is_open()) {
+            throw std::runtime_error("Failed to open master backgrounds file: " + bgPath);
+        }
+        
+        while (bgFile.good()) {
+            int storedBatchNum, rows, cols, type;
+            bgFile.read(reinterpret_cast<char *>(&storedBatchNum), sizeof(int));
+            
+            if (bgFile.eof()) {
+                break;
+            }
+            
+            bgFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+            bgFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+            bgFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+            
+            cv::Mat background(rows, cols, type);
+            bgFile.read(reinterpret_cast<char *>(background.data), rows * cols * background.elemSize());
+            
+            if (storedBatchNum == batchNum) {
+                return background.clone(); // Found the background for this batch
+            }
+            
+            // If not this batch, skip to next background
+            if (bgFile.eof()) {
+                break;
+            }
+        }
+        
+        throw std::runtime_error("Failed to find background for batch " + std::to_string(batchNum) + " in master backgrounds file");
+    };
+    
+    // Helper function to load batch configuration
+    auto loadBatchConfig = [](const std::filesystem::path &batchPath) -> ProcessingConfig {
+        std::ifstream configFile(batchPath / "processing_config.json");
+        if (!configFile.is_open()) {
+            throw std::runtime_error("Failed to load processing config from: " + batchPath.string());
+        }
+        json config;
+        configFile >> config;
+
+        return ProcessingConfig{
+            config["gaussian_blur_size"],
+            config["bg_subtract_threshold"],
+            config["morph_kernel_size"],
+            config["morph_iterations"],
+            config["area_threshold_min"],
+            config["area_threshold_max"],
+            config.contains("filters") && config["filters"].contains("enable_border_check") ? 
+                config["filters"]["enable_border_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? 
+                config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("enable_area_range_check") ? 
+                config["filters"]["enable_area_range_check"].get<bool>() : true,
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? 
+                config["filters"]["require_single_inner_contour"].get<bool>() : true,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? 
+                config["contrast_enhancement"]["enable_contrast"].get<bool>() : false,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? 
+                config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
+            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? 
+                config["contrast_enhancement"]["beta"].get<int>() : 10
+        };
+    };
+    
+    // Processing function to get a string representation of the config for CSV
+    auto configToString = [](const ProcessingConfig &config) -> std::string {
+        std::stringstream ss;
+        ss << "G" << config.gaussian_blur_size 
+           << "_T" << config.bg_subtract_threshold 
+           << "_M" << config.morph_kernel_size << "x" << config.morph_iterations
+           << "_A" << config.area_threshold_min << "-" << config.area_threshold_max;
+        return ss.str();
+    };
+    
+    if (hasMasterFiles) {
+        // Process all images from the master images file
+        std::vector<cv::Mat> allImages;
+        std::vector<std::tuple<int, std::string, long long, double, double>> allMeasurements;
+        std::set<int> availableBatches;
+        
+        // Load all measurements from the master CSV if available
+        if (std::filesystem::exists(masterDataPath)) {
+            std::ifstream csvFile(masterDataPath);
+            std::string headerLine;
+            std::getline(csvFile, headerLine); // Get header line
+            
+            // Parse headers to find column indices
+            auto headers = parseCSVHeaders(headerLine);
+            
+            // Check for required columns
+            if (headers.count("Batch") && headers.count("Timestamp_us") && 
+                headers.count("Deformability") && headers.count("Area")) {
+                
+                // Get column indices
+                int batchIdx = headers["Batch"];
+                int conditionIdx = headers.count("Condition") ? headers["Condition"] : -1;
+                int timestampIdx = headers["Timestamp_us"];
+                int deformabilityIdx = headers["Deformability"];
+                int areaIdx = headers["Area"];
+                
+                std::string line;
+                while (std::getline(csvFile, line)) {
+                    std::stringstream lineStream(line);
+                    std::string cell;
+                    std::vector<std::string> values;
+                    
+                    while (std::getline(lineStream, cell, ',')) {
+                        values.push_back(cell);
+                    }
+                    
+                    if (values.size() > std::max({batchIdx, conditionIdx, timestampIdx, deformabilityIdx, areaIdx})) {
+                        try {
+                            int batchNum = std::stoi(values[batchIdx]);
+                            std::string condition = (conditionIdx >= 0) ? values[conditionIdx] : "unknown";
+                            
+                            allMeasurements.emplace_back(
+                                batchNum,
+                                condition,
+                                std::stoll(values[timestampIdx]),
+                                std::stod(values[deformabilityIdx]),
+                                std::stod(values[areaIdx])
+                            );
+                            
+                            availableBatches.insert(batchNum);
+                        } catch (const std::exception& e) {
+                            std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
+                        }
+                    }
+                }
+            } else {
+                std::cerr << "Master data CSV is missing required columns. Proceeding without stored measurements." << std::endl;
+            }
+        }
+        
+        // First pass: find all available batch numbers if not already loaded from master data
+        if (availableBatches.empty()) {
+            std::ifstream roiFile(masterROIPath);
+            std::string header;
+            std::getline(roiFile, header); // Skip header
+            
+            std::string line;
+            while (std::getline(roiFile, line)) {
+                std::stringstream ss(line);
+                std::string value;
+                std::vector<std::string> values;
+                
+                while (std::getline(ss, value, ',')) {
+                    values.push_back(value);
+                }
+                
+                if (!values.empty()) {
+                    try {
+                        availableBatches.insert(std::stoi(values[0]));
+                    } catch (...) {
+                        // Skip invalid lines
+                    }
+                }
+            }
+        }
+        
+        std::cout << "Found " << availableBatches.size() << " batches in master files." << std::endl;
+        
+        // Load all images from the master images binary file
+        std::ifstream imageFile(masterImagesPath, std::ios::binary);
+        while (imageFile.good()) {
+            int rows, cols, type;
+            imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+            imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+            imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+            
+            if (imageFile.eof()) {
+                break;
+            }
+            
+            cv::Mat image(rows, cols, type);
+            imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+            allImages.push_back(image.clone());
+        }
+        
+        std::cout << "Loaded " << allImages.size() << " images from master files." << std::endl;
+        
+        // Create a map to track how many images belong to each batch
+        std::map<int, int> batchImageCounts;
+        for (const auto &measurement : allMeasurements) {
+            batchImageCounts[std::get<0>(measurement)]++;
+        }
+        
+        // Create a map to track the starting index for each batch's images
+        std::map<int, size_t> batchStartIndices;
+        size_t currentIndex = 0;
+        
+        // Process each batch
+        for (int batchNum : availableBatches) {
+            std::cout << "Processing batch " << batchNum << "..." << std::endl;
+            
+            // Store the starting index for this batch
+            batchStartIndices[batchNum] = currentIndex;
+            
+            // Load background, ROI, and processing config for this batch
+            SharedResources shared;
+            try {
+                shared.backgroundFrame = loadBackgroundFromMasterBin(masterBackgroundsPath, batchNum);
+                shared.roi = loadROIFromMasterCSV(masterROIPath, batchNum);
+                shared.processingConfig = loadMasterConfig(masterConfigPath, batchNum);
+                
+                // Initialize the blurred background with the original config settings
+                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                                cv::Size(shared.processingConfig.gaussian_blur_size,
+                                        shared.processingConfig.gaussian_blur_size), 0);
+
+                if (shared.processingConfig.enable_contrast_enhancement) {
+                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                                    shared.processingConfig.contrast_alpha,
+                                                    shared.processingConfig.contrast_beta);
+                }
+            } catch (const std::exception &e) {
+                std::cerr << "Error loading batch " << batchNum << " data: " << e.what() << std::endl;
+                continue; // Skip this batch
+            }
+            
+            // Initialize thread mats for processing
+            ThreadLocalMats mats = initializeThreadMats(shared.backgroundFrame.rows, 
+                                                       shared.backgroundFrame.cols, shared);
+            
+            // Filter images for this batch
+            std::vector<cv::Mat> batchImages;
+            std::vector<std::tuple<std::string, long long, double, double>> batchMeasurements;
+            
+            // Extract all measurements for this batch
+            for (const auto &measurement : allMeasurements) {
+                if (std::get<0>(measurement) == batchNum) {
+                    batchMeasurements.emplace_back(
+                        std::get<1>(measurement),  // condition
+                        std::get<2>(measurement),  // timestamp
+                        std::get<3>(measurement),  // deformability
+                        std::get<4>(measurement)   // area
+                    );
+                }
+            }
+            
+            // Count images for this batch
+            int imageCount = batchImageCounts[batchNum];
+            
+            // If we know exactly how many images we should have for this batch,
+            // select that many images from the full set starting from currentIndex
+            if (imageCount > 0 && currentIndex + imageCount <= allImages.size()) {
+                batchImages.assign(allImages.begin() + currentIndex, 
+                                  allImages.begin() + currentIndex + imageCount);
+                // Update currentIndex for the next batch
+                currentIndex += imageCount;
+            } else {
+                // Otherwise, just use an estimated proportion of the images
+                // This is a heuristic and might not be accurate for all datasets
+                int batchSize = allImages.size() / availableBatches.size();
+                int endIdx = std::min((int)allImages.size(), (int)currentIndex + batchSize);
+                
+                if (currentIndex >= allImages.size()) {
+                    // If we've somehow gone past all images, reset to beginning
+                    std::cerr << "Warning: Not enough images for batch " << batchNum 
+                             << ". Using first available images instead." << std::endl;
+                    currentIndex = 0;
+                    endIdx = std::min(batchSize, (int)allImages.size());
+                }
+                
+                batchImages.assign(allImages.begin() + currentIndex, allImages.begin() + endIdx);
+                // Update currentIndex for the next batch
+                currentIndex = endIdx;
+            }
+            
+            std::cout << "Processing " << batchImages.size() << " images for batch " << batchNum << std::endl;
+            
+            // Process each image in this batch
+            for (size_t i = 0; i < batchImages.size(); i++) {
+                cv::Mat processedImage(batchImages[i].rows, batchImages[i].cols, CV_8UC1);
+                processFrame(batchImages[i], shared, processedImage, mats);
+                
+                // First try with the current contour detection method
+                FilterResult filterResult = filterProcessedImage(processedImage, shared.roi,
+                                                               shared.processingConfig, 255);
+                
+                // Default to current method
+                std::string methodUsed = "Current";
+                bool isValid = filterResult.isValid;
+                double deformability = filterResult.deformability;
+                double area = filterResult.area;
+                double ringRatio = filterResult.ringRatio;
+                
+                // If not valid, try with legacy contour detection for older data
+                if (!isValid) {
+                    FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, 
+                                                                    shared.processingConfig);
+                    
+                    if (legacyResult.isValid) {
+                        methodUsed = "Legacy";
+                        isValid = true;
+                        deformability = legacyResult.deformability;
+                        area = legacyResult.area;
+                        ringRatio = legacyResult.ringRatio;
+                    }
+                }
+                
+                // Get stored metrics if available
+                std::string storedCondition = condition;
+                long long timestamp = 0;
+                double storedDeformability = 0.0;
+                double storedArea = 0.0;
+                
+                if (i < batchMeasurements.size()) {
+                    auto [cond, ts, def, ar] = batchMeasurements[i];
+                    storedCondition = cond;
+                    timestamp = ts;
+                    storedDeformability = def;
+                    storedArea = ar;
+                }
+
+                // Create and save overlay image with processed mask
+                if (isValid) {
+                    // Create a color version of the original image for overlay
+                    cv::Mat overlayImage;
+                    cv::cvtColor(batchImages[i], overlayImage, cv::COLOR_GRAY2BGR);
+                    
+                    // Create a color version of the processed image (red mask)
+                    cv::Mat colorMask(processedImage.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+                    for (int y = 0; y < processedImage.rows; y++) {
+                        for (int x = 0; x < processedImage.cols; x++) {
+                            if (processedImage.at<uchar>(y, x) > 0) {
+                                // Set to red with 50% transparency
+                                colorMask.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 255);
+                            }
+                        }
+                    }
+                    
+                    // Blend the mask with the original image
+                    cv::addWeighted(overlayImage, 0.7, colorMask, 0.3, 0, overlayImage);
+                    
+                    // Draw ROI rectangle
+                    cv::rectangle(overlayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
+                    
+                    // Find contours to draw the convex hull
+                    std::vector<std::vector<cv::Point>> contours;
+                    std::vector<cv::Vec4i> hierarchy;
+                    cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                    
+                    // Look for inner contours using hierarchy
+                    std::vector<std::vector<cv::Point>> innerContours;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                        if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                            innerContours.push_back(contours[c]);
+                        }
+                    }
+                    
+                    // If we have exactly one inner contour, use it (preferred case)
+                    if (innerContours.size() == 1) {
+                        // Calculate convex hull from inner contour
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(innerContours[0], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
+                    // Otherwise fall back to largest contour
+                    else if (!contours.empty()) {
+                        // Find the largest contour
+                        int largestIdx = 0;
+                        double largestArea = 0;
+                        for (size_t c = 0; c < contours.size(); c++) {
+                            double area = cv::contourArea(contours[c]);
+                            if (area > largestArea) {
+                                largestArea = area;
+                                largestIdx = c;
+                            }
+                        }
+                        
+                        // Calculate convex hull
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(contours[largestIdx], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
+                    
+                    // Add text with metrics
+                    std::string metricsText = "Batch: " + std::to_string(batchNum) + 
+                                             " | Def: " + std::to_string(deformability) +
+                                             " | Area: " + std::to_string(area) +
+                                             " | Method: " + methodUsed;
+                    cv::putText(overlayImage, metricsText, 
+                               cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                               cv::Scalar(0, 255, 255), 1);
+                    
+                    // Save the overlay image
+                    std::filesystem::path overlayPath = overlaysDir / ("batch_" + std::to_string(batchNum) + 
+                                                                     "_img_" + std::to_string(i) + ".png");
+                    cv::imwrite(overlayPath.string(), overlayImage);
+                    
+                    // Every 100 images, report how many overlays we've saved
+                    if ((i+1) % 100 == 0) {
+                        std::cout << "Saved " << (i+1) << " overlay images for batch " << batchNum << std::endl;
+                    }
+                }
+                
+                // Write metrics to CSV
+                outputFile << batchNum << ","
+                          << storedCondition << ","
+                          << i << ","
+                          << timestamp << ","
+                          << deformability << ","
+                          << area << ","
+                          << ringRatio << ","
+                          << (isValid ? "Yes" : "No") << ","
+                          << methodUsed << ","
+                          << configToString(shared.processingConfig) << "\n";
+                
+                if ((i+1) % 100 == 0 || i == batchImages.size() - 1) {
+                    std::cout << "Processed " << (i+1) << "/" << batchImages.size() << " images from batch " << batchNum << std::endl;
+                }
+            }
+            
+            std::cout << "Completed batch " << batchNum << "." << std::endl;
+        }
+    } else {
+        // Process individual batch directories
+        std::vector<std::filesystem::path> batchDirs;
+        
+        std::cout << "Searching for batch directories in: " << absInputDir << std::endl;
+        
+        for (const auto &entry : std::filesystem::directory_iterator(absInputDir)) {
+            if (entry.is_directory() && entry.path().filename().string().find("batch_") != std::string::npos) {
+                batchDirs.push_back(entry.path());
+                std::cout << "  Found batch directory: " << entry.path().filename().string() << std::endl;
+            } else if (entry.is_directory()) {
+                std::cout << "  Found directory (not a batch dir): " << entry.path().filename().string() << std::endl;
+            }
+        }
+        
+        if (batchDirs.empty()) {
+            std::cout << "No batch directories found in " << absInputDir << std::endl;
+            std::cout << "Directory contents:" << std::endl;
+            for (const auto &entry : std::filesystem::directory_iterator(absInputDir)) {
+                std::cout << "  " << entry.path().filename().string() 
+                          << (entry.is_directory() ? " (directory)" : " (file)") << std::endl;
+            }
+            return;
+        }
+        
+        std::sort(batchDirs.begin(), batchDirs.end());
+        
+        // Process each batch directory
+        for (const auto &batchDir : batchDirs) {
+            // Extract batch number from directory name
+            std::string batchName = batchDir.filename().string();
+            int batchNum = -1;
+            try {
+                size_t pos = batchName.find("batch_");
+                if (pos != std::string::npos) {
+                    batchNum = std::stoi(batchName.substr(pos + 6));
+                }
+            } catch (...) {
+                // Skip if we can't extract a batch number
+                continue;
+            }
+            
+            std::cout << "Processing " << batchDir << " (Batch " << batchNum << ")" << std::endl;
+            
+            // Load batch configuration
+            SharedResources shared;
+            try {
+                // Load background image
+                shared.backgroundFrame = cv::imread((batchDir / "background_clean.tiff").string(), cv::IMREAD_GRAYSCALE);
+                if (shared.backgroundFrame.empty()) {
+                    throw std::runtime_error("Failed to load background image");
+                }
+                
+                // Read ROI from CSV
+                std::ifstream roiFile((batchDir / "roi.csv").string());
+                std::string roiHeader;
+                std::getline(roiFile, roiHeader); // Skip header
+                std::string roiData;
+                std::getline(roiFile, roiData);
+                std::stringstream ss(roiData);
+                std::string value;
+                std::vector<int> roiValues;
+                while (std::getline(ss, value, ',')) {
+                    roiValues.push_back(std::stoi(value));
+                }
+                
+                shared.roi = cv::Rect(roiValues[0], roiValues[1], roiValues[2], roiValues[3]);
+                
+                // Load processing config
+                shared.processingConfig = loadBatchConfig(batchDir);
+                
+                // Initialize the blurred background with the original config settings
+                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                                cv::Size(shared.processingConfig.gaussian_blur_size,
+                                        shared.processingConfig.gaussian_blur_size), 0);
+
+                if (shared.processingConfig.enable_contrast_enhancement) {
+                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
+                                                     shared.processingConfig.contrast_alpha,
+                                                     shared.processingConfig.contrast_beta);
+                }
+            } catch (const std::exception &e) {
+                std::cerr << "Error loading batch " << batchNum << " data: " << e.what() << std::endl;
+                continue; // Skip this batch
+            }
+            
+            // Initialize thread mats for processing
+            ThreadLocalMats mats = initializeThreadMats(shared.backgroundFrame.rows, 
+                                                      shared.backgroundFrame.cols, shared);
+            
+            // Load CSV data to get timestamps
+            std::map<int, long long> timestamps;
+            std::map<int, std::string> conditions;
+            std::map<int, double> storedDeformabilities;
+            std::map<int, double> storedAreas;
+            
+            std::ifstream csvFile((batchDir / "batch_data.csv").string());
+            if (csvFile.is_open()) {
+                std::string header;
+                std::getline(csvFile, header); // Skip header
+                
+                // Parse headers to find column indices
+                auto headers = parseCSVHeaders(header);
+                int conditionIdx = headers.count("Condition") ? headers["Condition"] : -1;
+                int timestampIdx = headers.count("Timestamp_us") ? headers["Timestamp_us"] : -1;
+                int deformabilityIdx = headers.count("Deformability") ? headers["Deformability"] : -1;
+                int areaIdx = headers.count("Area") ? headers["Area"] : -1;
+                
+                if (timestampIdx >= 0 || deformabilityIdx >= 0 || areaIdx >= 0) {
+                    int idx = 0;
+                    std::string line;
+                    while (std::getline(csvFile, line)) {
+                        std::stringstream ss(line);
+                        std::string cell;
+                        std::vector<std::string> values;
+                        
+                        while (std::getline(ss, cell, ',')) {
+                            values.push_back(cell);
+                        }
+                        
+                        if (conditionIdx >= 0 && values.size() > conditionIdx) {
+                            conditions[idx] = values[conditionIdx];
+                        }
+                        
+                        if (timestampIdx >= 0 && values.size() > timestampIdx) {
+                            try {
+                                timestamps[idx] = std::stoll(values[timestampIdx]);
+                            } catch (...) {
+                                // Skip invalid entries
+                            }
+                        }
+                        
+                        if (deformabilityIdx >= 0 && values.size() > deformabilityIdx) {
+                            try {
+                                storedDeformabilities[idx] = std::stod(values[deformabilityIdx]);
+                            } catch (...) {
+                                // Skip invalid entries
+                            }
+                        }
+                        
+                        if (areaIdx >= 0 && values.size() > areaIdx) {
+                            try {
+                                storedAreas[idx] = std::stod(values[areaIdx]);
+                            } catch (...) {
+                                // Skip invalid entries
+                            }
+                        }
+                        
+                        idx++;
+                    }
+                }
+            }
+            
+            // Load and process images from binary file
+            std::ifstream imageFile((batchDir / "images.bin").string(), std::ios::binary);
+            int imageIndex = 0;
+            
+            while (imageFile.good()) {
+                int rows, cols, type;
+                imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+                imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+                imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+                
+                if (imageFile.eof()) {
+                    break;
+                }
+                
+                cv::Mat image(rows, cols, type);
+                imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+                
+                // Process the image and calculate metrics
+                cv::Mat processedImage(rows, cols, CV_8UC1);
+                processFrame(image, shared, processedImage, mats);
+                
+                // First try with the current contour detection method
+                FilterResult filterResult = filterProcessedImage(processedImage, shared.roi,
+                                                              shared.processingConfig, 255);
+                
+                // Default to current method
+                std::string methodUsed = "Current";
+                bool isValid = filterResult.isValid;
+                double deformability = filterResult.deformability;
+                double area = filterResult.area;
+                double ringRatio = filterResult.ringRatio;
+                
+                // If not valid, try with legacy contour detection for older data
+                if (!isValid) {
+                    FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, 
+                                                                   shared.processingConfig);
+                    
+                    if (legacyResult.isValid) {
+                        methodUsed = "Legacy";
+                        isValid = true;
+                        deformability = legacyResult.deformability;
+                        area = legacyResult.area;
+                        ringRatio = legacyResult.ringRatio;
+                    }
+                }
+                
+                // Get stored condition for this image if available (default to condition from config)
+                std::string storedCondition = condition;
+                if (conditions.count(imageIndex)) {
+                    storedCondition = conditions[imageIndex];
+                }
+                
+                // Get timestamp for this image if available
+                long long timestamp = (timestamps.count(imageIndex)) ? timestamps[imageIndex] : 0;
+                
+                // Create and save overlay image with processed mask
+                if (isValid) {
+                    // Create a color version of the original image for overlay
+                    cv::Mat overlayImage;
+                    cv::cvtColor(image, overlayImage, cv::COLOR_GRAY2BGR);
+                    
+                    // Create a color version of the processed image (red mask)
+                    cv::Mat colorMask(processedImage.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+                    for (int y = 0; y < processedImage.rows; y++) {
+                        for (int x = 0; x < processedImage.cols; x++) {
+                            if (processedImage.at<uchar>(y, x) > 0) {
+                                // Set to red with 50% transparency
+                                colorMask.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 255);
+                            }
+                        }
+                    }
+                    
+                    // Blend the mask with the original image
+                    cv::addWeighted(overlayImage, 0.7, colorMask, 0.3, 0, overlayImage);
+                    
+                    // Draw ROI rectangle
+                    cv::rectangle(overlayImage, shared.roi, cv::Scalar(0, 255, 0), 1);
+                    
+                    // Find contours to draw the convex hull
+                    std::vector<std::vector<cv::Point>> contours;
+                    std::vector<cv::Vec4i> hierarchy;
+                    cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                    
+                    // Look for inner contours using hierarchy
+                    std::vector<std::vector<cv::Point>> innerContours;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                        if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                            innerContours.push_back(contours[c]);
+                        }
+                    }
+                    
+                    // If we have exactly one inner contour, use it (preferred case)
+                    if (innerContours.size() == 1) {
+                        // Calculate convex hull from inner contour
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(innerContours[0], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
+                    // Otherwise fall back to largest contour
+                    else if (!contours.empty()) {
+                        // Find the largest contour
+                        int largestIdx = 0;
+                        double largestArea = 0;
+                        for (size_t c = 0; c < contours.size(); c++) {
+                            double area = cv::contourArea(contours[c]);
+                            if (area > largestArea) {
+                                largestArea = area;
+                                largestIdx = c;
+                            }
+                        }
+                        
+                        // Calculate convex hull
+                        std::vector<cv::Point> hull;
+                        cv::convexHull(contours[largestIdx], hull);
+                        
+                        // Draw the convex hull in green (the one used for deformability calculation)
+                        cv::polylines(overlayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                    }
+                    
+                    // Add text with metrics
+                    std::string metricsText = "Batch: " + std::to_string(batchNum) + 
+                                             " | Def: " + std::to_string(deformability) +
+                                             " | Area: " + std::to_string(area) +
+                                             " | Method: " + methodUsed;
+                    cv::putText(overlayImage, metricsText, 
+                               cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                               cv::Scalar(0, 255, 255), 1);
+                    
+                    // Save the overlay image
+                    std::filesystem::path overlayPath = overlaysDir / ("batch_" + std::to_string(batchNum) + 
+                                                                     "_img_" + std::to_string(imageIndex) + ".png");
+                    cv::imwrite(overlayPath.string(), overlayImage);
+                    
+                    // Every 100 images, report how many overlays we've saved
+                    if ((imageIndex+1) % 100 == 0 || imageIndex == 0) {
+                        std::cout << "Saved " << (imageIndex+1) << " overlay images for batch " << batchNum << std::endl;
+                    }
+                }
+
+                // Write metrics to CSV
+                outputFile << batchNum << ","
+                          << storedCondition << ","
+                          << imageIndex << ","
+                          << timestamp << ","
+                          << deformability << ","
+                          << area << ","
+                          << ringRatio << ","
+                          << (isValid ? "Yes" : "No") << ","
+                          << methodUsed << ","
+                          << configToString(shared.processingConfig) << "\n";
+                
+                imageIndex++;
+                if (imageIndex % 100 == 0 || imageIndex == 1) {
+                    std::cout << "Processed " << imageIndex << " images from batch " << batchNum << std::endl;
+                }
+            }
+            
+            std::cout << "Completed batch " << batchNum << ". Processed " << imageIndex << " images." << std::endl;
+        }
+    }
+    
+    outputFile.close();
+    std::cout << "Metrics calculation complete. Results saved to: " << outputFilePath << std::endl;
+    std::cout << "Overlay images with masks saved to: " << overlaysDir.string() << std::endl;
+}
+
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
 {
+    // Diagnostic output
+    std::cout << "Opening binary file: " << binaryImageFile << std::endl;
+    
     std::ifstream imageFile(binaryImageFile, std::ios::binary);
+    if (!imageFile.is_open()) {
+        std::cerr << "ERROR: Failed to open binary file: " << binaryImageFile << std::endl;
+        return;
+    }
+
+    std::cout << "Creating output directory: " << outputDirectory << std::endl;
     std::filesystem::create_directories(outputDirectory);
 
     int imageCount = 0;
+    std::cout << "Starting to read images..." << std::endl;
+    
     while (imageFile.good())
     {
         int rows, cols, type;
         imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
-        imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
-        imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
-
-        if (imageFile.eof())
+        
+        if (imageFile.eof()) {
+            std::cout << "Reached end of file" << std::endl;
             break;
+        }
+        
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read rows value" << std::endl;
+            break;
+        }
+        
+        std::cout << "Reading image " << imageCount + 1 << " with dimensions: " << rows;
+        
+        imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read cols value" << std::endl;
+            break;
+        }
+        
+        std::cout << " x " << cols;
+        
+        imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read type value" << std::endl;
+            break;
+        }
+        
+        std::cout << ", type: " << type << std::endl;
+
+        // Sanity check for unreasonable dimensions
+        if (rows <= 0 || rows > 10000 || cols <= 0 || cols > 10000) {
+            std::cerr << "ERROR: Unreasonable image dimensions: " << rows << " x " << cols << std::endl;
+            break;
+        }
 
         cv::Mat image(rows, cols, type);
-        imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+        size_t dataSize = rows * cols * image.elemSize();
+        
+        std::cout << "Reading " << dataSize << " bytes of image data" << std::endl;
+        imageFile.read(reinterpret_cast<char *>(image.data), dataSize);
+        
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read image data" << std::endl;
+            break;
+        }
 
         std::string outputPath = outputDirectory + "/image_" + std::to_string(imageCount++) + ".tiff";
-        cv::imwrite(outputPath, image);
+        std::cout << "Writing to: " << outputPath << std::endl;
+        
+        bool writeSuccess = cv::imwrite(outputPath, image);
+        if (!writeSuccess) {
+            std::cerr << "ERROR: Failed to write image to: " << outputPath << std::endl;
+        }
     }
 
     std::cout << "Converted " << imageCount << " images to TIFF format in " << outputDirectory << std::endl;
@@ -434,6 +1408,91 @@ void convertSavedMasksToStandardFormat(const std::string &binaryMaskFile, const 
     std::cout << "Converted " << maskCount << " masks to TIFF format in " << outputDirectory << std::endl;
 }
 
+void convertSavedBackgroundsToStandardFormat(const std::string &binaryBackgroundFile, const std::string &outputDirectory)
+{
+    // Diagnostic output
+    std::cout << "Opening backgrounds binary file: " << binaryBackgroundFile << std::endl;
+    
+    std::ifstream bgFile(binaryBackgroundFile, std::ios::binary);
+    if (!bgFile.is_open()) {
+        std::cerr << "ERROR: Failed to open backgrounds binary file: " << binaryBackgroundFile << std::endl;
+        return;
+    }
+
+    std::cout << "Creating backgrounds output directory: " << outputDirectory << std::endl;
+    std::filesystem::create_directories(outputDirectory);
+
+    int backgroundCount = 0;
+    std::cout << "Starting to read background images..." << std::endl;
+    
+    while (bgFile.good())
+    {
+        int batchNum, rows, cols, type;
+        bgFile.read(reinterpret_cast<char *>(&batchNum), sizeof(int));
+        
+        if (bgFile.eof()) {
+            std::cout << "Reached end of backgrounds file" << std::endl;
+            break;
+        }
+        
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read batchNum value" << std::endl;
+            break;
+        }
+        
+        std::cout << "Reading background for batch " << batchNum;
+            
+        bgFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read rows value" << std::endl;
+            break;
+        }
+        
+        bgFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read cols value" << std::endl;
+            break;
+        }
+        
+        bgFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read type value" << std::endl;
+            break;
+        }
+        
+        std::cout << " with dimensions: " << rows << " x " << cols << ", type: " << type << std::endl;
+
+        // Sanity check for unreasonable dimensions
+        if (rows <= 0 || rows > 10000 || cols <= 0 || cols > 10000) {
+            std::cerr << "ERROR: Unreasonable background image dimensions: " << rows << " x " << cols << std::endl;
+            break;
+        }
+
+        cv::Mat background(rows, cols, type);
+        size_t dataSize = rows * cols * background.elemSize();
+        
+        std::cout << "Reading " << dataSize << " bytes of background image data" << std::endl;
+        bgFile.read(reinterpret_cast<char *>(background.data), dataSize);
+        
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read background image data" << std::endl;
+            break;
+        }
+
+        std::string outputPath = outputDirectory + "/background_batch_" + std::to_string(batchNum) + ".tiff";
+        std::cout << "Writing background to: " << outputPath << std::endl;
+        
+        bool writeSuccess = cv::imwrite(outputPath, background);
+        if (!writeSuccess) {
+            std::cerr << "ERROR: Failed to write background image to: " << outputPath << std::endl;
+        } else {
+            backgroundCount++;
+        }
+    }
+
+    std::cout << "Converted " << backgroundCount << " background images to TIFF format in " << outputDirectory << std::endl;
+}
+
 json readConfig(const std::string &filename)
 {
     json config;
@@ -449,7 +1508,7 @@ json readConfig(const std::string &filename)
             {"area_threshold_min", 250},
             {"area_threshold_max", 1000},
             {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_area_range_check", true}, {"require_single_inner_contour", true}}},
-            {"contrast_enhancement", {{"enable_contrast", true}, {"alpha", 1.2}, {"beta", 10}}}};
+            {"contrast_enhancement", {{"enable_contrast", false}, {"alpha", 1.2}, {"beta", 10}}}};
 
         config = {
             {"save_directory", "updated_results"},
@@ -831,15 +1890,45 @@ void reviewSavedData()
     std::vector<std::filesystem::path> batchDirs;
     ProcessingConfig processingConfig;
 
+    // Auto-detect the file prefix from the directory contents
+    std::string condition = "";
+    for (const auto& entry : std::filesystem::directory_iterator(projectPath)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.size() > 16 && filename.substr(filename.size() - 16) == "_backgrounds.bin") {
+            condition = filename.substr(0, filename.size() - 16);
+            std::cout << "Auto-detected file prefix: " << condition << std::endl;
+            break;
+        }
+    }
+    
+    if (condition.empty()) {
+        // Try alternative detection with other common file extensions
+        for (const auto& suffix : {"_processing_config.json", "_roi.csv", "_images.bin", "_data.csv"}) {
+            for (const auto& entry : std::filesystem::directory_iterator(projectPath)) {
+                std::string filename = entry.path().filename().string();
+                if (filename.size() > strlen(suffix) && 
+                    filename.substr(filename.size() - strlen(suffix)) == suffix) {
+                    condition = filename.substr(0, filename.size() - strlen(suffix));
+                    std::cout << "Auto-detected file prefix from " << suffix << ": " << condition << std::endl;
+                    goto prefix_found_review;  // Break out of nested loops
+                }
+            }
+        }
+    }
+    
+prefix_found_review:
+    if (condition.empty()) {
+        std::cerr << "Could not auto-detect file prefix. No data files found." << std::endl;
+        return;
+    }
+
     // Check if this is a consolidated dataset with master files
-    json condition_config = readConfig("config.json");
-    std::string condition = condition_config["save_directory"];
     bool hasMasterFiles = false;
     std::string masterConfigPath = projectPath + "/" + condition + "_processing_config.json";
     std::string masterROIPath = projectPath + "/" + condition + "_roi.csv";
     std::string masterBackgroundsPath = projectPath + "/" + condition + "_backgrounds.bin";
-    std::string masterDataPath = projectPath + "/" + condition + "_data.csv";
     std::string masterImagesPath = projectPath + "/" + condition + "_images.bin";
+    std::string masterDataPath = projectPath + "/" + condition + "_data.csv";
     
     // Check if master files exist
     if (std::filesystem::exists(masterConfigPath) && 
@@ -1198,8 +2287,52 @@ void reviewSavedData()
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
                 cv::addWeighted(displayImage, 0.7, processedOverlay, 0.3, 0, displayImage);
+                
+                // Find contours to draw the convex hull
+                std::vector<std::vector<cv::Point>> contours;
+                std::vector<cv::Vec4i> hierarchy;
+                cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                
+                // Look for inner contours using hierarchy
+                std::vector<std::vector<cv::Point>> innerContours;
+                for (size_t c = 0; c < contours.size(); c++) {
+                    // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                    if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                        innerContours.push_back(contours[c]);
+                    }
+                }
+                
+                // If we have exactly one inner contour, use it (preferred case)
+                if (innerContours.size() == 1) {
+                    // Calculate convex hull from inner contour
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(innerContours[0], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
+                // Otherwise fall back to largest contour
+                else if (!contours.empty()) {
+                    // Find the largest contour
+                    int largestIdx = 0;
+                    double largestArea = 0;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        double area = cv::contourArea(contours[c]);
+                        if (area > largestArea) {
+                            largestArea = area;
+                            largestIdx = c;
+                        }
+                    }
+                    
+                    // Calculate convex hull
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(contours[largestIdx], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
             }
-            
+
             // Draw ROI rectangle
             cv::rectangle(displayImage, shared.roi, cv::Scalar(0, 255, 0), 2);
             
@@ -1435,13 +2568,14 @@ void reviewSavedData()
             
             // If not valid, try with legacy contour detection for older data
             if (!recalcValid) {
-                FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, shared.processingConfig);
+                FilterResult legacyResult = legacyContourAnalysis(processedImage, shared.roi, 
+                                                                   shared.processingConfig);
                 
                 if (legacyResult.isValid) {
+                    methodUsed = "Legacy";
+                    recalcValid = true;
                     recalcDeformability = legacyResult.deformability;
                     recalcArea = legacyResult.area;
-                    recalcValid = true;
-                    methodUsed = "L"; // L for Legacy method
                 }
             }
 
@@ -1450,6 +2584,50 @@ void reviewSavedData()
                 cv::Mat processedOverlay;
                 cv::cvtColor(processedImage, processedOverlay, cv::COLOR_GRAY2BGR);
                 cv::addWeighted(displayImage, 0.7, processedOverlay, 0.3, 0, displayImage);
+                
+                // Find contours to draw the convex hull
+                std::vector<std::vector<cv::Point>> contours;
+                std::vector<cv::Vec4i> hierarchy;
+                cv::findContours(processedImage, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+                
+                // Look for inner contours using hierarchy
+                std::vector<std::vector<cv::Point>> innerContours;
+                for (size_t c = 0; c < contours.size(); c++) {
+                    // In hierarchy, if h[3] > -1, this is an inner contour with a parent
+                    if (c < hierarchy.size() && hierarchy[c][3] > -1) {
+                        innerContours.push_back(contours[c]);
+                    }
+                }
+                
+                // If we have exactly one inner contour, use it (preferred case)
+                if (innerContours.size() == 1) {
+                    // Calculate convex hull from inner contour
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(innerContours[0], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
+                // Otherwise fall back to largest contour
+                else if (!contours.empty()) {
+                    // Find the largest contour
+                    int largestIdx = 0;
+                    double largestArea = 0;
+                    for (size_t c = 0; c < contours.size(); c++) {
+                        double area = cv::contourArea(contours[c]);
+                        if (area > largestArea) {
+                            largestArea = area;
+                            largestIdx = c;
+                        }
+                    }
+                    
+                    // Calculate convex hull
+                    std::vector<cv::Point> hull;
+                    cv::convexHull(contours[largestIdx], hull);
+                    
+                    // Draw the convex hull in green (the one used for deformability calculation)
+                    cv::polylines(displayImage, hull, true, cv::Scalar(0, 255, 0), 2);
+                }
             }
 
             // Draw ROI rectangle
@@ -1562,4 +2740,14 @@ void reviewSavedData()
     }
 
     cv::destroyAllWindows();
+}
+
+std::string autoDetectPrefix(const std::string& dir) {
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        std::string fname = entry.path().filename().string();
+        if (fname.size() > 16 && fname.substr(fname.size() - 16) == "_backgrounds.bin") {
+            return fname.substr(0, fname.size() - 16);
+        }
+    }
+    return "";
 }
