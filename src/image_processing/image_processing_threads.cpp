@@ -1034,6 +1034,10 @@ void updateRingRatioHistogram(SharedResources &shared)
         std::vector<double> newRingRatios;
         newRingRatios.reserve(500);
 
+        // Keep track of when the histogram was last cleared
+        bool histogramWasCleared = false;
+        size_t dataPointsSinceLastClear = 0;
+
         const auto updateInterval = std::chrono::milliseconds(5000);
         auto lastUpdateTime = std::chrono::steady_clock::now();
 
@@ -1057,8 +1061,16 @@ void updateRingRatioHistogram(SharedResources &shared)
                     {
                         ringRatios.clear();
                         newRingRatios.clear();
+                        histogramWasCleared = true;
+                        dataPointsSinceLastClear = 0;
                         shared.clearHistogramData = false;
                         std::cout << "Histogram data cleared" << std::endl;
+                        
+                        // Reset the average ring ratio when clearing
+                        shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
+                        
+                        // Force an immediate update of the empty histogram
+                        lastUpdateTime = std::chrono::steady_clock::now() - updateInterval;
                     }
 
                     // Collect new data into temporary buffer without updating the plot yet
@@ -1074,6 +1086,7 @@ void updateRingRatioHistogram(SharedResources &shared)
                             for (const auto& result : currentBuffer) {
                                 if (result.ringRatio > 0) {
                                     newRingRatios.push_back(result.ringRatio);
+                                    dataPointsSinceLastClear++;
                                 }
                             }
                         }
@@ -1082,6 +1095,7 @@ void updateRingRatioHistogram(SharedResources &shared)
                         double currentRingRatio = shared.frameRingRatios.load();
                         if (currentRingRatio > 0) {
                             newRingRatios.push_back(currentRingRatio);
+                            dataPointsSinceLastClear++;
                         }
                         
                         shared.newScatterDataAvailable = false;
@@ -1097,13 +1111,18 @@ void updateRingRatioHistogram(SharedResources &shared)
                         ringRatios.insert(ringRatios.end(), newRingRatios.begin(), newRingRatios.end());
                         newRingRatios.clear();
                         
-                        // Keep only the most recent entries
-                        const size_t MAX_PERSISTENT_SIZE = 10000;
-                        if (ringRatios.size() > MAX_PERSISTENT_SIZE) {
-                            ringRatios.erase(
-                                ringRatios.begin(),
-                                ringRatios.begin() + (ringRatios.size() - MAX_PERSISTENT_SIZE)
-                            );
+                        // Only apply the MAX_PERSISTENT_SIZE limit if a significant number of new data points
+                        // have been added since the last clear (to avoid keeping old data after clearing)
+                        if (!histogramWasCleared || dataPointsSinceLastClear > 10000) {
+                            // Keep only the most recent entries
+                            const size_t MAX_PERSISTENT_SIZE = 10000;
+                            if (ringRatios.size() > MAX_PERSISTENT_SIZE) {
+                                ringRatios.erase(
+                                    ringRatios.begin(),
+                                    ringRatios.begin() + (ringRatios.size() - MAX_PERSISTENT_SIZE)
+                                );
+                            }
+                            histogramWasCleared = false;
                         }
                     }
 
@@ -1157,6 +1176,14 @@ void updateRingRatioHistogram(SharedResources &shared)
                         {
                             std::cerr << "Error updating histogram: " << e.what() << std::endl;
                         }
+                    }
+                    else {
+                        // If there's no data (after clearing), display an empty histogram
+                        ax->clear();
+                        xlabel("Ring Ratio");
+                        ylabel("Frequency");
+                        title("Ring Ratio Distribution (0 samples)");
+                        f->draw();
                     }
                     
                     lastUpdateTime = now;
