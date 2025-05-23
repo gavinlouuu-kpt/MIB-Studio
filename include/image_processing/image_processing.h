@@ -284,3 +284,5 @@ BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, c
 
 // Auto-detect condition prefix from filenames in a directory
 std::string autoDetectPrefix(const std::string& dir);
+
+void autofocusControlThread(SharedResources &shared);

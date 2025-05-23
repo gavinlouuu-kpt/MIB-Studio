@@ -19,6 +19,7 @@
 #include <iomanip> // For std::setprecision
 #include <sstream> // For std::stringstream
 #include <random>
+#include "XMT_DLL_SER.h" // For voltage control via serial
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -1542,6 +1543,8 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     // Add the validFramesDisplayThread to show the latest 5 valid frames
     threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
 
+    threads.emplace_back(autofocusControlThread, std::ref(shared));
+
     // Read from json to check if scatterplot and histogram are enabled
     json config = readConfig("config.json");
     bool scatterPlotEnabled = config.value("scatter_plot_enabled", false);
@@ -1598,3 +1601,160 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                           }
                           return threads; });
 }
+
+// create a thread that takes while not paused and while filteredResult is valid take filteredResult.ringratio and compare to the set point from config.json
+// if the average (excluding the top 3 max and min) ringratio (100 images) is less than the set point then send a voltage command to increase the voltage by 1 and vice versa
+
+
+void autofocusControlThread(SharedResources &shared)
+{
+    // Read configuration from config.json
+    json config = readConfig("config.json");
+    const int comPort = config.value("autofocus_com_port", 6);
+    const int baudRate = config.value("autofocus_baud_rate", 115200);
+    const unsigned char deviceAddress = config.value("autofocus_device_address", 1);
+    const double focusSetpoint = config.value("focus_setpoint", 20.0);
+    const double focusRange = config.value("focus_range", 0.5);  // Acceptable range around setpoint (±0.5)
+    const bool focusDirection = config.value("focus_direction", true); // true = increase voltage increases ring ratio
+    const int sampleSize = config.value("autofocus_sample_size", 100);  // Reduced from 1000 for faster response
+    const double voltageStep = config.value("autofocus_voltage_step", 1.0);
+    const double fineVoltageStep = config.value("autofocus_fine_voltage_step", 0.2);  // Smaller step for fine adjustments
+    const double maxVoltage = config.value("autofocus_max_voltage", 100.0);
+    const double minVoltage = config.value("autofocus_min_voltage", 0.0);
+
+    // Initialize serial connection
+    int result = OpenComConnectRS232(comPort, baudRate);
+    if (result == 0) {
+        std::cerr << "ERROR: Failed to open COM port for autofocus!" << std::endl;
+        
+        // Signal that this thread is ready to be joined since we can't continue
+        {
+            std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+            shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+            shared.threadShutdownCondition.notify_one();
+        }
+        
+        return;
+    }
+    std::cout << "Autofocus: COM port opened successfully!" << std::endl;
+
+    // Initialize variables
+    double currentVoltage = config.value("initial_voltage", 50.0);
+    std::vector<double> ringRatioBuffer;
+    ringRatioBuffer.reserve(sampleSize);
+    bool autofocusEnabled = config.value("autofocus_enabled_at_start", true);
+    std::atomic<double>& currentVoltageDisplay = shared.currentVoltage; // Add this to SharedResources
+    
+    // Set initial voltage
+    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
+    currentVoltageDisplay.store(currentVoltage);
+    std::cout << "Autofocus: Initial voltage set to " << currentVoltage << "V" << std::endl;
+
+    // Main autofocus loop
+    while (!shared.done) {
+        // Check for keyboard input to toggle autofocus (could be added later)
+        // For now, we'll use the config setting
+
+        if (autofocusEnabled && !shared.paused) {
+            // Get current ring ratio
+            double currentRingRatio = shared.frameRingRatios.load();
+            bool validFrame = shared.validDisplayFrame.load();
+            
+            if (validFrame && currentRingRatio > 0) {
+                ringRatioBuffer.push_back(currentRingRatio);
+                
+                // When we have enough samples, calculate average and adjust focus
+                if (ringRatioBuffer.size() >= sampleSize) {
+                    // Sort values to remove outliers
+                    std::vector<double> sortedRatios = ringRatioBuffer;
+                    std::sort(sortedRatios.begin(), sortedRatios.end());
+                    
+                    // Remove top and bottom 5% of values to eliminate outliers
+                    const size_t outlierCount = static_cast<size_t>(sampleSize * 0.05);
+                    if (sortedRatios.size() > 2 * outlierCount) {
+                        sortedRatios.erase(sortedRatios.begin(), sortedRatios.begin() + outlierCount);
+                        sortedRatios.erase(sortedRatios.end() - outlierCount, sortedRatios.end());
+                    }
+                    
+                    // Calculate average of remaining values
+                    double avgRingRatio = 0.0;
+                    for (double ratio : sortedRatios) {
+                        avgRingRatio += ratio;
+                    }
+                    avgRingRatio /= sortedRatios.size();
+                    
+                    // Clear the buffer for next round
+                    ringRatioBuffer.clear();
+                    
+                    // Calculate how far we are from setpoint
+                    double deviation = avgRingRatio - focusSetpoint;
+                    bool inAcceptableRange = std::abs(deviation) <= focusRange;
+                    
+                    // Adjust voltage based on ring ratio and acceptable range
+                    if (!inAcceptableRange) {
+                        // Outside acceptable range, make larger adjustments
+                        if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
+                            // Need to increase voltage
+                            currentVoltage = std::min(currentVoltage + voltageStep, maxVoltage);
+                            std::cout << "Autofocus: Ring ratio too low (" << avgRingRatio 
+                                      << "), increasing voltage to " << currentVoltage << "V" << std::endl;
+                        } else {
+                            // Need to decrease voltage
+                            currentVoltage = std::max(currentVoltage - voltageStep, minVoltage);
+                            std::cout << "Autofocus: Ring ratio too high (" << avgRingRatio 
+                                      << "), decreasing voltage to " << currentVoltage << "V" << std::endl;
+                        }
+                    } else {
+                        // Within acceptable range, make fine adjustments or maintain
+                        std::cout << "Autofocus: Ring ratio within acceptable range (" << avgRingRatio 
+                                  << " vs setpoint " << focusSetpoint << " ±" << focusRange << ")" << std::endl;
+                        
+                        // Optional fine-tuning within the acceptable range
+                        if (std::abs(deviation) > focusRange/2) {
+                            // Fine adjustment to get closer to exact setpoint
+                            if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
+                                // Need to slightly increase voltage
+                                currentVoltage = std::min(currentVoltage + fineVoltageStep, maxVoltage);
+                            } else {
+                                // Need to slightly decrease voltage
+                                currentVoltage = std::max(currentVoltage - fineVoltageStep, minVoltage);
+                            }
+                        }
+                    }
+                    
+                    // Apply the new voltage
+                    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
+                    currentVoltageDisplay.store(currentVoltage);
+                    
+                    // Read back actual voltage to verify
+                    double actualVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
+                    std::cout << "Autofocus: Voltage set to " << currentVoltage 
+                              << "V, actual reading: " << actualVoltage << "V" << std::endl;
+                }
+            }
+        }
+        
+        // Sleep briefly to avoid busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    // Set voltage to safe level before exiting
+    double safeVoltage = config.value("safe_shutdown_voltage", 0.0);
+    std::cout << "Autofocus: Setting voltage to safe shutdown level: " << safeVoltage << "V" << std::endl;
+    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, safeVoltage);
+    
+    // Clean up
+    std::cout << "Autofocus: Closing COM port..." << std::endl;
+    CloseSer();
+    std::cout << "Autofocus: COM port closed." << std::endl;
+    
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+    
+    std::cout << "Autofocus thread interrupted." << std::endl;
+}
+
