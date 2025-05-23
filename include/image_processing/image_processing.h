@@ -280,3 +280,6 @@ void createDefaultConfigIfMissing(const std::filesystem::path &configPath);
 std::string selectSaveDirectory(const std::string &configPath);
 
 BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, const cv::Mat &mask);
+
+// Auto-detect condition prefix from filenames in a directory
+std::string autoDetectPrefix(const std::string& dir);

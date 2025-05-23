@@ -11,6 +11,8 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <filesystem>
 #include "mib_grabber/mib_grabber.h"
+#include <iomanip>
+#include <sstream>
 
 namespace MenuSystem
 {
@@ -250,10 +252,15 @@ namespace MenuSystem
 
     void convertSavedImages()
     {
+        std::cout << "Select the folder containing your data files:" << std::endl;
         std::string saveDirectory = navigateAndSelectFolder();
 
-        // std::cout << "Enter the path to the save directory containing batch folders: ";
-        // std::getline(std::cin, saveDirectory);
+        if (saveDirectory.empty()) {
+            std::cout << "Operation cancelled or no folder selected." << std::endl;
+            return;
+        }
+
+        std::cout << "Selected directory: " << saveDirectory << std::endl;
 
         try
         {
@@ -261,26 +268,98 @@ namespace MenuSystem
         }
         catch (const std::exception &e)
         {
-            std::cerr << "Error: " << e.what() << std::endl;
+            std::cerr << "Error processing batches: " << e.what() << std::endl;
         }
+    }
+
+    std::string formatFileSize(uintmax_t size) {
+        const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        int unit = 0;
+        double fileSize = static_cast<double>(size);
+        
+        while (fileSize >= 1024.0 && unit < 4) {
+            fileSize /= 1024.0;
+            unit++;
+        }
+        
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(2) << fileSize << " " << units[unit];
+        return oss.str();
     }
 
     void processAllBatches(const std::string &saveDirectory)
     {
         namespace fs = std::filesystem;
+        
+        std::cout << "Processing directory: " << saveDirectory << std::endl;
+        
+        if (!fs::exists(saveDirectory)) {
+            std::cerr << "ERROR: Directory does not exist: " << saveDirectory << std::endl;
+            return;
+        }
 
         // First check for master files in the save directory
         std::string condition;
-        try {
-            json config = readConfig("config.json");
-            condition = config["save_directory"];
-        } catch (const std::exception &e) {
-            std::cerr << "Error reading config: " << e.what() << std::endl;
-            condition = "results"; // Default condition name
+        
+        // Try to detect the condition/prefix from the directory files first
+        condition = autoDetectPrefix(saveDirectory);
+        
+        if (condition.empty()) {
+            try {
+                json config = readConfig("config.json");
+                condition = config.value("save_directory", "results");
+                std::cout << "Using condition from config.json: " << condition << std::endl;
+            } catch (const std::exception &e) {
+                std::cerr << "Error reading config: " << e.what() << std::endl;
+                condition = "results"; // Default condition name
+                std::cout << "Using default condition name: " << condition << std::endl;
+            }
+        } else {
+            std::cout << "Auto-detected condition prefix: " << condition << std::endl;
+        }
+        
+        // List all files in the directory for debugging
+        std::cout << "Files in directory: " << std::endl;
+        for (const auto &entry : fs::directory_iterator(saveDirectory)) {
+            if (entry.is_regular_file()) {
+                std::cout << "  " << entry.path().filename().string() << " (file, " 
+                          << formatFileSize(entry.file_size()) << ")" << std::endl;
+            } else if (entry.is_directory()) {
+                std::cout << "  " << entry.path().filename().string() << " (directory)" << std::endl;
+            } else {
+                std::cout << "  " << entry.path().filename().string() << " (other)" << std::endl;
+            }
         }
         
         std::string masterImagesPath = saveDirectory + "/" + condition + "_images.bin";
         std::string masterMasksPath = saveDirectory + "/" + condition + "_masks.bin";
+        std::string masterBackgroundsPath = saveDirectory + "/" + condition + "_backgrounds.bin";
+        
+        std::cout << "Looking for master files with condition prefix: " << condition << std::endl;
+        
+        // Check master images file
+        if (fs::exists(masterImagesPath)) {
+            std::cout << "Master images path: " << masterImagesPath << " (exists, size: " 
+                      << formatFileSize(fs::file_size(masterImagesPath)) << ")" << std::endl;
+        } else {
+            std::cout << "Master images path: " << masterImagesPath << " (does not exist)" << std::endl;
+        }
+        
+        // Check master masks file
+        if (fs::exists(masterMasksPath)) {
+            std::cout << "Master masks path: " << masterMasksPath << " (exists, size: " 
+                      << formatFileSize(fs::file_size(masterMasksPath)) << ")" << std::endl;
+        } else {
+            std::cout << "Master masks path: " << masterMasksPath << " (does not exist)" << std::endl;
+        }
+        
+        // Check master backgrounds file
+        if (fs::exists(masterBackgroundsPath)) {
+            std::cout << "Master backgrounds path: " << masterBackgroundsPath << " (exists, size: " 
+                      << formatFileSize(fs::file_size(masterBackgroundsPath)) << ")" << std::endl;
+        } else {
+            std::cout << "Master backgrounds path: " << masterBackgroundsPath << " (does not exist)" << std::endl;
+        }
         
         // Process master images if they exist
         if (fs::exists(masterImagesPath))
@@ -294,6 +373,23 @@ namespace MenuSystem
             catch (const std::exception &e)
             {
                 std::cerr << "Error processing " << masterImagesPath << ": " << e.what() << std::endl;
+            }
+        }
+        else
+        {
+            std::cout << "No master images file found at: " << masterImagesPath << std::endl;
+            // Try with absolute path
+            std::string absoluteImagesPath = fs::absolute(masterImagesPath).string();
+            if (absoluteImagesPath != masterImagesPath && fs::exists(absoluteImagesPath)) {
+                std::cout << "Found master images with absolute path: " << absoluteImagesPath << std::endl;
+                std::string masterImagesDir = saveDirectory + "/master_images";
+                try {
+                    convertSavedImagesToStandardFormat(absoluteImagesPath, masterImagesDir);
+                } catch (const std::exception &e) {
+                    std::cerr << "Error processing " << absoluteImagesPath << ": " << e.what() << std::endl;
+                }
+            } else {
+                std::cout << "No master images file found with absolute path either." << std::endl;
             }
         }
         
@@ -313,7 +409,6 @@ namespace MenuSystem
         }
         
         // Process master backgrounds if they exist
-        std::string masterBackgroundsPath = saveDirectory + "/" + condition + "_backgrounds.bin";
         if (fs::exists(masterBackgroundsPath))
         {
             std::string masterBackgroundsDir = saveDirectory + "/master_backgrounds";
@@ -327,12 +422,31 @@ namespace MenuSystem
                 std::cerr << "Error processing " << masterBackgroundsPath << ": " << e.what() << std::endl;
             }
         }
+        else
+        {
+            std::cout << "No master backgrounds file found at: " << masterBackgroundsPath << std::endl;
+            // Try with absolute path
+            std::string absoluteBackgroundsPath = fs::absolute(masterBackgroundsPath).string();
+            if (absoluteBackgroundsPath != masterBackgroundsPath && fs::exists(absoluteBackgroundsPath)) {
+                std::cout << "Found master backgrounds with absolute path: " << absoluteBackgroundsPath << std::endl;
+                std::string masterBackgroundsDir = saveDirectory + "/master_backgrounds";
+                try {
+                    convertSavedBackgroundsToStandardFormat(absoluteBackgroundsPath, masterBackgroundsDir);
+                } catch (const std::exception &e) {
+                    std::cerr << "Error processing " << absoluteBackgroundsPath << ": " << e.what() << std::endl;
+                }
+            } else {
+                std::cout << "No master backgrounds file found with absolute path either." << std::endl;
+            }
+        }
 
         // Process individual batch folders
+        bool foundBatchDirectories = false;
         for (const auto &entry : fs::directory_iterator(saveDirectory))
         {
             if (entry.is_directory() && entry.path().filename().string().find("batch_") == 0)
             {
+                foundBatchDirectories = true;
                 std::string batchPath = entry.path().string();
                 std::string imagesBinPath = batchPath + "/images.bin";
                 std::string masksBinPath = batchPath + "/masks.bin";
@@ -384,6 +498,10 @@ namespace MenuSystem
                     std::cout << "Note: No background.tiff found in batch folder " << batchPath << std::endl;
                 }
             }
+        }
+
+        if (!foundBatchDirectories) {
+            std::cout << "No batch directories found in " << saveDirectory << std::endl;
         }
 
         std::cout << "Finished processing all batches." << std::endl;

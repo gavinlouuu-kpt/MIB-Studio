@@ -1305,25 +1305,78 @@ prefix_found:
 
 void convertSavedImagesToStandardFormat(const std::string &binaryImageFile, const std::string &outputDirectory)
 {
+    // Diagnostic output
+    std::cout << "Opening binary file: " << binaryImageFile << std::endl;
+    
     std::ifstream imageFile(binaryImageFile, std::ios::binary);
+    if (!imageFile.is_open()) {
+        std::cerr << "ERROR: Failed to open binary file: " << binaryImageFile << std::endl;
+        return;
+    }
+
+    std::cout << "Creating output directory: " << outputDirectory << std::endl;
     std::filesystem::create_directories(outputDirectory);
 
     int imageCount = 0;
+    std::cout << "Starting to read images..." << std::endl;
+    
     while (imageFile.good())
     {
         int rows, cols, type;
         imageFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
-        imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
-        imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
-
-        if (imageFile.eof())
+        
+        if (imageFile.eof()) {
+            std::cout << "Reached end of file" << std::endl;
             break;
+        }
+        
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read rows value" << std::endl;
+            break;
+        }
+        
+        std::cout << "Reading image " << imageCount + 1 << " with dimensions: " << rows;
+        
+        imageFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read cols value" << std::endl;
+            break;
+        }
+        
+        std::cout << " x " << cols;
+        
+        imageFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read type value" << std::endl;
+            break;
+        }
+        
+        std::cout << ", type: " << type << std::endl;
+
+        // Sanity check for unreasonable dimensions
+        if (rows <= 0 || rows > 10000 || cols <= 0 || cols > 10000) {
+            std::cerr << "ERROR: Unreasonable image dimensions: " << rows << " x " << cols << std::endl;
+            break;
+        }
 
         cv::Mat image(rows, cols, type);
-        imageFile.read(reinterpret_cast<char *>(image.data), rows * cols * image.elemSize());
+        size_t dataSize = rows * cols * image.elemSize();
+        
+        std::cout << "Reading " << dataSize << " bytes of image data" << std::endl;
+        imageFile.read(reinterpret_cast<char *>(image.data), dataSize);
+        
+        if (imageFile.fail()) {
+            std::cerr << "ERROR: Failed to read image data" << std::endl;
+            break;
+        }
 
         std::string outputPath = outputDirectory + "/image_" + std::to_string(imageCount++) + ".tiff";
-        cv::imwrite(outputPath, image);
+        std::cout << "Writing to: " << outputPath << std::endl;
+        
+        bool writeSuccess = cv::imwrite(outputPath, image);
+        if (!writeSuccess) {
+            std::cerr << "ERROR: Failed to write image to: " << outputPath << std::endl;
+        }
     }
 
     std::cout << "Converted " << imageCount << " images to TIFF format in " << outputDirectory << std::endl;
@@ -1357,28 +1410,84 @@ void convertSavedMasksToStandardFormat(const std::string &binaryMaskFile, const 
 
 void convertSavedBackgroundsToStandardFormat(const std::string &binaryBackgroundFile, const std::string &outputDirectory)
 {
+    // Diagnostic output
+    std::cout << "Opening backgrounds binary file: " << binaryBackgroundFile << std::endl;
+    
     std::ifstream bgFile(binaryBackgroundFile, std::ios::binary);
+    if (!bgFile.is_open()) {
+        std::cerr << "ERROR: Failed to open backgrounds binary file: " << binaryBackgroundFile << std::endl;
+        return;
+    }
+
+    std::cout << "Creating backgrounds output directory: " << outputDirectory << std::endl;
     std::filesystem::create_directories(outputDirectory);
 
     int backgroundCount = 0;
+    std::cout << "Starting to read background images..." << std::endl;
+    
     while (bgFile.good())
     {
         int batchNum, rows, cols, type;
         bgFile.read(reinterpret_cast<char *>(&batchNum), sizeof(int));
         
-        if (bgFile.eof())
+        if (bgFile.eof()) {
+            std::cout << "Reached end of backgrounds file" << std::endl;
             break;
+        }
+        
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read batchNum value" << std::endl;
+            break;
+        }
+        
+        std::cout << "Reading background for batch " << batchNum;
             
         bgFile.read(reinterpret_cast<char *>(&rows), sizeof(int));
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read rows value" << std::endl;
+            break;
+        }
+        
         bgFile.read(reinterpret_cast<char *>(&cols), sizeof(int));
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read cols value" << std::endl;
+            break;
+        }
+        
         bgFile.read(reinterpret_cast<char *>(&type), sizeof(int));
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read type value" << std::endl;
+            break;
+        }
+        
+        std::cout << " with dimensions: " << rows << " x " << cols << ", type: " << type << std::endl;
+
+        // Sanity check for unreasonable dimensions
+        if (rows <= 0 || rows > 10000 || cols <= 0 || cols > 10000) {
+            std::cerr << "ERROR: Unreasonable background image dimensions: " << rows << " x " << cols << std::endl;
+            break;
+        }
 
         cv::Mat background(rows, cols, type);
-        bgFile.read(reinterpret_cast<char *>(background.data), rows * cols * background.elemSize());
+        size_t dataSize = rows * cols * background.elemSize();
+        
+        std::cout << "Reading " << dataSize << " bytes of background image data" << std::endl;
+        bgFile.read(reinterpret_cast<char *>(background.data), dataSize);
+        
+        if (bgFile.fail()) {
+            std::cerr << "ERROR: Failed to read background image data" << std::endl;
+            break;
+        }
 
         std::string outputPath = outputDirectory + "/background_batch_" + std::to_string(batchNum) + ".tiff";
-        cv::imwrite(outputPath, background);
-        backgroundCount++;
+        std::cout << "Writing background to: " << outputPath << std::endl;
+        
+        bool writeSuccess = cv::imwrite(outputPath, background);
+        if (!writeSuccess) {
+            std::cerr << "ERROR: Failed to write background image to: " << outputPath << std::endl;
+        } else {
+            backgroundCount++;
+        }
     }
 
     std::cout << "Converted " << backgroundCount << " background images to TIFF format in " << outputDirectory << std::endl;
