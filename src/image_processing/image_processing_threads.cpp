@@ -1539,7 +1539,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
                          std::ref(circularBuffer), params.bufferCount, params.width, params.height, std::ref(shared));
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
-    // threads.emplace_back(metricDisplayThread, std::ref(shared));
+    threads.emplace_back(metricDisplayThread, std::ref(shared));
     
     // Add the validFramesDisplayThread to show the latest 5 valid frames
     threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
