@@ -165,6 +165,11 @@ void metricDisplayThread(SharedResources &shared)
                                                         hbox({text("Area Ratio: "), text(std::to_string(shared.frameAreaRatios.load()))}),
                                                         hbox({text("Ring Ratio: "), text(std::to_string(shared.frameRingRatios.load()))}),
                                                         hbox({text("Avg Ring Ratio: "), text(std::to_string(shared.averageRingRatio.load()).substr(0, 6))}),
+                                                        hbox({text("Median Ring Ratio: "), text(std::to_string(shared.medianRingRatio.load()).substr(0, 6))}),
+                                                        hbox({text("Min Ring Ratio: "), text(std::to_string(shared.minRingRatio.load()).substr(0, 6))}),
+                                                        hbox({text("Max Ring Ratio: "), text(std::to_string(shared.maxRingRatio.load()).substr(0, 6))}),
+                                                        hbox({text("Ring Ratio Buffer Size: "), text(std::to_string(shared.ringRatioBufferSize.load()))}),
+                                                        hbox({text("Valid Frames/sec: "), text(std::to_string(shared.validFramesPerSecond.load()).substr(0, 6))}),
                                                         hbox({text("Current Voltage: "), text(std::to_string(shared.currentVoltage.load()) + " V")})}));
     };
 
@@ -484,6 +489,11 @@ void processingThreadTask(
     
     // Initialize frame counter
     size_t frameCounter = 0;
+    
+    // Initialize valid frames per second tracking
+    size_t validFrameCount = 0;
+    auto lastValidFrameTime = std::chrono::steady_clock::now();
+    const auto validFrameUpdateInterval = std::chrono::seconds(1); // Update every second
 
     while (!shared.done)
     {
@@ -517,6 +527,71 @@ void processingThreadTask(
                 {
                     shared.processTrigger = true;
                     shared.validProcessingFrame = true;
+                    std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+                    shared.autofocusRingRatioBuffer.push(reinterpret_cast<const uint8_t*>(&filterResult.ringRatio));
+                    shared.ringRatioBufferSize.store(shared.autofocusRingRatioBuffer.size(), std::memory_order_relaxed);
+                    
+                    // Calculate ring ratio statistics from the buffer
+                    if (shared.autofocusRingRatioBuffer.size() > 0) {
+                        std::vector<double> ringRatios;
+                        ringRatios.reserve(shared.autofocusRingRatioBuffer.size());
+                        
+                        // Extract all ring ratios from the buffer
+                        for (size_t i = 0; i < shared.autofocusRingRatioBuffer.size(); i++) {
+                            const double* ratioPtr = reinterpret_cast<const double*>(shared.autofocusRingRatioBuffer.getPointer(i));
+                            if (ratioPtr && std::isfinite(*ratioPtr)) {
+                                ringRatios.push_back(*ratioPtr);
+                            }
+                        }
+                        
+                        if (!ringRatios.empty()) {
+                            // Sort for median calculation
+                            std::vector<double> sortedRatios = ringRatios;
+                            std::sort(sortedRatios.begin(), sortedRatios.end());
+                            
+                            // Calculate statistics
+                            double minRatio = sortedRatios.front();
+                            double maxRatio = sortedRatios.back();
+                            
+                            // Calculate median
+                            double medianRatio;
+                            size_t n = sortedRatios.size();
+                            if (n % 2 == 0) {
+                                medianRatio = (sortedRatios[n/2 - 1] + sortedRatios[n/2]) / 2.0;
+                            } else {
+                                medianRatio = sortedRatios[n/2];
+                            }
+                            
+                            // Calculate average
+                            double avgRatio = 0.0;
+                            for (double ratio : ringRatios) {
+                                avgRatio += ratio;
+                            }
+                            avgRatio /= ringRatios.size();
+                            
+                            // Store statistics in shared resources
+                            shared.averageRingRatio.store(avgRatio, std::memory_order_relaxed);
+                            shared.minRingRatio.store(minRatio, std::memory_order_relaxed);
+                            shared.maxRingRatio.store(maxRatio, std::memory_order_relaxed);
+                            shared.medianRingRatio.store(medianRatio, std::memory_order_relaxed);
+                        }
+                    }
+                    
+                    // Count valid frames for FPS calculation
+                    validFrameCount++;
+                    
+                    // Update valid frames per second every second
+                    auto currentTime = std::chrono::steady_clock::now();
+                    if (currentTime - lastValidFrameTime >= validFrameUpdateInterval) {
+                        double validFPS = static_cast<double>(validFrameCount) / 
+                                         std::chrono::duration<double>(currentTime - lastValidFrameTime).count();
+                        shared.validFramesPerSecond.store(validFPS, std::memory_order_relaxed);
+                        
+                        // Reset counters for next interval
+                        validFrameCount = 0;
+                        lastValidFrameTime = currentTime;
+                    }
+                    
                     auto plotMetrics = std::make_tuple(filterResult.deformability, filterResult.area);
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
@@ -587,6 +662,7 @@ void processingThreadTask(
                         shared.newValidFrameAvailable = true;
                         shared.validFramesCondition.notify_one();
                     }
+
                 }
             }
 
@@ -1028,18 +1104,6 @@ void updateRingRatioHistogram(SharedResources &shared)
             return;
         }
 
-        // Vector to store ring ratios
-        std::vector<double> ringRatios;
-        ringRatios.reserve(2000);
-        
-        // Vector to collect new data between updates
-        std::vector<double> newRingRatios;
-        newRingRatios.reserve(500);
-
-        // Keep track of when the histogram was last cleared
-        bool histogramWasCleared = false;
-        size_t dataPointsSinceLastClear = 0;
-
         const auto updateInterval = std::chrono::milliseconds(5000);
         auto lastUpdateTime = std::chrono::steady_clock::now();
 
@@ -1061,46 +1125,23 @@ void updateRingRatioHistogram(SharedResources &shared)
                     // Clear data if requested
                     if (shared.clearHistogramData)
                     {
-                        ringRatios.clear();
-                        newRingRatios.clear();
-                        histogramWasCleared = true;
-                        dataPointsSinceLastClear = 0;
                         shared.clearHistogramData = false;
                         std::cout << "Histogram data cleared" << std::endl;
                         
                         // Reset the average ring ratio when clearing
                         shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
                         
-                        // Force an immediate update of the empty histogram
-                        lastUpdateTime = std::chrono::steady_clock::now() - updateInterval;
-                    }
-
-                    // Collect new data into temporary buffer without updating the plot yet
-                    if (shared.newScatterDataAvailable)
-                    {
-                        // Process qualified results to extract ring ratios
+                        // Reset the min, max, and median ring ratio values when clearing
+                        shared.minRingRatio.store(0.0, std::memory_order_relaxed);
+                        shared.maxRingRatio.store(0.0, std::memory_order_relaxed);
+                        shared.medianRingRatio.store(0.0, std::memory_order_relaxed);
+                        
+                        // Clear the shared autofocus ring ratio buffer
                         {
-                            std::lock_guard<std::mutex> qualifiedLock(shared.qualifiedResultsMutex);
-                            const auto& currentBuffer = shared.usingBuffer1 ? 
-                                shared.qualifiedResultsBuffer1 : shared.qualifiedResultsBuffer2;
-                                
-                            // Collect valid ring ratios into the temporary buffer
-                            for (const auto& result : currentBuffer) {
-                                if (result.ringRatio > 0) {
-                                    newRingRatios.push_back(result.ringRatio);
-                                    dataPointsSinceLastClear++;
-                                }
-                            }
+                            std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+                            shared.autofocusRingRatioBuffer.clear();
+                            shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
                         }
-                        
-                        // Add current frame's ring ratio if valid
-                        double currentRingRatio = shared.frameRingRatios.load();
-                        if (currentRingRatio > 0) {
-                            newRingRatios.push_back(currentRingRatio);
-                            dataPointsSinceLastClear++;
-                        }
-                        
-                        shared.newScatterDataAvailable = false;
                     }
                 }
 
@@ -1108,23 +1149,23 @@ void updateRingRatioHistogram(SharedResources &shared)
                 auto now = std::chrono::steady_clock::now();
                 if (now - lastUpdateTime >= updateInterval)
                 {
-                    // Add accumulated new data to the main buffer
-                    if (!newRingRatios.empty()) {
-                        ringRatios.insert(ringRatios.end(), newRingRatios.begin(), newRingRatios.end());
-                        newRingRatios.clear();
+                    // Get ring ratios from the shared autofocus buffer
+                    std::vector<double> ringRatios;
+                    {
+                        std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
                         
-                        // Only apply the MAX_PERSISTENT_SIZE limit if a significant number of new data points
-                        // have been added since the last clear (to avoid keeping old data after clearing)
-                        if (!histogramWasCleared || dataPointsSinceLastClear > 10000) {
-                            // Keep only the most recent entries
-                            const size_t MAX_PERSISTENT_SIZE = 10000;
-                            if (ringRatios.size() > MAX_PERSISTENT_SIZE) {
-                                ringRatios.erase(
-                                    ringRatios.begin(),
-                                    ringRatios.begin() + (ringRatios.size() - MAX_PERSISTENT_SIZE)
-                                );
+                        size_t bufferSize = shared.autofocusRingRatioBuffer.size();
+                        if (bufferSize > 0) {
+                            ringRatios.reserve(bufferSize);
+                            
+                            // Extract all ring ratios from the shared buffer
+                            for (size_t i = 0; i < bufferSize; i++) {
+                                const double* ratioPtr = reinterpret_cast<const double*>(
+                                    shared.autofocusRingRatioBuffer.getPointer(i));
+                                if (ratioPtr && std::isfinite(*ratioPtr)) {
+                                    ringRatios.push_back(*ratioPtr);
+                                }
                             }
-                            histogramWasCleared = false;
                         }
                     }
 
@@ -1135,44 +1176,20 @@ void updateRingRatioHistogram(SharedResources &shared)
                         {
                             ax->clear();
 
-                            // Check for invalid values
-                            bool hasInvalidValues = false;
-                            for (double ratio : ringRatios)
-                            {
-                                if (!std::isfinite(ratio))
-                                {
-                                    hasInvalidValues = true;
-                                    break;
-                                }
-                            }
+                            // Sort values to calculate statistics
+                            std::vector<double> sortedRatios = ringRatios;
+                            std::sort(sortedRatios.begin(), sortedRatios.end());
+                            
+                            // Create histogram using a fixed number of bins
+                            const int NUM_BINS = 25;
+                            auto h = hist(ringRatios, NUM_BINS);
+                            
+                            xlabel("Ring Ratio");
+                            ylabel("Frequency");
+                            title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples, Avg: " + 
+                                  std::to_string(shared.averageRingRatio.load()).substr(0, 5) + ")");
 
-                            if (!hasInvalidValues)
-                            {
-                                // Calculate average ring ratio
-                                double sum = 0.0;
-                                for (double ratio : ringRatios) {
-                                    sum += ratio;
-                                }
-                                double average = sum / ringRatios.size();
-                                
-                                // Store the average in the shared resource for dashboard display
-                                shared.averageRingRatio.store(average, std::memory_order_relaxed);
-                                
-                                // Create histogram using a fixed number of bins
-                                const int NUM_BINS = 25;
-                                auto h = hist(ringRatios, NUM_BINS);
-                                
-                                xlabel("Ring Ratio");
-                                ylabel("Frequency");
-                                title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples, Avg: " + 
-                                      std::to_string(average).substr(0, 5) + ")");
-
-                                f->draw();
-                            }
-                            else
-                            {
-                                std::cerr << "Invalid values detected in histogram data" << std::endl;
-                            }
+                            f->draw();
                         }
                         catch (const std::exception &e)
                         {
@@ -1603,10 +1620,6 @@ void temp_mockSample(const ImageParams &params, CircularBuffer &cameraBuffer, Ci
                           return threads; });
 }
 
-// create a thread that takes while not paused and while filteredResult is valid take filteredResult.ringratio and compare to the set point from config.json
-// if the average (excluding the top 3 max and min) ringratio (100 images) is less than the set point then send a voltage command to increase the voltage by 1 and vice versa
-
-
 void autofocusControlThread(SharedResources &shared)
 {
     // Read configuration from config.json
@@ -1640,107 +1653,56 @@ void autofocusControlThread(SharedResources &shared)
     std::cout << "Autofocus: COM port opened successfully!" << std::endl;
 
     // Initialize variables
-    double currentVoltage = config.value("initial_voltage", 10.0);
-    std::vector<double> ringRatioBuffer;
-    ringRatioBuffer.reserve(sampleSize);
+    double currentVoltage = config.value("initial_voltage", 50.0);
     bool autofocusEnabled = config.value("autofocus_enabled_at_start", true);
-    std::atomic<double>& currentVoltageDisplay = shared.currentVoltage; // Add this to SharedResources
     
     // Set initial voltage
     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
-    currentVoltageDisplay.store(currentVoltage);
-    // std::cout << "Autofocus: Initial voltage set to " << currentVoltage << "V" << std::endl;
+    shared.currentVoltage.store(currentVoltage);
 
     // Main autofocus loop
     while (!shared.done) {
-        // Check for keyboard input to toggle autofocus (could be added later)
-        // For now, we'll use the config setting
-
         if (autofocusEnabled && !shared.paused) {
-            // Get current ring ratio
-            double currentRingRatio = shared.frameRingRatios.load();
+            // Use the median ring ratio already calculated by the processing thread
+            double medianRingRatio = shared.medianRingRatio.load(std::memory_order_relaxed);
             
-            // std::cout << "Autofocus: Current ring ratio: " << currentRingRatio << std::endl; //DEBUG
-            if (currentRingRatio > 10) {
-                ringRatioBuffer.push_back(currentRingRatio);
-                // std::cout << "Autofocus: Ring ratio buffer size: " << ringRatioBuffer.size() << std::endl; //DEBUG
+            // Only perform autofocus control if we have a valid median value
+            if (medianRingRatio > 0.0) {
+                // Use median for autofocus control
+                double deviation = medianRingRatio - focusSetpoint;
+                bool inAcceptableRange = std::abs(deviation) <= focusRange;
 
-                // When we have enough samples, calculate average and adjust focus
-                if (ringRatioBuffer.size() >= sampleSize) {
-                    // std::cout << "Autofocus: Enough samples collected" << std::endl; //DEBUG
-                    // Sort values to remove outliers
-                    std::vector<double> sortedRatios = ringRatioBuffer;
-                    std::sort(sortedRatios.begin(), sortedRatios.end());
-                    // std::cout << "Autofocus: Sorted ring ratios: " << sortedRatios.size() << std::endl; //DEBUG
-                    // Remove top and bottom 5% of values to eliminate outliers
-                    const size_t outlierCount = static_cast<size_t>(sampleSize * 0.05);
-                    if (sortedRatios.size() > 2 * outlierCount) {
-                        // std::cout << "Autofocus: Removing outliers" << std::endl; //DEBUG
-                        sortedRatios.erase(sortedRatios.begin(), sortedRatios.begin() + outlierCount);
-                        sortedRatios.erase(sortedRatios.end() - outlierCount, sortedRatios.end());
-                    }
-                    
-                    // Calculate average of remaining values
-                    double avgRingRatio = 0.0;
-                    for (double ratio : sortedRatios) {
-                        avgRingRatio += ratio;
-                    }
-                    avgRingRatio /= sortedRatios.size();
-                    // std::cout << "Autofocus: Average ring ratio: " << avgRingRatio << std::endl; //DEBUG
-
-                    // Clear the buffer for next round
-                    ringRatioBuffer.clear();
-                    // std::cout << "Autofocus: Ring ratio buffer cleared" << std::endl; //DEBUG
-
-                    // Calculate how far we are from setpoint
-                    double deviation = avgRingRatio - focusSetpoint;
-                    bool inAcceptableRange = std::abs(deviation) <= focusRange;
-                    // std::cout << "Autofocus: Deviation: " << deviation << std::endl; //DEBUG
-                    // std::cout << "Autofocus: In acceptable range: " << inAcceptableRange << std::endl; //DEBUG
-
-
-                    // Adjust voltage based on ring ratio and acceptable range
-                    if (!inAcceptableRange) {
-                        // Outside acceptable range, make larger adjustments
-                        // std::cout << "Autofocus: Outside acceptable range" << std::endl; //DEBUG
-                        if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
-                            // Need to increase voltage
-                            currentVoltage = std::min(currentVoltage + voltageStep, maxVoltage);
-                            // std::cout << "Autofocus: Ring ratio too low (" << avgRingRatio 
-                            //           << "), increasing voltage to " << currentVoltage << "V" << std::endl;
-                        } else {
-                            // Need to decrease voltage
-                            currentVoltage = std::max(currentVoltage - voltageStep, minVoltage);
-                            // std::cout << "Autofocus: Ring ratio too high (" << avgRingRatio 
-                            //           << "), decreasing voltage to " << currentVoltage << "V" << std::endl;
-                        }
+                // Adjust voltage based on median ring ratio and acceptable range
+                if (!inAcceptableRange) {
+                    // Outside acceptable range, make larger adjustments
+                    if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
+                        // Need to increase voltage
+                        currentVoltage = std::min(currentVoltage + voltageStep, maxVoltage);
                     } else {
-                        // Within acceptable range, make fine adjustments or maintain
-                        // std::cout << "Autofocus: Ring ratio within acceptable range (" << avgRingRatio 
-                        //           << " vs setpoint " << focusSetpoint << " ±" << focusRange << ")" << std::endl;
-                        
-                        // Optional fine-tuning within the acceptable range
-                        if (std::abs(deviation) > focusRange/2) {
-                            // Fine adjustment to get closer to exact setpoint
-                            if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
-                                // Need to slightly increase voltage
-                                currentVoltage = std::min(currentVoltage + fineVoltageStep, maxVoltage);
-                            } else {
-                                // Need to slightly decrease voltage
-                                currentVoltage = std::max(currentVoltage - fineVoltageStep, minVoltage);
-                            }
+                        // Need to decrease voltage
+                        currentVoltage = std::max(currentVoltage - voltageStep, minVoltage);
+                    }
+                } else {
+                    // Within acceptable range, make fine adjustments or maintain
+                    // Optional fine-tuning within the acceptable range
+                    if (std::abs(deviation) > focusRange/2) {
+                        // Fine adjustment to get closer to exact setpoint
+                        if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
+                            // Need to slightly increase voltage
+                            currentVoltage = std::min(currentVoltage + fineVoltageStep, maxVoltage);
+                        } else {
+                            // Need to slightly decrease voltage
+                            currentVoltage = std::max(currentVoltage - fineVoltageStep, minVoltage);
                         }
                     }
-                    
-                    // Apply the new voltage
-                    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
-                    currentVoltageDisplay.store(currentVoltage);
-                    
-                    // Read back actual voltage to verify
-                    double actualVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
-                    // std::cout << "Autofocus: Voltage set to " << currentVoltage 
-                    //           << "V, actual reading: " << actualVoltage << "V" << std::endl;
                 }
+                
+                // Apply the new voltage
+                XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
+                shared.currentVoltage.store(currentVoltage);
+                
+                // Read back actual voltage to verify
+                double actualVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
             }
         }
         
@@ -1750,13 +1712,10 @@ void autofocusControlThread(SharedResources &shared)
     
     // Set voltage to safe level before exiting
     double safeVoltage = config.value("safe_shutdown_voltage", 0.0);
-    // std::cout << "Autofocus: Setting voltage to safe shutdown level: " << safeVoltage << "V" << std::endl;
     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, safeVoltage);
     
     // Clean up
-    // std::cout << "Autofocus: Closing COM port..." << std::endl;
     CloseSer();
-    // std::cout << "Autofocus: COM port closed." << std::endl;
     
     // Signal that this thread is ready to be joined
     {

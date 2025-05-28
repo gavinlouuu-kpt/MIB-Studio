@@ -140,6 +140,11 @@ struct SharedResources
     std::atomic<size_t> recordedItemsCount{0}; // Counter for items recorded during 'running' state
     std::atomic<bool> clearHistogramData{false}; // Flag to clear histogram data
     std::atomic<double> averageRingRatio{0.0}; // Average ring ratio for dashboard display
+    std::atomic<double> minRingRatio{0.0}; // Minimum ring ratio for dashboard display
+    std::atomic<double> maxRingRatio{0.0}; // Maximum ring ratio for dashboard display
+    std::atomic<double> medianRingRatio{0.0}; // Median ring ratio for dashboard display
+    std::atomic<size_t> ringRatioBufferSize{0}; // Size of ring ratio buffer used in autofocus
+    std::atomic<double> validFramesPerSecond{0.0}; // Valid frames per second from processing thread
     
     // Thread shutdown tracking
     std::atomic<int> activeThreadCount{0};
@@ -222,6 +227,10 @@ struct SharedResources
     std::mutex processingConfigMutex;
     // std::atomic<bool> triggerOut{false};
     std::atomic<bool> processTrigger{false};
+
+    // Ring ratio buffer managed by processing thread, consumed by autofocus thread
+    CircularBuffer autofocusRingRatioBuffer{1000, sizeof(double)}; // Buffer for ring ratios for autofocus
+    std::mutex autofocusRingRatioMutex;
 };
 
 // Function declarations
