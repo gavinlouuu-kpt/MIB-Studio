@@ -1630,12 +1630,11 @@ void autofocusControlThread(SharedResources &shared)
     const double focusSetpoint = config.value("focus_setpoint", 20.0);
     const double focusRange = config.value("focus_range", 0.5);  // Acceptable range around setpoint (±0.5)
     const bool focusDirection = config.value("focus_direction", true); // true = increase voltage increases ring ratio
-    const int sampleSize = config.value("autofocus_sample_size", 100);  // Reduced from 1000 for faster response
     const double voltageStep = config.value("autofocus_voltage_step", 1.0);
     const double fineVoltageStep = config.value("autofocus_fine_voltage_step", 0.2);  // Smaller step for fine adjustments
     const double maxVoltage = config.value("autofocus_max_voltage", 100.0);
     const double minVoltage = config.value("autofocus_min_voltage", 0.0);
-
+    const double initialVoltage = config.value("initial_voltage", 50.0);
     // Initialize serial connection
     int result = OpenComConnectRS232(comPort, baudRate);
     if (result == 0) {
@@ -1653,21 +1652,39 @@ void autofocusControlThread(SharedResources &shared)
     std::cout << "Autofocus: COM port opened successfully!" << std::endl;
 
     // Initialize variables
-    double currentVoltage = config.value("initial_voltage", 50.0);
+    double currentVoltage = shared.currentVoltage.store(XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0));
     bool autofocusEnabled = config.value("autofocus_enabled_at_start", true);
     
     // Set initial voltage
-    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
-    shared.currentVoltage.store(currentVoltage);
+    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, initialVoltage);
 
     // Main autofocus loop
     while (!shared.done) {
+        auto handleKeypress = [&](int key)
+        {
+            if (key == 72) // up arrow key
+            { 
+                currentVoltage = std::min(currentVoltage + voltageStep, maxVoltage);
+                // clear autofocusRingRatioBuffer 
+                shared.autofocusRingRatioBuffer.clear();
+            }
+            else if (key == 80) // down arrow key
+            {
+                currentVoltage = std::max(currentVoltage - voltageStep, minVoltage);
+                // clear ring ratio buffer
+                shared.autofocusRingRatioBuffer.clear();
+            }
+            XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
+            shared.currentVoltage.store(currentVoltage);
+        };
         if (autofocusEnabled && !shared.paused) {
+            currentVoltage = shared.currentVoltage.store(XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0)); // Update to latest voltage
+
             // Use the median ring ratio already calculated by the processing thread
             double medianRingRatio = shared.medianRingRatio.load(std::memory_order_relaxed);
             
             // Only perform autofocus control if we have a valid median value
-            if (medianRingRatio > 0.0) {
+            if (medianRingRatio > 0.0 && shared.autofocusRingRatioBuffer.size() > 100) {
                 // Use median for autofocus control
                 double deviation = medianRingRatio - focusSetpoint;
                 bool inAcceptableRange = std::abs(deviation) <= focusRange;
@@ -1694,6 +1711,7 @@ void autofocusControlThread(SharedResources &shared)
                             // Need to slightly decrease voltage
                             currentVoltage = std::max(currentVoltage - fineVoltageStep, minVoltage);
                         }
+
                     }
                 }
                 
@@ -1701,8 +1719,6 @@ void autofocusControlThread(SharedResources &shared)
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
                 shared.currentVoltage.store(currentVoltage);
                 
-                // Read back actual voltage to verify
-                double actualVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
             }
         }
         
@@ -1726,4 +1742,5 @@ void autofocusControlThread(SharedResources &shared)
     
     std::cout << "Autofocus thread interrupted." << std::endl;
 }
+
 
