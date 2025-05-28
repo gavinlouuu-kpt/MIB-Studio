@@ -1675,19 +1675,15 @@ void autofocusControlThread(SharedResources &shared)
         // Check for keyboard input (non-blocking)
         if (_kbhit()) {
             int key = _getch();
-            
-            if (key == 224) { // Extended key prefix on Windows
-                key = _getch(); // Get the actual extended key
-                
-                if (key == 72) { // Up arrow
-                    // Manual voltage increase
-                    double newVoltage = std::min(currentVoltage + manualVoltageStep, maxVoltage);
-                    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
-                    currentVoltage = newVoltage;
-                    shared.currentVoltage.store(currentVoltage);
+            if (key == 'z') { // Up arrow
+                // Manual voltage increase
+                double newVoltage = std::min(currentVoltage + manualVoltageStep, maxVoltage);
+                XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
+                currentVoltage = newVoltage;
+                shared.currentVoltage.store(currentVoltage);
                     std::cout << "Manual voltage increased to: " << currentVoltage << "V" << std::endl;
                 }
-                else if (key == 80) { // Down arrow
+            else if (key == 'x') { // Down arrow
                     // Manual voltage decrease
                     double newVoltage = std::max(currentVoltage - manualVoltageStep, minVoltage);
                     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
@@ -1696,15 +1692,11 @@ void autofocusControlThread(SharedResources &shared)
                     std::cout << "Manual voltage decreased to: " << currentVoltage << "V" << std::endl;
                 }
             }
-            else if (key == 'm' || key == 'M') {
-                // Toggle manual mode
-                manualMode = !manualMode;
-                std::cout << "Autofocus manual mode " << (manualMode ? "enabled" : "disabled") << std::endl;
-            }
+       
         }
         
         // Only run automatic control if not in manual mode and autofocus is enabled
-        if (!manualMode && autofocusEnabled && !shared.paused) {
+        if (autofocusEnabled && !shared.paused) {
             currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0); // Update to latest voltage
             shared.currentVoltage.store(currentVoltage);
 
