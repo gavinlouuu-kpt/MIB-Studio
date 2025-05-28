@@ -249,9 +249,8 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("  S: Save all frames to disk"),
                                                          text("  F: Configure eGrabber settings"),
                                                          text("Autofocus Manual Control:"),
-                                                         text("  M: Toggle autofocus manual/auto mode"),
-                                                         text("  Up Arrow: Increase voltage (+1V)"),
-                                                         text("  Down Arrow: Decrease voltage (-1V)"),
+                                                         text("  Z: Increase voltage (+1V)"),
+                                                         text("  X: Decrease voltage (-1V)"),
                                                          text("ROI: Click and drag to select region"),
                                                      }));
     };
@@ -1661,41 +1660,38 @@ void autofocusControlThread(SharedResources &shared)
     double currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
     shared.currentVoltage.store(currentVoltage);
     bool autofocusEnabled = config.value("autofocus_enabled_at_start", true);
-    bool manualMode = false; // Local manual mode flag
     
     // Set initial voltage
     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, initialVoltage);
     currentVoltage = initialVoltage;
     shared.currentVoltage.store(currentVoltage);
 
-    std::cout << "Autofocus Manual Control: Press Up/Down arrows for manual voltage control, 'M' to toggle auto/manual mode" << std::endl;
+    std::cout << "Autofocus Manual Control: Press 'z' to increase voltage, 'x' to decrease voltage" << std::endl;
 
     // Main autofocus loop
     while (!shared.done) {
         // Check for keyboard input (non-blocking)
         if (_kbhit()) {
             int key = _getch();
-            if (key == 'z') { // Up arrow
+            if (key == 'z' || key == 'Z') {
                 // Manual voltage increase
                 double newVoltage = std::min(currentVoltage + manualVoltageStep, maxVoltage);
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
                 currentVoltage = newVoltage;
                 shared.currentVoltage.store(currentVoltage);
-                    std::cout << "Manual voltage increased to: " << currentVoltage << "V" << std::endl;
-                }
-            else if (key == 'x') { // Down arrow
-                    // Manual voltage decrease
-                    double newVoltage = std::max(currentVoltage - manualVoltageStep, minVoltage);
-                    XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
-                    currentVoltage = newVoltage;
-                    shared.currentVoltage.store(currentVoltage);
-                    std::cout << "Manual voltage decreased to: " << currentVoltage << "V" << std::endl;
-                }
+                std::cout << "Manual voltage increased to: " << currentVoltage << "V" << std::endl;
             }
-       
+            else if (key == 'x' || key == 'X') {
+                // Manual voltage decrease
+                double newVoltage = std::max(currentVoltage - manualVoltageStep, minVoltage);
+                XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
+                currentVoltage = newVoltage;
+                shared.currentVoltage.store(currentVoltage);
+                std::cout << "Manual voltage decreased to: " << currentVoltage << "V" << std::endl;
+            }
         }
         
-        // Only run automatic control if not in manual mode and autofocus is enabled
+        // Run automatic control if autofocus is enabled
         if (autofocusEnabled && !shared.paused) {
             currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0); // Update to latest voltage
             shared.currentVoltage.store(currentVoltage);
@@ -1731,14 +1727,12 @@ void autofocusControlThread(SharedResources &shared)
                             // Need to slightly decrease voltage
                             currentVoltage = std::max(currentVoltage - fineVoltageStep, minVoltage);
                         }
-
                     }
                 }
                 
                 // Apply the new voltage
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
                 shared.currentVoltage.store(currentVoltage);
-                
             }
         }
         

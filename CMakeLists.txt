@@ -4,6 +4,11 @@ project(MIB_Studio)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Suppress character encoding warnings from third-party headers
+if(MSVC)
+    add_compile_options(/wd4828)  # Suppress C4828: character encoding warning
+endif()
+
 find_package(Matplot++ CONFIG REQUIRED)
 find_package(ftxui CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
