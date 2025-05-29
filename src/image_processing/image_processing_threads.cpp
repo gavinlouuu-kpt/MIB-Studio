@@ -1145,7 +1145,7 @@ void updateRingRatioHistogram(SharedResources &shared)
                     if (shared.clearHistogramData)
                     {
                         shared.clearHistogramData = false;
-                        std::cout << "Histogram data cleared" << std::endl;
+                        // std::cout << "Histogram data cleared" << std::endl;
                         
                         // Reset the average ring ratio when clearing
                         shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
@@ -1311,9 +1311,26 @@ void keyboardHandlingThread(
             std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
             shared.deformabilityBuffer.clear();
             
-            // Set flag to clear histogram data
+            // Set flag to clear histogram data (for histogram thread if it's running)
             shared.clearHistogramData = true;
-            std::cout << "Clearing histogram data..." << std::endl;
+            
+            // Also clear the ring ratio buffer directly (in case histogram is disabled)
+            {
+                std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+                shared.autofocusRingRatioBuffer.clear();
+                shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
+            }
+            
+            // Reset ring ratio statistics
+            shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
+            shared.minRingRatio.store(0.0, std::memory_order_relaxed);
+            shared.maxRingRatio.store(0.0, std::memory_order_relaxed);
+            shared.medianRingRatio.store(0.0, std::memory_order_relaxed);
+            
+            // Notify histogram thread (if running) to process the clear request
+            shared.scatterDataCondition.notify_one();
+            
+            // std::cout << "Clearing histogram data and ring ratio buffer..." << std::endl;
         }
         else if (key == 'S')
         {
@@ -1419,7 +1436,7 @@ void keyboardHandlingThread(
             // Toggle autofocus enabled/disabled
             bool currentState = shared.autofocusEnabled.load();
             shared.autofocusEnabled.store(!currentState);
-            std::cout << "Autofocus " << (shared.autofocusEnabled.load() ? "enabled" : "disabled") << std::endl;
+            // std::cout << "Autofocus " << (shared.autofocusEnabled.load() ? "enabled" : "disabled") << std::endl;
         }
         shared.updated = true;
     };
@@ -1692,7 +1709,7 @@ void autofocusControlThread(SharedResources &shared)
         return;
     }
     
-    std::cout << "Autofocus: COM port opened successfully!" << std::endl;
+    // std::cout << "Autofocus: COM port opened successfully!" << std::endl;
     shared.autofocusComPortOpen.store(true);
 
     // Initialize variables
@@ -1719,7 +1736,7 @@ void autofocusControlThread(SharedResources &shared)
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
                 currentVoltage = newVoltage;
                 shared.currentVoltage.store(currentVoltage);
-                std::cout << "Manual voltage increased to: " << currentVoltage << "V" << std::endl;
+                // std::cout << "Manual voltage increased to: " << currentVoltage << "V" << std::endl;
                 shared.increaseVoltageRequest.store(false);
             }
             
@@ -1729,7 +1746,7 @@ void autofocusControlThread(SharedResources &shared)
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
                 currentVoltage = newVoltage;
                 shared.currentVoltage.store(currentVoltage);
-                std::cout << "Manual voltage decreased to: " << currentVoltage << "V" << std::endl;
+                // std::cout << "Manual voltage decreased to: " << currentVoltage << "V" << std::endl;
                 shared.decreaseVoltageRequest.store(false);
             }
         }
