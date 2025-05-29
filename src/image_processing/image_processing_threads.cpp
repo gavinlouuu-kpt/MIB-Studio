@@ -1424,12 +1424,22 @@ void keyboardHandlingThread(
             // Request voltage increase
             std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
             shared.increaseVoltageRequest.store(true);
+            {
+                std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+                shared.autofocusRingRatioBuffer.clear();
+                shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
+            }
         }
         else if ((key == 'x' || key == 'X') && shared.autofocusComPortOpen.load())
         {
             // Request voltage decrease
             std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
             shared.decreaseVoltageRequest.store(true);
+            {
+                std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+                shared.autofocusRingRatioBuffer.clear();
+                shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
+            }
         }
         else if ((key == 'm' || key == 'M') && shared.autofocusComPortOpen.load())
         {
