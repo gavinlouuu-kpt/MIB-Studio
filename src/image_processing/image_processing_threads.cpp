@@ -234,6 +234,24 @@ void metricDisplayThread(SharedResources &shared)
 
     auto render_keyboard_instructions = [&]()
     {
+        // Create autofocus control instructions based on COM port status
+        auto autofocusInstructions = [&]() {
+            if (shared.autofocusComPortOpen.load()) {
+                std::string autofocusStatus = shared.autofocusEnabled.load() ? "ON" : "OFF";
+                return vbox({
+                    text("Autofocus Manual Control:"),
+                    text("  Z: Increase voltage (+1V)"),
+                    text("  X: Decrease voltage (-1V)"),
+                    text("  M: Toggle autofocus (currently " + autofocusStatus + ")")
+                });
+            } else {
+                return vbox({
+                    text("Autofocus Manual Control:"),
+                    text("  (COM port not available)")
+                });
+            }
+        };
+        
         return window(text("Keyboard Instructions"), vbox({
                                                          text("ESC: Exit program"),
                                                          text("Space: Pause/Resume live feed"),
@@ -248,9 +266,7 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("  R: Toggle data recording"),
                                                          text("  S: Save all frames to disk"),
                                                          text("  F: Configure eGrabber settings"),
-                                                         text("Autofocus Manual Control:"),
-                                                         text("  Z: Increase voltage (+1V)"),
-                                                         text("  X: Decrease voltage (-1V)"),
+                                                         autofocusInstructions(),
                                                          text("ROI: Click and drag to select region"),
                                                      }));
     };
@@ -1385,6 +1401,26 @@ void keyboardHandlingThread(
             // Toggle running state
             shared.running = !shared.running;
         }
+        // Autofocus Manual Control - only available when COM port is open
+        else if ((key == 'z' || key == 'Z') && shared.autofocusComPortOpen.load())
+        {
+            // Request voltage increase
+            std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
+            shared.increaseVoltageRequest.store(true);
+        }
+        else if ((key == 'x' || key == 'X') && shared.autofocusComPortOpen.load())
+        {
+            // Request voltage decrease
+            std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
+            shared.decreaseVoltageRequest.store(true);
+        }
+        else if ((key == 'm' || key == 'M') && shared.autofocusComPortOpen.load())
+        {
+            // Toggle autofocus enabled/disabled
+            bool currentState = shared.autofocusEnabled.load();
+            shared.autofocusEnabled.store(!currentState);
+            std::cout << "Autofocus " << (shared.autofocusEnabled.load() ? "enabled" : "disabled") << std::endl;
+        }
         shared.updated = true;
     };
 
@@ -1644,6 +1680,7 @@ void autofocusControlThread(SharedResources &shared)
     int result = OpenComConnectRS232(comPort, baudRate);
     if (result == 0) {
         std::cerr << "ERROR: Failed to open COM port for autofocus!" << std::endl;
+        shared.autofocusComPortOpen.store(false);
         
         // Signal that this thread is ready to be joined since we can't continue
         {
@@ -1654,45 +1691,51 @@ void autofocusControlThread(SharedResources &shared)
         
         return;
     }
+    
     std::cout << "Autofocus: COM port opened successfully!" << std::endl;
+    shared.autofocusComPortOpen.store(true);
 
     // Initialize variables
     double currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
     shared.currentVoltage.store(currentVoltage);
-    bool autofocusEnabled = config.value("autofocus_enabled_at_start", true);
+    
+    // Initialize autofocus enabled state from config
+    shared.autofocusEnabled.store(config.value("autofocus_enabled_at_start", true));
     
     // Set initial voltage
     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, initialVoltage);
     currentVoltage = initialVoltage;
     shared.currentVoltage.store(currentVoltage);
 
-    std::cout << "Autofocus Manual Control: Press 'z' to increase voltage, 'x' to decrease voltage" << std::endl;
-
     // Main autofocus loop
     while (!shared.done) {
-        // Check for keyboard input (non-blocking)
-        if (_kbhit()) {
-            int key = _getch();
-            if (key == 'z' || key == 'Z') {
+        // Handle manual voltage control requests from keyboard thread
+        {
+            std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
+            
+            if (shared.increaseVoltageRequest.load()) {
                 // Manual voltage increase
                 double newVoltage = std::min(currentVoltage + manualVoltageStep, maxVoltage);
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
                 currentVoltage = newVoltage;
                 shared.currentVoltage.store(currentVoltage);
                 std::cout << "Manual voltage increased to: " << currentVoltage << "V" << std::endl;
+                shared.increaseVoltageRequest.store(false);
             }
-            else if (key == 'x' || key == 'X') {
+            
+            if (shared.decreaseVoltageRequest.load()) {
                 // Manual voltage decrease
                 double newVoltage = std::max(currentVoltage - manualVoltageStep, minVoltage);
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
                 currentVoltage = newVoltage;
                 shared.currentVoltage.store(currentVoltage);
                 std::cout << "Manual voltage decreased to: " << currentVoltage << "V" << std::endl;
+                shared.decreaseVoltageRequest.store(false);
             }
         }
         
         // Run automatic control if autofocus is enabled
-        if (autofocusEnabled && !shared.paused) {
+        if (shared.autofocusEnabled.load() && !shared.paused) {
             currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0); // Update to latest voltage
             shared.currentVoltage.store(currentVoltage);
 
@@ -1746,6 +1789,7 @@ void autofocusControlThread(SharedResources &shared)
     
     // Clean up
     CloseSer();
+    shared.autofocusComPortOpen.store(false);
     
     // Signal that this thread is ready to be joined
     {

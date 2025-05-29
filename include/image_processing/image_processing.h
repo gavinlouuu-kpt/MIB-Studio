@@ -231,6 +231,13 @@ struct SharedResources
     // Ring ratio buffer managed by processing thread, consumed by autofocus thread
     CircularBuffer autofocusRingRatioBuffer{1000, sizeof(double)}; // Buffer for ring ratios for autofocus
     std::mutex autofocusRingRatioMutex;
+
+    // Autofocus control coordination between keyboard and autofocus threads
+    std::atomic<bool> autofocusComPortOpen{false}; // Indicates if COM port is successfully opened
+    std::atomic<bool> autofocusEnabled{true}; // Enable/disable autofocus control
+    std::atomic<bool> increaseVoltageRequest{false}; // Request to increase voltage from keyboard
+    std::atomic<bool> decreaseVoltageRequest{false}; // Request to decrease voltage from keyboard
+    std::mutex autofocusControlMutex; // Mutex for voltage control coordination
 };
 
 // Function declarations
