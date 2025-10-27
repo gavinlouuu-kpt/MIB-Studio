@@ -23,7 +23,7 @@
 // Suppress warning about illegal character in XMT_DLL_SER.h
 #ifdef _MSC_VER
 #pragma warning(push)
-#pragma warning(disable: 4828)
+#pragma warning(disable : 4828)
 #endif
 
 #include "XMT_DLL_SER.h"
@@ -134,7 +134,7 @@ ImageParams initializeGrabber(EGrabber<CallbackOnDemand> &grabber)
     // Read target FPS from config.json
     json config = readConfig("config.json");
     const int cameraTargetFPS = config.value("cameraTargetFPS", 5000); // Default to 5000 if not specified
-    params.bufferCount = cameraTargetFPS; // You can adjust this as needed
+    params.bufferCount = cameraTargetFPS;                              // You can adjust this as needed
 
     grabber.stop();
     return params;
@@ -147,21 +147,22 @@ void initializeBackgroundFrame(SharedResources &shared, const ImageParams &param
     cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground, cv::Size(3, 3), 0);
 }
 
-// void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
-// {
-//     // grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
-//     // grabber.setString<InterfaceModule>("LineMode", "Output");
-//     grabber.setString<InterfaceModule>("LineSource", shared.triggerOut ? "High" : "Low");
-// }
+void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+{
+    // grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
+    // grabber.setString<InterfaceModule>("LineMode", "Output");
+    grabber.setString<InterfaceModule>("LineSource", shared.manualTriggerEnabled.load() ? "High" : "Low");
+}
 
-// void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
-// {
-//     while (!shared.done)
-//     {
-//         triggerOut(grabber, shared);
-//         // wait do not sleep
-//     }
-// }
+void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
+{
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    while (!shared.done)
+    {
+        triggerOut(grabber, shared);
+        // wait do not sleep
+    }
+}
 
 void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
@@ -206,7 +207,7 @@ void hybrid_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &param
                           std::vector<std::thread> threads;
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
                           threads.emplace_back(simulateCameraThread, std::ref(cameraBuffer), std::ref(shared), std::ref(params));
-                        //   threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
+                          threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared));
                           threads.emplace_back(processTriggerThread, std::ref(grabber), std::ref(shared));
 
                           grabber.start();
@@ -249,7 +250,7 @@ void temp_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params,
                           std::vector<std::thread> threads;
                           setupCommonThreads(shared, saveDir, circularBuffer, processingBuffer, params, threads);
                           
-                        //   threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared)); // previous testing trigger 
+                          threads.emplace_back(triggerThread, std::ref(grabber), std::ref(shared)); // previous testing trigger 
                           threads.emplace_back(processTriggerThread, std::ref(grabber), std::ref(shared));
 
                           grabber.start();

@@ -15,7 +15,7 @@
 #include <matplot/matplot.h>
 #include <thread>
 #include <atomic>
-#include <deque>  // Add this for std::deque
+#include <deque>   // Add this for std::deque
 #include <iomanip> // For std::setprecision
 #include <sstream> // For std::stringstream
 #include <random>
@@ -42,7 +42,7 @@ void simulateCameraThread(
     auto lastFrameTime = clock::now();
     auto fpsStartTime = clock::now();
     size_t frameCount = 0;
-    
+
     // Read target FPS from config.json
     json config = readConfig("config.json");
     const int simCameraTargetFPS = config.value("simCameraTargetFPS", 5000); // Default to 5000 if not specified
@@ -78,14 +78,14 @@ void simulateCameraThread(
         }
         shared.updated = true;
     }
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
         shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
         shared.threadShutdownCondition.notify_one();
     }
-    
+
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
@@ -219,8 +219,8 @@ void metricDisplayThread(SharedResources &shared)
                                                 text(shared.paused.load() ? "Yes" : "No")}),
                                           hbox({text("Overlay Mode: "),
                                                 text(shared.overlayMode.load() ? "Yes" : "No")}),
-                                          //   hbox({text("Trigger Out: "),
-                                          // text(shared.triggerOut.load() ? "Yes" : "No")}),
+                                          hbox({text("Manual Trigger: "),
+                                                text(shared.manualTriggerEnabled.load() ? "ON" : "OFF")}),
                                           hbox({text("Current Frame Index: "),
                                                 text(std::to_string(shared.currentFrameIndex.load()))}),
                                           hbox({text("Saving Speed: "),
@@ -235,23 +235,23 @@ void metricDisplayThread(SharedResources &shared)
     auto render_keyboard_instructions = [&]()
     {
         // Create autofocus control instructions based on COM port status
-        auto autofocusInstructions = [&]() {
-            if (shared.autofocusComPortOpen.load()) {
+        auto autofocusInstructions = [&]()
+        {
+            if (shared.autofocusComPortOpen.load())
+            {
                 std::string autofocusStatus = shared.autofocusEnabled.load() ? "ON" : "OFF";
-                return vbox({
-                    text("Autofocus Manual Control:"),
-                    text("  Z: Increase voltage (+1V)"),
-                    text("  X: Decrease voltage (-1V)"),
-                    text("  M: Toggle autofocus (currently " + autofocusStatus + ")")
-                });
-            } else {
-                return vbox({
-                    text("Autofocus Manual Control:"),
-                    text("  (COM port not available)")
-                });
+                return vbox({text("Autofocus Manual Control:"),
+                             text("  Z: Increase voltage (+1V)"),
+                             text("  X: Decrease voltage (-1V)"),
+                             text("  M: Toggle autofocus (currently " + autofocusStatus + ")")});
+            }
+            else
+            {
+                return vbox({text("Autofocus Manual Control:"),
+                             text("  (COM port not available)")});
             }
         };
-        
+
         return window(text("Keyboard Instructions"), vbox({
                                                          text("ESC: Exit program"),
                                                          text("Space: Pause/Resume live feed"),
@@ -266,6 +266,7 @@ void metricDisplayThread(SharedResources &shared)
                                                          text("  R: Toggle data recording"),
                                                          text("  S: Save all frames to disk"),
                                                          text("  F: Configure eGrabber settings"),
+                                                         text("  T: Toggle manual trigger mode"),
                                                          autofocusInstructions(),
                                                          text("ROI: Click and drag to select region"),
                                                      }));
@@ -293,7 +294,7 @@ void metricDisplayThread(SharedResources &shared)
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
@@ -305,154 +306,156 @@ void metricDisplayThread(SharedResources &shared)
 void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &circularBuffer, const ImageParams &imageParams)
 {
     const std::string windowName = "Valid Frames";
-    
+
     // Create a window for the valid frames display
     cv::namedWindow(windowName, cv::WINDOW_AUTOSIZE);
-    
+
     // Get dimensions from image params
     int height = static_cast<int>(imageParams.height);
     int width = static_cast<int>(imageParams.width);
-    
+
     // Flag to track if display needs updating
     bool displayNeedsUpdate = false;
-    
+
     // Pre-create a placeholder image for when no valid frames are available
     cv::Mat noValidFramesImg(height, width, CV_8UC3, cv::Scalar(40, 40, 40));
-    cv::putText(noValidFramesImg, "Waiting for valid frames...", 
-                cv::Point(width/2 - 150, height/2), 
+    cv::putText(noValidFramesImg, "Waiting for valid frames...",
+                cv::Point(width / 2 - 150, height / 2),
                 cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(200, 200, 200), 2);
-    
+
     // Local cache of valid frames to avoid locking the mutex during display
     std::deque<SharedResources::ValidFrameData> validFramesCache;
-    
+
     // Frame rate control - maximum 60 FPS
     const std::chrono::microseconds frameInterval(1000000 / 60); // 60 FPS = 16.67ms
     auto lastFrameTime = std::chrono::high_resolution_clock::now();
-    
+
     // Wait for initialization
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    
+
     while (!shared.done)
     {
         // Use condition variable with timeout to wait for new frames
         {
             std::unique_lock<std::mutex> lock(shared.validFramesMutex);
-            
+
             // Check done flag immediately before waiting
-            if (shared.done) {
+            if (shared.done)
+            {
                 break;
             }
-            
+
             // Use a shorter timeout to check done flag more frequently
             const auto shortTimeout = std::chrono::milliseconds(10);
-            
+
             // Wait for notification with timeout or until a new frame is available or done
-            shared.validFramesCondition.wait_for(lock, shortTimeout, [&shared]() {
-                return shared.newValidFrameAvailable || shared.done;
-            });
-            
+            shared.validFramesCondition.wait_for(lock, shortTimeout, [&shared]()
+                                                 { return shared.newValidFrameAvailable || shared.done; });
+
             // Check done flag again after waiting
-            if (shared.done) {
+            if (shared.done)
+            {
                 break;
             }
-            
+
             // Enforce maximum frame rate
             auto now = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastFrameTime);
-            if (elapsed < frameInterval && !shared.done) 
+            if (elapsed < frameInterval && !shared.done)
             {
                 // Continue to next iteration with done check
                 continue;
             }
-            
+
             // Process new frames if available
-            if (shared.newValidFrameAvailable && !shared.validFramesQueue.empty()) 
+            if (shared.newValidFrameAvailable && !shared.validFramesQueue.empty())
             {
                 // Copy the queue to our local cache
                 validFramesCache = shared.validFramesQueue;
                 displayNeedsUpdate = true;
-                
+
                 // Reset the flag
                 shared.newValidFrameAvailable = false;
             }
         } // Unlock mutex here to minimize lock time
-        
+
         // Check done flag again outside the lock
-        if (shared.done) {
+        if (shared.done)
+        {
             break;
         }
-        
+
         // Update the display if needed
         if (displayNeedsUpdate || validFramesCache.empty())
         {
             // Reset the flag
             displayNeedsUpdate = false;
-            
+
             // Create combined display image
             if (!validFramesCache.empty())
             {
                 int totalHeight = height * validFramesCache.size();
                 cv::Mat combinedDisplay(totalHeight, width, CV_8UC3);
-                
+
                 // Fill the combined display with the valid frames
                 for (size_t i = 0; i < validFramesCache.size(); i++)
                 {
                     cv::Mat displayRegion = combinedDisplay(cv::Rect(0, i * height, width, height));
-                    
+
                     // Convert original to BGR
                     cv::Mat colorFrame;
                     cv::cvtColor(validFramesCache[i].originalImage, colorFrame, cv::COLOR_GRAY2BGR);
-                    
+
                     // Create overlay from processed image
                     if (shared.overlayMode)
                     {
                         // Create a mask from the processed image
                         cv::Mat mask = (validFramesCache[i].processedImage > 0);
-                        
+
                         // Create a colored overlay
                         cv::Mat overlay = cv::Mat::zeros(colorFrame.size(), CV_8UC3);
-                        
+
                         // Use overlay color based on the filter result
                         cv::Scalar overlayColor = determineOverlayColor(validFramesCache[i].result, true);
-                        
+
                         // Create semi-transparent overlay
                         const double opacity = 0.3;
                         overlay.setTo(overlayColor, mask);
                         cv::addWeighted(colorFrame, 1.0, overlay, opacity, 0, colorFrame);
                     }
-                    
+
                     // Draw ROI rectangle
                     {
                         std::lock_guard<std::mutex> roiLock(shared.roiMutex);
                         cv::rectangle(colorFrame, shared.roi, cv::Scalar(0, 255, 0), 1);
                     }
-                    
+
                     // Add timestamp and metrics text
                     std::stringstream ss;
-          
-                    
+
                     ss.str("");
                     ss << "Def: " << std::fixed << std::setprecision(3) << validFramesCache[i].result.deformability;
-                    cv::putText(colorFrame, ss.str(), cv::Point(10, 40), 
+                    cv::putText(colorFrame, ss.str(), cv::Point(10, 40),
                                 cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
-                    
+
                     ss.str("");
                     ss << "Area: " << std::fixed << std::setprecision(1) << validFramesCache[i].result.area;
-                    cv::putText(colorFrame, ss.str(), cv::Point(10, 60), 
+                    cv::putText(colorFrame, ss.str(), cv::Point(10, 60),
                                 cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
-                    
+
                     // Add ring ratio if it's a valid frame with nested contours
-                    if (validFramesCache[i].result.isValid && validFramesCache[i].result.hasSingleInnerContour) {
+                    if (validFramesCache[i].result.isValid && validFramesCache[i].result.hasSingleInnerContour)
+                    {
                         ss.str("");
                         ss << "Ring Ratio: " << std::fixed << std::setprecision(3) << validFramesCache[i].result.ringRatio;
-                        cv::putText(colorFrame, ss.str(), cv::Point(10, 80), 
+                        cv::putText(colorFrame, ss.str(), cv::Point(10, 80),
                                     cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
                     }
-                    
+
                     // Copy to the combined display
                     colorFrame.copyTo(displayRegion);
                 }
-                
+
                 // Show the combined display
                 cv::imshow(windowName, combinedDisplay);
             }
@@ -461,31 +464,33 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
                 // Show placeholder when no valid frames are available
                 cv::imshow(windowName, noValidFramesImg);
             }
-            
+
             // Process UI events with a short timeout to check done flag frequently
-            if (cv::waitKey(1) >= 0 || shared.done) {
+            if (cv::waitKey(1) >= 0 || shared.done)
+            {
                 break;
             }
-            
+
             // Update last frame time
             lastFrameTime = std::chrono::high_resolution_clock::now();
         }
-        
+
         // Check done flag one more time to ensure responsiveness
-        if (shared.done) {
+        if (shared.done)
+        {
             break;
         }
     }
-    
+
     cv::destroyWindow(windowName);
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
         shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
         shared.threadShutdownCondition.notify_one();
     }
-    
+
     std::cout << "Valid frames display thread interrupted." << std::endl;
 }
 
@@ -505,10 +510,10 @@ void processingThreadTask(
     // const size_t area_threshold = 10;
     const uint8_t processedColor = 255; // grey scaled cell color
     shared.processTrigger = false;
-    
+
     // Initialize frame counter
     size_t frameCounter = 0;
-    
+
     // Initialize valid frames per second tracking
     size_t validFrameCount = 0;
     auto lastValidFrameTime = std::chrono::steady_clock::now();
@@ -547,47 +552,55 @@ void processingThreadTask(
                     shared.processTrigger = true;
                     shared.validProcessingFrame = true;
                     std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
-                    shared.autofocusRingRatioBuffer.push(reinterpret_cast<const uint8_t*>(&filterResult.ringRatio));
+                    shared.autofocusRingRatioBuffer.push(reinterpret_cast<const uint8_t *>(&filterResult.ringRatio));
                     shared.ringRatioBufferSize.store(shared.autofocusRingRatioBuffer.size(), std::memory_order_relaxed);
-                    
+
                     // Calculate ring ratio statistics from the buffer
-                    if (shared.autofocusRingRatioBuffer.size() > 0) {
+                    if (shared.autofocusRingRatioBuffer.size() > 0)
+                    {
                         std::vector<double> ringRatios;
                         ringRatios.reserve(shared.autofocusRingRatioBuffer.size());
-                        
+
                         // Extract all ring ratios from the buffer
-                        for (size_t i = 0; i < shared.autofocusRingRatioBuffer.size(); i++) {
-                            const double* ratioPtr = reinterpret_cast<const double*>(shared.autofocusRingRatioBuffer.getPointer(i));
-                            if (ratioPtr && std::isfinite(*ratioPtr)) {
+                        for (size_t i = 0; i < shared.autofocusRingRatioBuffer.size(); i++)
+                        {
+                            const double *ratioPtr = reinterpret_cast<const double *>(shared.autofocusRingRatioBuffer.getPointer(i));
+                            if (ratioPtr && std::isfinite(*ratioPtr))
+                            {
                                 ringRatios.push_back(*ratioPtr);
                             }
                         }
-                        
-                        if (!ringRatios.empty()) {
+
+                        if (!ringRatios.empty())
+                        {
                             // Sort for median calculation
                             std::vector<double> sortedRatios = ringRatios;
                             std::sort(sortedRatios.begin(), sortedRatios.end());
-                            
+
                             // Calculate statistics
                             double minRatio = sortedRatios.front();
                             double maxRatio = sortedRatios.back();
-                            
+
                             // Calculate median
                             double medianRatio;
                             size_t n = sortedRatios.size();
-                            if (n % 2 == 0) {
-                                medianRatio = (sortedRatios[n/2 - 1] + sortedRatios[n/2]) / 2.0;
-                            } else {
-                                medianRatio = sortedRatios[n/2];
+                            if (n % 2 == 0)
+                            {
+                                medianRatio = (sortedRatios[n / 2 - 1] + sortedRatios[n / 2]) / 2.0;
                             }
-                            
+                            else
+                            {
+                                medianRatio = sortedRatios[n / 2];
+                            }
+
                             // Calculate average
                             double avgRatio = 0.0;
-                            for (double ratio : ringRatios) {
+                            for (double ratio : ringRatios)
+                            {
                                 avgRatio += ratio;
                             }
                             avgRatio /= ringRatios.size();
-                            
+
                             // Store statistics in shared resources
                             shared.averageRingRatio.store(avgRatio, std::memory_order_relaxed);
                             shared.minRingRatio.store(minRatio, std::memory_order_relaxed);
@@ -595,22 +608,23 @@ void processingThreadTask(
                             shared.medianRingRatio.store(medianRatio, std::memory_order_relaxed);
                         }
                     }
-                    
+
                     // Count valid frames for FPS calculation
                     validFrameCount++;
-                    
+
                     // Update valid frames per second every second
                     auto currentTime = std::chrono::steady_clock::now();
-                    if (currentTime - lastValidFrameTime >= validFrameUpdateInterval) {
-                        double validFPS = static_cast<double>(validFrameCount) / 
-                                         std::chrono::duration<double>(currentTime - lastValidFrameTime).count();
+                    if (currentTime - lastValidFrameTime >= validFrameUpdateInterval)
+                    {
+                        double validFPS = static_cast<double>(validFrameCount) /
+                                          std::chrono::duration<double>(currentTime - lastValidFrameTime).count();
                         shared.validFramesPerSecond.store(validFPS, std::memory_order_relaxed);
-                        
+
                         // Reset counters for next interval
                         validFrameCount = 0;
                         lastValidFrameTime = currentTime;
                     }
-                    
+
                     auto plotMetrics = std::make_tuple(filterResult.deformability, filterResult.area);
                     {
                         std::lock_guard<std::mutex> circularitiesLock(shared.deformabilityBufferMutex);
@@ -620,9 +634,10 @@ void processingThreadTask(
 
                         shared.newScatterDataAvailable = true;
                         shared.scatterDataCondition.notify_one();
-                        
+
                         // If running is true, increment the recorded items counter
-                        if (shared.running) {
+                        if (shared.running)
+                        {
                             shared.recordedItemsCount.fetch_add(1, std::memory_order_relaxed);
                         }
 
@@ -654,11 +669,11 @@ void processingThreadTask(
                             }
                         }
                     }
-                    
+
                     // Add valid frame to the queue for the validFramesDisplayThread
                     {
                         std::lock_guard<std::mutex> validFramesLock(shared.validFramesMutex);
-                        
+
                         // Create the valid frame data
                         SharedResources::ValidFrameData validFrame;
                         validFrame.originalImage = inputImage.clone();
@@ -666,22 +681,23 @@ void processingThreadTask(
                         validFrame.result = filterResult;
                         validFrame.frameIndex = frameCounter++;
                         validFrame.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::system_clock::now().time_since_epoch()).count();
-                        
+                                                   std::chrono::system_clock::now().time_since_epoch())
+                                                   .count();
+
                         // Add to the front of the queue (newest first)
                         shared.validFramesQueue.push_front(std::move(validFrame));
-                        
+
                         // Keep only the latest 5 frames
                         const size_t MAX_VALID_FRAMES = 5;
-                        while (shared.validFramesQueue.size() > MAX_VALID_FRAMES) {
+                        while (shared.validFramesQueue.size() > MAX_VALID_FRAMES)
+                        {
                             shared.validFramesQueue.pop_back();
                         }
-                        
+
                         // Signal that a new valid frame is available
                         shared.newValidFrameAvailable = true;
                         shared.validFramesCondition.notify_one();
                     }
-
                 }
             }
 
@@ -698,14 +714,14 @@ void processingThreadTask(
             lock.unlock();
         }
     }
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
         shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
         shared.threadShutdownCondition.notify_one();
     }
-    
+
     std::cout << "Processing thread interrupted." << std::endl;
 }
 
@@ -721,7 +737,7 @@ void displayThreadTask(
     // Read target FPS from config.json
     json config = readConfig("config.json");
     const int displayFPS = config.value("displayFPS", 60); // Default to 5000 if not specified
-    const uint8_t processedColor = 255; // grey scaled cell color
+    const uint8_t processedColor = 255;                    // grey scaled cell color
 
     const std::chrono::duration<double> frameDuration(1.0 / displayFPS); // Increase to 60 FPS for smoother response
     auto nextFrameTime = std::chrono::steady_clock::now();
@@ -950,14 +966,14 @@ void displayThreadTask(
     }
 
     cv::destroyAllWindows();
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
         shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
         shared.threadShutdownCondition.notify_one();
     }
-    
+
     std::cout << "Display thread interrupted." << std::endl;
 }
 
@@ -1133,28 +1149,28 @@ void updateRingRatioHistogram(SharedResources &shared)
                 // Wait for new data or timeout
                 {
                     std::unique_lock<std::mutex> lock(shared.deformabilityBufferMutex);
-                    
+
                     // Use the same condition variable as scatter plot with timeout
-                    shared.scatterDataCondition.wait_for(lock, std::chrono::milliseconds(100), [&shared]() {
-                        return shared.newScatterDataAvailable || shared.clearHistogramData || shared.done;
-                    });
-                    
-                    if (shared.done) break;
-                    
+                    shared.scatterDataCondition.wait_for(lock, std::chrono::milliseconds(100), [&shared]()
+                                                         { return shared.newScatterDataAvailable || shared.clearHistogramData || shared.done; });
+
+                    if (shared.done)
+                        break;
+
                     // Clear data if requested
                     if (shared.clearHistogramData)
                     {
                         shared.clearHistogramData = false;
                         // std::cout << "Histogram data cleared" << std::endl;
-                        
+
                         // Reset the average ring ratio when clearing
                         shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
-                        
+
                         // Reset the min, max, and median ring ratio values when clearing
                         shared.minRingRatio.store(0.0, std::memory_order_relaxed);
                         shared.maxRingRatio.store(0.0, std::memory_order_relaxed);
                         shared.medianRingRatio.store(0.0, std::memory_order_relaxed);
-                        
+
                         // Clear the shared autofocus ring ratio buffer
                         {
                             std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
@@ -1172,16 +1188,19 @@ void updateRingRatioHistogram(SharedResources &shared)
                     std::vector<double> ringRatios;
                     {
                         std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
-                        
+
                         size_t bufferSize = shared.autofocusRingRatioBuffer.size();
-                        if (bufferSize > 0) {
+                        if (bufferSize > 0)
+                        {
                             ringRatios.reserve(bufferSize);
-                            
+
                             // Extract all ring ratios from the shared buffer
-                            for (size_t i = 0; i < bufferSize; i++) {
-                                const double* ratioPtr = reinterpret_cast<const double*>(
+                            for (size_t i = 0; i < bufferSize; i++)
+                            {
+                                const double *ratioPtr = reinterpret_cast<const double *>(
                                     shared.autofocusRingRatioBuffer.getPointer(i));
-                                if (ratioPtr && std::isfinite(*ratioPtr)) {
+                                if (ratioPtr && std::isfinite(*ratioPtr))
+                                {
                                     ringRatios.push_back(*ratioPtr);
                                 }
                             }
@@ -1198,14 +1217,14 @@ void updateRingRatioHistogram(SharedResources &shared)
                             // Sort values to calculate statistics
                             std::vector<double> sortedRatios = ringRatios;
                             std::sort(sortedRatios.begin(), sortedRatios.end());
-                            
+
                             // Create histogram using a fixed number of bins
                             const int NUM_BINS = 25;
                             auto h = hist(ringRatios, NUM_BINS);
-                            
+
                             xlabel("Ring Ratio");
                             ylabel("Frequency");
-                            title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples, Avg: " + 
+                            title("Ring Ratio Distribution (" + std::to_string(ringRatios.size()) + " samples, Avg: " +
                                   std::to_string(shared.averageRingRatio.load()).substr(0, 5) + ")");
 
                             f->draw();
@@ -1215,7 +1234,8 @@ void updateRingRatioHistogram(SharedResources &shared)
                             std::cerr << "Error updating histogram: " << e.what() << std::endl;
                         }
                     }
-                    else {
+                    else
+                    {
                         // If there's no data (after clearing), display an empty histogram
                         ax->clear();
                         xlabel("Ring Ratio");
@@ -1223,7 +1243,7 @@ void updateRingRatioHistogram(SharedResources &shared)
                         title("Ring Ratio Distribution (0 samples)");
                         f->draw();
                     }
-                    
+
                     lastUpdateTime = now;
                 }
                 else
@@ -1264,17 +1284,17 @@ void keyboardHandlingThread(
         if (key == 27)
         { // ESC key
             shared.done = true;
-            
+
             // Signal all condition variables to wake up their threads
             shared.validFramesCondition.notify_all();
             shared.displayQueueCondition.notify_all();
             shared.processingQueueCondition.notify_all();
             shared.savingCondition.notify_all();
             shared.scatterDataCondition.notify_all();
-            
+
             // Set new valid frame available to ensure the valid frames thread wakes up
             shared.newValidFrameAvailable = true;
-            
+
             std::cout << "ESC pressed, exiting..." << std::endl;
         }
         else if (key == 32)
@@ -1310,26 +1330,26 @@ void keyboardHandlingThread(
             // Clear deformability buffer
             std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
             shared.deformabilityBuffer.clear();
-            
+
             // Set flag to clear histogram data (for histogram thread if it's running)
             shared.clearHistogramData = true;
-            
+
             // Also clear the ring ratio buffer directly (in case histogram is disabled)
             {
                 std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
                 shared.autofocusRingRatioBuffer.clear();
                 shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
             }
-            
+
             // Reset ring ratio statistics
             shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
             shared.minRingRatio.store(0.0, std::memory_order_relaxed);
             shared.maxRingRatio.store(0.0, std::memory_order_relaxed);
             shared.medianRingRatio.store(0.0, std::memory_order_relaxed);
-            
+
             // Notify histogram thread (if running) to process the clear request
             shared.scatterDataCondition.notify_one();
-            
+
             // std::cout << "Clearing histogram data and ring ratio buffer..." << std::endl;
         }
         else if (key == 'S')
@@ -1448,6 +1468,13 @@ void keyboardHandlingThread(
             shared.autofocusEnabled.store(!currentState);
             // std::cout << "Autofocus " << (shared.autofocusEnabled.load() ? "enabled" : "disabled") << std::endl;
         }
+        else if (key == 't' || key == 'T')
+        {
+            // Toggle manual trigger mode
+            bool currentState = shared.manualTriggerEnabled.load();
+            shared.manualTriggerEnabled.store(!currentState);
+            // std::cout << "Manual Trigger " << (shared.manualTriggerEnabled.load() ? "ON" : "OFF") << std::endl;
+        }
         shared.updated = true;
     };
 
@@ -1464,14 +1491,14 @@ void keyboardHandlingThread(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
         shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
         shared.threadShutdownCondition.notify_one();
     }
-    
+
     std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
 
@@ -1523,14 +1550,14 @@ void resultSavingThread(SharedResources &shared, const std::string &saveDirector
         }
         shared.updated = true;
     }
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
         shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
         shared.threadShutdownCondition.notify_one();
     }
-    
+
     std::cout << "Result saving thread interrupted." << std::endl;
 }
 
@@ -1545,7 +1572,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     shared.qualifiedResults.clear();
     shared.totalSavedResults = 0;
     shared.recordedItemsCount = 0; // Initialize recorded items counter
-    
+
     // Reset thread counting
     shared.activeThreadCount = 0;
     shared.threadsReadyToJoin = 0;
@@ -1565,7 +1592,7 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
 
     // Call the setup function passed as parameter
     std::vector<std::thread> threads = setupThreads(shared, saveDir);
-    
+
     // Store the number of threads we need to wait for
     shared.activeThreadCount = threads.size();
 
@@ -1573,29 +1600,29 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
     // This will happen when ESC is pressed and done becomes true
     {
         std::unique_lock<std::mutex> lock(shared.threadShutdownMutex);
-        
+
         // Wait for all threads to signal they're exiting
-        while (!shared.done) {
+        while (!shared.done)
+        {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        
+
         std::cout << "Waiting for all threads to complete..." << std::endl;
-        
+
         // Send signals to all condition variables to wake threads that might be waiting
         shared.displayQueueCondition.notify_all();
         shared.processingQueueCondition.notify_all();
         shared.savingCondition.notify_all();
         shared.validFramesCondition.notify_all();
         shared.scatterDataCondition.notify_all();
-        
+
         // Wait for all threads to be ready to join
-        shared.threadShutdownCondition.wait(lock, [&shared]() {
-            return shared.threadsReadyToJoin >= shared.activeThreadCount;
-        });
-        
+        shared.threadShutdownCondition.wait(lock, [&shared]()
+                                            { return shared.threadsReadyToJoin >= shared.activeThreadCount; });
+
         std::cout << "All threads are ready to be joined." << std::endl;
     }
-    
+
     // Now safe to join all threads
     std::cout << "Joining threads..." << std::endl;
     for (auto &thread : threads)
@@ -1623,7 +1650,7 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
 
     threads.emplace_back(resultSavingThread, std::ref(shared), saveDir);
     threads.emplace_back(metricDisplayThread, std::ref(shared));
-    
+
     // Add the validFramesDisplayThread to show the latest 5 valid frames
     threads.emplace_back(validFramesDisplayThread, std::ref(shared), std::ref(circularBuffer), std::ref(params));
 
@@ -1632,13 +1659,13 @@ void setupCommonThreads(SharedResources &shared, const std::string &saveDir,
     // Read from json to check if scatterplot and histogram are enabled
     json config = readConfig("config.json");
     bool scatterPlotEnabled = config.value("scatter_plot_enabled", false);
-    bool histogramEnabled = config.value("histogram_enabled", true);  // Default to true
+    bool histogramEnabled = config.value("histogram_enabled", true); // Default to true
 
     if (scatterPlotEnabled)
     {
         threads.emplace_back(updateScatterPlot, std::ref(shared));
     }
-    
+
     if (histogramEnabled)
     {
         threads.emplace_back(updateRingRatioHistogram, std::ref(shared));
@@ -1694,53 +1721,56 @@ void autofocusControlThread(SharedResources &shared)
     const int baudRate = config.value("autofocus_baud_rate", 115200);
     const unsigned char deviceAddress = config.value("autofocus_device_address", 1);
     const double focusSetpoint = config.value("focus_setpoint", 20.0);
-    const double focusRange = config.value("focus_range", 0.5);  // Acceptable range around setpoint (±0.5)
+    const double focusRange = config.value("focus_range", 0.5);        // Acceptable range around setpoint (±0.5)
     const bool focusDirection = config.value("focus_direction", true); // true = increase voltage increases ring ratio
     const double voltageStep = config.value("autofocus_voltage_step", 1.0);
-    const double fineVoltageStep = config.value("autofocus_fine_voltage_step", 0.2);  // Smaller step for fine adjustments
+    const double fineVoltageStep = config.value("autofocus_fine_voltage_step", 0.2); // Smaller step for fine adjustments
     const double maxVoltage = config.value("autofocus_max_voltage", 100.0);
     const double minVoltage = config.value("autofocus_min_voltage", 0.0);
     const double initialVoltage = config.value("initial_voltage", 50.0);
     const double manualVoltageStep = config.value("manual_voltage_step", 1.0); // Manual control step size
-    
+
     // Initialize serial connection
     int result = OpenComConnectRS232(comPort, baudRate);
-    if (result == 0) {
+    if (result == 0)
+    {
         std::cerr << "ERROR: Failed to open COM port for autofocus!" << std::endl;
         shared.autofocusComPortOpen.store(false);
-        
+
         // Signal that this thread is ready to be joined since we can't continue
         {
             std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
             shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
             shared.threadShutdownCondition.notify_one();
         }
-        
+
         return;
     }
-    
+
     // std::cout << "Autofocus: COM port opened successfully!" << std::endl;
     shared.autofocusComPortOpen.store(true);
 
     // Initialize variables
     double currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
     shared.currentVoltage.store(currentVoltage);
-    
+
     // Initialize autofocus enabled state from config
     shared.autofocusEnabled.store(config.value("autofocus_enabled_at_start", true));
-    
+
     // Set initial voltage
     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, initialVoltage);
     currentVoltage = initialVoltage;
     shared.currentVoltage.store(currentVoltage);
 
     // Main autofocus loop
-    while (!shared.done) {
+    while (!shared.done)
+    {
         // Handle manual voltage control requests from keyboard thread
         {
             std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
-            
-            if (shared.increaseVoltageRequest.load()) {
+
+            if (shared.increaseVoltageRequest.load())
+            {
                 // Manual voltage increase
                 double newVoltage = std::min(currentVoltage + manualVoltageStep, maxVoltage);
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
@@ -1749,8 +1779,9 @@ void autofocusControlThread(SharedResources &shared)
                 // std::cout << "Manual voltage increased to: " << currentVoltage << "V" << std::endl;
                 shared.increaseVoltageRequest.store(false);
             }
-            
-            if (shared.decreaseVoltageRequest.load()) {
+
+            if (shared.decreaseVoltageRequest.load())
+            {
                 // Manual voltage decrease
                 double newVoltage = std::max(currentVoltage - manualVoltageStep, minVoltage);
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, newVoltage);
@@ -1760,72 +1791,82 @@ void autofocusControlThread(SharedResources &shared)
                 shared.decreaseVoltageRequest.store(false);
             }
         }
-        
+
         // Run automatic control if autofocus is enabled
-        if (shared.autofocusEnabled.load() && !shared.paused) {
+        if (shared.autofocusEnabled.load() && !shared.paused)
+        {
             currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0); // Update to latest voltage
             shared.currentVoltage.store(currentVoltage);
 
             // Use the median ring ratio already calculated by the processing thread
             double medianRingRatio = shared.medianRingRatio.load(std::memory_order_relaxed);
-            
+
             // Only perform autofocus control if we have a valid median value
-            if (medianRingRatio > 0.0) {
+            if (medianRingRatio > 0.0)
+            {
                 // Use median for autofocus control
                 double deviation = medianRingRatio - focusSetpoint;
                 bool inAcceptableRange = std::abs(deviation) <= focusRange;
 
                 // Adjust voltage based on median ring ratio and acceptable range
-                if (!inAcceptableRange) {
+                if (!inAcceptableRange)
+                {
                     // Outside acceptable range, make larger adjustments
-                    if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
+                    if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection))
+                    {
                         // Need to increase voltage
                         currentVoltage = std::min(currentVoltage + voltageStep, maxVoltage);
-                    } else {
+                    }
+                    else
+                    {
                         // Need to decrease voltage
                         currentVoltage = std::max(currentVoltage - voltageStep, minVoltage);
                     }
-                } else {
+                }
+                else
+                {
                     // Within acceptable range, make fine adjustments or maintain
                     // Optional fine-tuning within the acceptable range
-                    if (std::abs(deviation) > focusRange/2) {
+                    if (std::abs(deviation) > focusRange / 2)
+                    {
                         // Fine adjustment to get closer to exact setpoint
-                        if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection)) {
+                        if ((deviation < 0 && focusDirection) || (deviation > 0 && !focusDirection))
+                        {
                             // Need to slightly increase voltage
                             currentVoltage = std::min(currentVoltage + fineVoltageStep, maxVoltage);
-                        } else {
+                        }
+                        else
+                        {
                             // Need to slightly decrease voltage
                             currentVoltage = std::max(currentVoltage - fineVoltageStep, minVoltage);
                         }
                     }
                 }
-                
+
                 // Apply the new voltage
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
                 shared.currentVoltage.store(currentVoltage);
             }
         }
-        
+
         // Sleep briefly to avoid busy waiting
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    
+
     // Set voltage to safe level before exiting
     double safeVoltage = config.value("safe_shutdown_voltage", 0.0);
     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, safeVoltage);
-    
+
     // Clean up
     CloseSer();
     shared.autofocusComPortOpen.store(false);
-    
+
     // Signal that this thread is ready to be joined
     {
         std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
         shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
         shared.threadShutdownCondition.notify_one();
     }
-    
+
     std::cout << "Autofocus thread interrupted." << std::endl;
 }
-
-

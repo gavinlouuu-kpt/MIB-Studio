@@ -26,12 +26,13 @@ struct ImageParams
     size_t bufferCount;
 };
 
-struct BrightnessQuantiles {
+struct BrightnessQuantiles
+{
     double q1; // 25th percentile
     double q2; // 50th percentile (median)
     double q3; // 75th percentile
     double q4; // 100th percentile (max)
-    
+
     BrightnessQuantiles() : q1(0), q2(0), q3(0), q4(0) {}
 };
 
@@ -42,12 +43,12 @@ struct QualifiedResult
     double areaRatio;
     double area;
     double deformability;
-    double ringRatio; // Ratio of inner contour area to outer contour area
+    double ringRatio;               // Ratio of inner contour area to outer contour area
     BrightnessQuantiles brightness; // Brightness quantiles in the masked area
 
     cv::Mat originalImage;
     cv::Mat processedImage; // Store the binary mask
-    
+
     QualifiedResult() : timestamp(0), areaRatio(0), area(0), deformability(0), ringRatio(0) {}
 };
 
@@ -122,7 +123,7 @@ struct FilterResult
     double deformability;
     double area;
     double areaRatio;
-    double ringRatio; // Ratio of inner contour area to outer contour area
+    double ringRatio;               // Ratio of inner contour area to outer contour area
     BrightnessQuantiles brightness; // Brightness distribution in the masked area
 };
 
@@ -137,15 +138,15 @@ struct SharedResources
     std::atomic<int> currentFrameIndex{-1};
     std::atomic<bool> displayNeedsUpdate{false};
     std::atomic<int> currentBatchNumber{0};
-    std::atomic<size_t> recordedItemsCount{0}; // Counter for items recorded during 'running' state
-    std::atomic<bool> clearHistogramData{false}; // Flag to clear histogram data
-    std::atomic<double> averageRingRatio{0.0}; // Average ring ratio for dashboard display
-    std::atomic<double> minRingRatio{0.0}; // Minimum ring ratio for dashboard display
-    std::atomic<double> maxRingRatio{0.0}; // Maximum ring ratio for dashboard display
-    std::atomic<double> medianRingRatio{0.0}; // Median ring ratio for dashboard display
-    std::atomic<size_t> ringRatioBufferSize{0}; // Size of ring ratio buffer used in autofocus
+    std::atomic<size_t> recordedItemsCount{0};     // Counter for items recorded during 'running' state
+    std::atomic<bool> clearHistogramData{false};   // Flag to clear histogram data
+    std::atomic<double> averageRingRatio{0.0};     // Average ring ratio for dashboard display
+    std::atomic<double> minRingRatio{0.0};         // Minimum ring ratio for dashboard display
+    std::atomic<double> maxRingRatio{0.0};         // Maximum ring ratio for dashboard display
+    std::atomic<double> medianRingRatio{0.0};      // Median ring ratio for dashboard display
+    std::atomic<size_t> ringRatioBufferSize{0};    // Size of ring ratio buffer used in autofocus
     std::atomic<double> validFramesPerSecond{0.0}; // Valid frames per second from processing thread
-    
+
     // Thread shutdown tracking
     std::atomic<int> activeThreadCount{0};
     std::atomic<int> threadsReadyToJoin{0};
@@ -153,7 +154,8 @@ struct SharedResources
     std::condition_variable threadShutdownCondition;
 
     // Valid frames sharing between processing thread and display thread
-    struct ValidFrameData {
+    struct ValidFrameData
+    {
         cv::Mat originalImage;
         cv::Mat processedImage;
         FilterResult result;
@@ -225,19 +227,19 @@ struct SharedResources
 
     ProcessingConfig processingConfig;
     std::mutex processingConfigMutex;
-    // std::atomic<bool> triggerOut{false};
     std::atomic<bool> processTrigger{false};
+    std::atomic<bool> manualTriggerEnabled{false}; // Toggle for manual trigger mode
 
     // Ring ratio buffer managed by processing thread, consumed by autofocus thread
     CircularBuffer autofocusRingRatioBuffer{1000, sizeof(double)}; // Buffer for ring ratios for autofocus
     std::mutex autofocusRingRatioMutex;
 
     // Autofocus control coordination between keyboard and autofocus threads
-    std::atomic<bool> autofocusComPortOpen{false}; // Indicates if COM port is successfully opened
-    std::atomic<bool> autofocusEnabled{true}; // Enable/disable autofocus control
+    std::atomic<bool> autofocusComPortOpen{false};   // Indicates if COM port is successfully opened
+    std::atomic<bool> autofocusEnabled{true};        // Enable/disable autofocus control
     std::atomic<bool> increaseVoltageRequest{false}; // Request to increase voltage from keyboard
     std::atomic<bool> decreaseVoltageRequest{false}; // Request to decrease voltage from keyboard
-    std::mutex autofocusControlMutex; // Mutex for voltage control coordination
+    std::mutex autofocusControlMutex;                // Mutex for voltage control coordination
 };
 
 // Function declarations
@@ -283,12 +285,12 @@ void reviewSavedData();
 void calculateMetricsFromSavedData(const std::string &inputDirectory, const std::string &outputFilePath);
 
 FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect &roi,
-                                 const ProcessingConfig &config, const uint8_t processedColor = 255,
-                                 const cv::Mat &originalImage = cv::Mat());
+                                  const ProcessingConfig &config, const uint8_t processedColor = 255,
+                                  const cv::Mat &originalImage = cv::Mat());
 
 FilterResult legacyContourAnalysis(const cv::Mat &processedImage, const cv::Rect &roi, const ProcessingConfig &config);
 
-std::map<std::string, int> parseCSVHeaders(const std::string& headerLine);
+std::map<std::string, int> parseCSVHeaders(const std::string &headerLine);
 
 // Function to determine overlay color based on FilterResult
 cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid);
@@ -299,6 +301,6 @@ std::string selectSaveDirectory(const std::string &configPath);
 BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, const cv::Mat &mask);
 
 // Auto-detect condition prefix from filenames in a directory
-std::string autoDetectPrefix(const std::string& dir);
+std::string autoDetectPrefix(const std::string &dir);
 
 void autofocusControlThread(SharedResources &shared);
