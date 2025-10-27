@@ -64,21 +64,15 @@ struct ProcessingConfig
         bool check_borders = true,
         bool check_multiple_contours = true,
         bool check_area_range = true,
-        bool require_single_inner = true,
-        bool enable_contrast = true,
-        double alpha = 1.2,
-        int beta = 10) : gaussian_blur_size(gaussian),
-                         bg_subtract_threshold(threshold),
-                         morph_kernel_size(kernel),
-                         morph_iterations(iterations),
-                         area_threshold_min(min_area),
-                         area_threshold_max(max_area),
-                         enable_border_check(check_borders),
-                         enable_area_range_check(check_area_range),
-                         require_single_inner_contour(require_single_inner),
-                         enable_contrast_enhancement(enable_contrast),
-                         contrast_alpha(alpha),
-                         contrast_beta(beta) {}
+        bool require_single_inner = true) : gaussian_blur_size(gaussian),
+                                            bg_subtract_threshold(threshold),
+                                            morph_kernel_size(kernel),
+                                            morph_iterations(iterations),
+                                            area_threshold_min(min_area),
+                                            area_threshold_max(max_area),
+                                            enable_border_check(check_borders),
+                                            enable_area_range_check(check_area_range),
+                                            require_single_inner_contour(require_single_inner) {}
 
     int gaussian_blur_size;
     int bg_subtract_threshold;
@@ -92,18 +86,12 @@ struct ProcessingConfig
     bool enable_multiple_contours_check;
     bool enable_area_range_check;
     bool require_single_inner_contour; // Require exactly one inner contour
-
-    // Contrast enhancement parameters
-    bool enable_contrast_enhancement; // Toggle for contrast enhancement
-    double contrast_alpha;            // Contrast multiplier (1.0 = no change, >1.0 = increase contrast)
-    int contrast_beta;                // Brightness adjustment (0 = no change, >0 = increase brightness)
 };
 
 struct ThreadLocalMats
 {
     cv::Mat original;
     cv::Mat blurred_target;
-    cv::Mat enhanced;
     cv::Mat bg_sub;
     cv::Mat binary;
     cv::Mat dilate1;
@@ -239,6 +227,10 @@ struct SharedResources
     // Ring ratio buffer managed by processing thread, consumed by autofocus thread
     CircularBuffer autofocusRingRatioBuffer{1000, sizeof(double)}; // Buffer for ring ratios for autofocus
     std::mutex autofocusRingRatioMutex;
+
+    // Freshness tracking for semi-auto autofocus
+    std::atomic<uint64_t> ringRatioSequence{0};       // Incremented each time a valid ring ratio arrives
+    std::atomic<int64_t> lastRingRatioTimestampNs{0}; // Timestamp (steady_clock) of last valid ring ratio
 
     // Autofocus control coordination between keyboard and autofocus threads
     std::atomic<bool> autofocusComPortOpen{false};   // Indicates if COM port is successfully opened

@@ -225,21 +225,7 @@ void initializeMockBackgroundFrame(SharedResources &shared, const ImageParams &p
                               shared.processingConfig.gaussian_blur_size),
                      0);
 
-    // Apply simple contrast enhancement to the background if enabled
-    if (shared.processingConfig.enable_contrast_enhancement)
-    {
-        // Use the formula: new_pixel = alpha * old_pixel + beta
-        // alpha > 1 increases contrast, beta increases brightness
-        shared.blurredBackground.convertTo(shared.blurredBackground, -1,
-                                           shared.processingConfig.contrast_alpha,
-                                           shared.processingConfig.contrast_beta);
-
-        std::cout << "Background frame initialized with contrast enhancement applied." << std::endl;
-    }
-    else
-    {
-        std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
-    }
+    std::cout << "Background frame initialized from loaded image at index: " << selectedIndex << std::endl;
 
     // Record the timestamp when background was automatically initialized
     auto now = std::chrono::system_clock::now();
@@ -577,10 +563,7 @@ prefix_found:
             config.contains("filters") && config["filters"].contains("enable_border_check") ? config["filters"]["enable_border_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_area_range_check") ? config["filters"]["enable_area_range_check"].get<bool>() : true,
-            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? config["contrast_enhancement"]["enable_contrast"].get<bool>() : false,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? config["contrast_enhancement"]["beta"].get<int>() : 10};
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true};
     };
 
     // Helper function to load ROI for a batch from master CSV
@@ -683,10 +666,7 @@ prefix_found:
             config.contains("filters") && config["filters"].contains("enable_border_check") ? config["filters"]["enable_border_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_area_range_check") ? config["filters"]["enable_area_range_check"].get<bool>() : true,
-            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? config["contrast_enhancement"]["enable_contrast"].get<bool>() : false,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? config["contrast_enhancement"]["beta"].get<int>() : 10};
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true};
     };
 
     // Processing function to get a string representation of the config for CSV
@@ -859,12 +839,7 @@ prefix_found:
                                           shared.processingConfig.gaussian_blur_size),
                                  0);
 
-                if (shared.processingConfig.enable_contrast_enhancement)
-                {
-                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
-                                                       shared.processingConfig.contrast_alpha,
-                                                       shared.processingConfig.contrast_beta);
-                }
+                // Contrast enhancement removed
             }
             catch (const std::exception &e)
             {
@@ -1188,12 +1163,7 @@ prefix_found:
                                           shared.processingConfig.gaussian_blur_size),
                                  0);
 
-                if (shared.processingConfig.enable_contrast_enhancement)
-                {
-                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
-                                                       shared.processingConfig.contrast_alpha,
-                                                       shared.processingConfig.contrast_beta);
-                }
+                // Contrast enhancement removed
             }
             catch (const std::exception &e)
             {
@@ -1694,8 +1664,7 @@ json readConfig(const std::string &filename)
             {"morph_iterations", 1},
             {"area_threshold_min", 250},
             {"area_threshold_max", 1000},
-            {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_area_range_check", true}, {"require_single_inner_contour", true}}},
-            {"contrast_enhancement", {{"enable_contrast", false}, {"alpha", 1.2}, {"beta", 10}}}};
+            {"filters", {{"enable_border_check", true}, {"enable_multiple_contours_check", true}, {"enable_area_range_check", true}, {"require_single_inner_contour", true}}}};
 
         config = {
             {"save_directory", "updated_results"},
@@ -1705,6 +1674,12 @@ json readConfig(const std::string &filename)
             {"simCameraTargetFPS", 15000},
             {"scatter_plot_enabled", false},
             {"histogram_enabled", true},
+            {"focus_setpoint", 20.0},
+            {"focus_range", 0.5},
+            {"focus_direction", true},
+            {"ring_ratio_stale_ms", 1500},
+            {"require_new_sample_per_step", true},
+            {"autofocus_min_samples_per_step", 100},
             {"image_processing", image_processing}};
 
         // Write default config to file
@@ -1717,6 +1692,20 @@ json readConfig(const std::string &filename)
         // Read existing config file and ensure all required fields exist
         std::ifstream configFile(filename);
         configFile >> config;
+
+        // Ensure top-level defaults for semi-auto autofocus exist (in-memory only)
+        if (!config.contains("ring_ratio_stale_ms"))
+            config["ring_ratio_stale_ms"] = 1500;
+        if (!config.contains("require_new_sample_per_step"))
+            config["require_new_sample_per_step"] = true;
+        if (!config.contains("focus_setpoint"))
+            config["focus_setpoint"] = 20.0;
+        if (!config.contains("focus_range"))
+            config["focus_range"] = 0.5;
+        if (!config.contains("focus_direction"))
+            config["focus_direction"] = true;
+        if (!config.contains("autofocus_min_samples_per_step"))
+            config["autofocus_min_samples_per_step"] = 100;
 
         // Ensure image_processing section exists with all required fields
         if (!config.contains("image_processing"))
@@ -1758,22 +1747,7 @@ json readConfig(const std::string &filename)
         if (!filters.contains("require_single_inner_contour"))
             filters["require_single_inner_contour"] = true;
 
-        // Ensure contrast_enhancement section exists
-        if (!img_config.contains("contrast_enhancement"))
-        {
-            img_config["contrast_enhancement"] = json::object();
-        }
-
-        auto &contrast = img_config["contrast_enhancement"];
-
-        // Set defaults for contrast enhancement parameters
-        if (!contrast.contains("enable_contrast"))
-            contrast["enable_contrast"] = true;
-        if (!contrast.contains("alpha"))
-            contrast["alpha"] = 1.2;
-        if (!contrast.contains("beta"))
-            contrast["beta"] = 10;
-        // Note: do not write back to file here to avoid concurrent write races
+        // Contrast enhancement removed; no defaults needed
     }
 
     return config;
@@ -1783,18 +1757,12 @@ ProcessingConfig getProcessingConfig(const json &config)
 {
     const auto &img_config = config["image_processing"];
     const auto &filters = img_config.contains("filters") ? img_config["filters"] : json::object();
-    const auto &contrast = img_config.contains("contrast_enhancement") ? img_config["contrast_enhancement"] : json::object();
 
     // Get filter flags with defaults if not present
     bool enable_border_check = filters.contains("enable_border_check") ? filters["enable_border_check"].get<bool>() : true;
     bool enable_multiple_contours_check = filters.contains("enable_multiple_contours_check") ? filters["enable_multiple_contours_check"].get<bool>() : true;
     bool enable_area_range_check = filters.contains("enable_area_range_check") ? filters["enable_area_range_check"].get<bool>() : true;
     bool require_single_inner_contour = filters.contains("require_single_inner_contour") ? filters["require_single_inner_contour"].get<bool>() : true;
-
-    // Get contrast enhancement parameters with defaults if not present
-    bool enable_contrast = contrast.contains("enable_contrast") ? contrast["enable_contrast"].get<bool>() : true;
-    double alpha = contrast.contains("alpha") ? contrast["alpha"].get<double>() : 1.2;
-    int beta = contrast.contains("beta") ? contrast["beta"].get<int>() : 10;
 
     return ProcessingConfig{
         img_config["gaussian_blur_size"],
@@ -1806,13 +1774,10 @@ ProcessingConfig getProcessingConfig(const json &config)
         enable_border_check,
         enable_multiple_contours_check,
         enable_area_range_check,
-        require_single_inner_contour,
-        enable_contrast,
-        alpha,
-        beta};
+        require_single_inner_contour};
 }
 
-// Function to update the background with current contrast settings
+// Function to update the background with current settings (contrast removed)
 void updateBackgroundWithCurrentSettings(SharedResources &shared)
 {
     if (shared.backgroundFrame.empty())
@@ -1828,15 +1793,7 @@ void updateBackgroundWithCurrentSettings(SharedResources &shared)
                               shared.processingConfig.gaussian_blur_size),
                      0);
 
-    // Apply simple contrast enhancement to the background if enabled
-    if (shared.processingConfig.enable_contrast_enhancement)
-    {
-        // Use the formula: new_pixel = alpha * old_pixel + beta
-        // alpha > 1 increases contrast, beta increases brightness
-        shared.blurredBackground.convertTo(shared.blurredBackground, -1,
-                                           shared.processingConfig.contrast_alpha,
-                                           shared.processingConfig.contrast_beta);
-    }
+    // Contrast enhancement removed
 }
 
 bool updateConfig(const std::string &filename, const std::string &key, const json &value)
@@ -2011,9 +1968,7 @@ std::string formatProcessingConfig(const ProcessingConfig &config)
        << "  Area Range: " << config.area_threshold_min << " - " << config.area_threshold_max << std::endl
        << "  Checks: Border=" << (config.enable_border_check ? "On" : "Off")
        << ", Area=" << (config.enable_area_range_check ? "On" : "Off")
-       << ", SingleInner=" << (config.require_single_inner_contour ? "On" : "Off") << std::endl
-       << "  Contrast: " << (config.enable_contrast_enhancement ? "On" : "Off")
-       << " (alpha=" << config.contrast_alpha << ", beta=" << config.contrast_beta << ")";
+       << ", SingleInner=" << (config.require_single_inner_contour ? "On" : "Off");
     return ss.str();
 }
 
@@ -2033,14 +1988,7 @@ void updateBackgroundForReview(SharedResources &shared)
                               shared.processingConfig.gaussian_blur_size),
                      0);
 
-    // Apply contrast enhancement if it was enabled during recording
-    if (shared.processingConfig.enable_contrast_enhancement)
-    {
-        // Apply alpha (contrast) and beta (brightness) adjustments
-        shared.blurredBackground.convertTo(shared.blurredBackground, -1,
-                                           shared.processingConfig.contrast_alpha,
-                                           shared.processingConfig.contrast_beta);
-    }
+    // Contrast enhancement removed
 }
 
 // Function to display keyboard controls
@@ -2169,10 +2117,7 @@ prefix_found_review:
             config.contains("filters") && config["filters"].contains("enable_border_check") ? config["filters"]["enable_border_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_area_range_check") ? config["filters"]["enable_area_range_check"].get<bool>() : true,
-            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? config["contrast_enhancement"]["beta"].get<int>() : 10};
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true};
     };
 
     auto loadBatchConfig = [](const std::filesystem::path &batchPath) -> ProcessingConfig
@@ -2195,10 +2140,7 @@ prefix_found_review:
             config.contains("filters") && config["filters"].contains("enable_border_check") ? config["filters"]["enable_border_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_multiple_contours_check") ? config["filters"]["enable_multiple_contours_check"].get<bool>() : true,
             config.contains("filters") && config["filters"].contains("enable_area_range_check") ? config["filters"]["enable_area_range_check"].get<bool>() : true,
-            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("enable_contrast") ? config["contrast_enhancement"]["enable_contrast"].get<bool>() : true,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("alpha") ? config["contrast_enhancement"]["alpha"].get<double>() : 1.2,
-            config.contains("contrast_enhancement") && config["contrast_enhancement"].contains("beta") ? config["contrast_enhancement"]["beta"].get<int>() : 10};
+            config.contains("filters") && config["filters"].contains("require_single_inner_contour") ? config["filters"]["require_single_inner_contour"].get<bool>() : true};
     };
 
     // Function to load ROI for a specific batch from master ROI CSV

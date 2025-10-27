@@ -8,7 +8,6 @@ ThreadLocalMats initializeThreadMats(int height, int width, SharedResources &sha
     std::lock_guard<std::mutex> lock(shared.processingConfigMutex);
     ThreadLocalMats mats;
     mats.blurred_target = cv::Mat(height, width, CV_8UC1);
-    mats.enhanced = cv::Mat(height, width, CV_8UC1);
     mats.bg_sub = cv::Mat(height, width, CV_8UC1);
     mats.binary = cv::Mat(height, width, CV_8UC1);
     mats.dilate1 = cv::Mat(height, width, CV_8UC1);
@@ -30,7 +29,7 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     roi &= cv::Rect(0, 0, inputImage.cols, inputImage.rows);
 
     // Get ROI from the background
-    // Note: The background is already blurred and contrast-enhanced with the same parameters
+    // Note: The background is already blurred with the same parameters
     cv::Mat blurred_bg = shared.blurredBackground(roi);
 
     // Process only ROI area
@@ -42,23 +41,8 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
                               shared.processingConfig.gaussian_blur_size),
                      0);
 
-    // Apply simple contrast enhancement if enabled
-    if (shared.processingConfig.enable_contrast_enhancement)
-    {
-        // Use the formula: new_pixel = alpha * old_pixel + beta
-        // alpha > 1 increases contrast, beta increases brightness
-        mats.blurred_target(roi).convertTo(mats.enhanced(roi), -1,
-                                           shared.processingConfig.contrast_alpha,
-                                           shared.processingConfig.contrast_beta);
-
-        // Perform background subtraction with the enhanced image
-        cv::subtract(mats.enhanced(roi), blurred_bg, mats.bg_sub(roi));
-    }
-    else
-    {
-        // Simple background subtraction without contrast enhancement
-        cv::subtract(mats.blurred_target(roi), blurred_bg, mats.bg_sub(roi));
-    }
+    // Simple background subtraction
+    cv::subtract(mats.blurred_target(roi), blurred_bg, mats.bg_sub(roi));
 
     // Apply threshold to create binary image
     cv::threshold(mats.bg_sub(roi), mats.binary(roi),
@@ -78,19 +62,20 @@ void processFrame(const cv::Mat &inputImage, SharedResources &shared,
     }
 }
 
-double calculateRingRatio(const std::vector<cv::Point>& innerContour, const std::vector<cv::Point>& outerContour)
+double calculateRingRatio(const std::vector<cv::Point> &innerContour, const std::vector<cv::Point> &outerContour)
 {
     // Calculate areas of both contours
     double innerArea = cv::contourArea(innerContour);
     double outerArea = cv::contourArea(outerContour);
-    
+
     // Prevent division by zero
-    if (outerArea <= 0) {
+    if (outerArea <= 0)
+    {
         return 0.0;
     }
-    
+
     // Calculate the ratio of inner area to outer area and return sqrt of it
-    return  std::sqrt(outerArea-innerArea);
+    return std::sqrt(outerArea - innerArea);
 }
 
 std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv::Point>>, std::vector<int>> findContours(const cv::Mat &processedImage)
@@ -132,13 +117,15 @@ std::tuple<std::vector<std::vector<cv::Point>>, bool, std::vector<std::vector<cv
         {
             hasNestedContours = true;
             innerContours.push_back(filteredContours[i]);
-            
+
             // Store the index of the parent contour in the filtered contours array
             int parentIdx = filteredHierarchy[i][3];
             // Need to map from original hierarchy index to filtered index
             int filteredParentIdx = -1;
-            for (size_t j = 0; j < filteredContours.size(); j++) {
-                if (j == parentIdx) {
+            for (size_t j = 0; j < filteredContours.size(); j++)
+            {
+                if (j == parentIdx)
+                {
                     filteredParentIdx = j;
                     break;
                 }
@@ -155,11 +142,11 @@ std::tuple<double, double> calculateMetrics(const std::vector<cv::Point> &contou
     // Calculate convex hull first
     std::vector<cv::Point> hull;
     cv::convexHull(contour, hull);
-    
+
     // Use hull for both area and perimeter calculations
     double area = cv::contourArea(hull);
     double perimeter = cv::arcLength(hull, true);
-    
+
     // Updated formula: sqrt(4 * pi * area) / perimeter
     double circularity = (perimeter > 0) ? std::sqrt(4 * M_PI * area) / perimeter : 0.0; // DO NOT CHANGE THIS FORMULA
     double deformability = 1.0 - circularity;
@@ -185,7 +172,8 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
     result.hasSingleInnerContour = (innerContours.size() == 1);
 
     // Calculate brightness quantiles if the original image is provided
-    if (!originalImage.empty()) {
+    if (!originalImage.empty())
+    {
         result.brightness = calculateBrightnessQuantiles(originalImage, processedImage);
     }
 
@@ -285,7 +273,7 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
             // Calculate convex hull once
             std::vector<cv::Point> hull;
             cv::convexHull(innerContours[0], hull);
-            
+
             // Get the hull area
             double hullArea = cv::contourArea(hull);
 
@@ -294,11 +282,11 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 
             // Calculate perimeter of the hull
             double perimeter = cv::arcLength(hull, true);
-            
+
             // Use the formula: sqrt(4 * pi * area) / perimeter
             double circularity = (perimeter > 0) ? std::sqrt(4 * M_PI * hullArea) / perimeter : 0.0;
             double deformability = 1.0 - circularity;
-            
+
             // Store metrics
             result.deformability = deformability;
             result.area = hullArea;
@@ -316,11 +304,11 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 
             // Check area range only if that check is enabled
             bool areaInRange = !config.enable_area_range_check ||
-                              (hullArea >= config.area_threshold_min && hullArea <= config.area_threshold_max);
-            
+                               (hullArea >= config.area_threshold_min && hullArea <= config.area_threshold_max);
+
             // Check ring ratio range (13 < ringRatio < 25) - TODO: move these values to config.json
             bool ringRatioInRange = (result.ringRatio > 15.0 && result.ringRatio < 25.0);
-            
+
             if (areaInRange && ringRatioInRange)
             {
                 result.inRange = true;
@@ -351,7 +339,7 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
             // Calculate convex hull once
             std::vector<cv::Point> hull;
             cv::convexHull(contours[largestIdx], hull);
-            
+
             // Get the hull area
             double hullArea = cv::contourArea(hull);
 
@@ -360,11 +348,11 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
 
             // Calculate perimeter of the hull
             double perimeter = cv::arcLength(hull, true);
-            
+
             // Use the formula: sqrt(4 * pi * area) / perimeter
             double circularity = (perimeter > 0) ? std::sqrt(4 * M_PI * hullArea) / perimeter : 0.0;
             double deformability = 1.0 - circularity;
-            
+
             // Store metrics
             result.deformability = deformability;
             result.area = hullArea;
@@ -412,48 +400,55 @@ cv::Scalar determineOverlayColor(const FilterResult &result, bool isValid)
 BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, const cv::Mat &mask)
 {
     BrightnessQuantiles result;
-    
+
     // Convert original image to grayscale if it's not already
     cv::Mat grayImage;
-    if (originalImage.channels() == 3) {
+    if (originalImage.channels() == 3)
+    {
         cv::cvtColor(originalImage, grayImage, cv::COLOR_BGR2GRAY);
-    } else {
+    }
+    else
+    {
         grayImage = originalImage.clone();
     }
-    
+
     // Extract brightness values from the masked area
     std::vector<uchar> brightness;
     brightness.reserve(grayImage.rows * grayImage.cols / 4); // Approximate size
-    
-    for (int y = 0; y < grayImage.rows; y++) {
-        for (int x = 0; x < grayImage.cols; x++) {
+
+    for (int y = 0; y < grayImage.rows; y++)
+    {
+        for (int x = 0; x < grayImage.cols; x++)
+        {
             // Check if this pixel is part of the mask
-            if (mask.at<uchar>(y, x) > 0) {
+            if (mask.at<uchar>(y, x) > 0)
+            {
                 brightness.push_back(grayImage.at<uchar>(y, x));
             }
         }
     }
-    
+
     // If no masked pixels were found, return zeros
-    if (brightness.empty()) {
+    if (brightness.empty())
+    {
         return result;
     }
-    
+
     // Sort the values to compute quantiles
     std::sort(brightness.begin(), brightness.end());
-    
+
     // Calculate quantile positions
     size_t n = brightness.size();
     size_t q1_pos = n / 4;
     size_t q2_pos = n / 2;
     size_t q3_pos = (3 * n) / 4;
     size_t q4_pos = n - 1;
-    
+
     // Extract quantile values
     result.q1 = brightness[q1_pos];
     result.q2 = brightness[q2_pos];
     result.q3 = brightness[q3_pos];
     result.q4 = brightness[q4_pos];
-    
+
     return result;
 }

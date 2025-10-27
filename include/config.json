@@ -4,11 +4,6 @@
         "area_threshold_max": 1200,
         "area_threshold_min": 250,
         "bg_subtract_threshold": 8,
-        "contrast_enhancement": {
-            "alpha": 1.2,
-            "beta": 10,
-            "enable_contrast": true
-        },
         "filters": {
             "enable_area_range_check": true,
             "enable_border_check": true,
@@ -21,5 +16,8 @@
     },
     "save_directory": "testing",
     "scatter_plot_enabled": true,
-    "target_fps": 5000
+    "target_fps": 5000,
+    "autofocus_min_samples_per_step": 100,
+    "ring_ratio_stale_ms": 1500,
+    "require_new_sample_per_step": true
 }

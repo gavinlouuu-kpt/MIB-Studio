@@ -175,32 +175,28 @@ void metricDisplayThread(SharedResources &shared)
 
     auto render_config_metrics = [&]()
     {
-        return window(text("Configuration"), vbox({hbox({text("Current FPS: "),
-                                                         text(std::to_string((int)shared.currentFPS.load()))}),
-                                                   hbox({text("Data Rate: "),
-                                                         text(std::to_string((int)shared.dataRate.load()))}),
-                                                   hbox({text("Exposure Time: "),
-                                                         text(std::to_string((int)shared.exposureTime.load()))}),
-                                                   hbox({text("Binary Threshold: "),
-                                                         text(std::to_string(shared.processingConfig.bg_subtract_threshold))}),
-                                                   // display if valid display frame
-                                                   hbox({text("Valid Display Frame: "),
-                                                         text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
-                                                   hbox({text("Touched Border: "),
-                                                         text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
-                                                   hbox({text("Require Single Inner Contour: "),
-                                                         text(shared.processingConfig.require_single_inner_contour ? "Yes" : "No")}),
-                                                   hbox({text("Area Min Threshold: "),
-                                                         text(std::to_string(shared.processingConfig.area_threshold_min))}),
-                                                   hbox({text("Area Max Threshold: "),
-                                                         text(std::to_string(shared.processingConfig.area_threshold_max))}),
-                                                   // Contrast enhancement parameters
-                                                   hbox({text("Contrast Enhancement: "),
-                                                         text(shared.processingConfig.enable_contrast_enhancement ? "Enabled" : "Disabled")}),
-                                                   hbox({text("Contrast Alpha: "),
-                                                         text(std::to_string(shared.processingConfig.contrast_alpha))}),
-                                                   hbox({text("Brightness Beta: "),
-                                                         text(std::to_string(shared.processingConfig.contrast_beta))})}));
+        return window(text("Configuration"), vbox({
+                                                 hbox({text("Current FPS: "),
+                                                       text(std::to_string((int)shared.currentFPS.load()))}),
+                                                 hbox({text("Data Rate: "),
+                                                       text(std::to_string((int)shared.dataRate.load()))}),
+                                                 hbox({text("Exposure Time: "),
+                                                       text(std::to_string((int)shared.exposureTime.load()))}),
+                                                 hbox({text("Binary Threshold: "),
+                                                       text(std::to_string(shared.processingConfig.bg_subtract_threshold))}),
+                                                 // display if valid display frame
+                                                 hbox({text("Valid Display Frame: "),
+                                                       text(shared.validDisplayFrame.load() ? "Yes" : "No")}),
+                                                 hbox({text("Touched Border: "),
+                                                       text(shared.displayFrameTouchedBorder.load() ? "Yes" : "No")}),
+                                                 hbox({text("Require Single Inner Contour: "),
+                                                       text(shared.processingConfig.require_single_inner_contour ? "Yes" : "No")}),
+                                                 hbox({text("Area Min Threshold: "),
+                                                       text(std::to_string(shared.processingConfig.area_threshold_min))}),
+                                                 hbox({text("Area Max Threshold: "),
+                                                       text(std::to_string(shared.processingConfig.area_threshold_max))}),
+                                                 // Contrast enhancement removed
+                                             }));
     };
 
     auto render_status = [&]()
@@ -240,14 +236,14 @@ void metricDisplayThread(SharedResources &shared)
             if (shared.autofocusComPortOpen.load())
             {
                 std::string autofocusStatus = shared.autofocusEnabled.load() ? "ON" : "OFF";
-                return vbox({text("Autofocus Manual Control:"),
+                return vbox({text("Autofocus (Semi-Auto):"),
                              text("  Z: Increase voltage (+1V)"),
                              text("  X: Decrease voltage (-1V)"),
-                             text("  M: Toggle autofocus (currently " + autofocusStatus + ")")});
+                             text("  M: Toggle semi-auto (currently " + autofocusStatus + ")")});
             }
             else
             {
-                return vbox({text("Autofocus Manual Control:"),
+                return vbox({text("Autofocus (Semi-Auto):"),
                              text("  (COM port not available)")});
             }
         };
@@ -568,9 +564,17 @@ void processingThreadTask(
                     shared.processTrigger = true;
                     shared.triggerCondition.notify_one();
                     shared.validProcessingFrame = true;
-                    std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
-                    shared.autofocusRingRatioBuffer.push(reinterpret_cast<const uint8_t *>(&filterResult.ringRatio));
-                    shared.ringRatioBufferSize.store(shared.autofocusRingRatioBuffer.size(), std::memory_order_relaxed);
+                    {
+                        std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+                        shared.autofocusRingRatioBuffer.push(reinterpret_cast<const uint8_t *>(&filterResult.ringRatio));
+                        shared.ringRatioBufferSize.store(shared.autofocusRingRatioBuffer.size(), std::memory_order_relaxed);
+                        // Freshness tracking for semi-auto: update timestamp and sequence
+                        shared.ringRatioSequence.fetch_add(1, std::memory_order_relaxed);
+                        auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count();
+                        shared.lastRingRatioTimestampNs.store(nowNs, std::memory_order_relaxed);
+                    }
 
                     // Calculate ring ratio statistics from the buffer
                     if (shared.autofocusRingRatioBuffer.size() > 0)
@@ -907,11 +911,8 @@ void displayThreadTask(
                         json config = readConfig("config.json");
                         ProcessingConfig newConfig = getProcessingConfig(config);
 
-                        // Check if contrast settings have changed
+                        // Contrast settings removed; only check gaussian blur changes
                         bool contrastSettingsChanged =
-                            (shared.processingConfig.enable_contrast_enhancement != newConfig.enable_contrast_enhancement) ||
-                            (shared.processingConfig.contrast_alpha != newConfig.contrast_alpha) ||
-                            (shared.processingConfig.contrast_beta != newConfig.contrast_beta) ||
                             (shared.processingConfig.gaussian_blur_size != newConfig.gaussian_blur_size);
 
                         shared.processingConfigMutex.lock();
@@ -1459,21 +1460,7 @@ void keyboardHandlingThread(
                                           shared.processingConfig.gaussian_blur_size),
                                  0);
 
-                // Apply simple contrast enhancement to the background if enabled
-                if (shared.processingConfig.enable_contrast_enhancement)
-                {
-                    // Use the formula: new_pixel = alpha * old_pixel + beta
-                    // alpha > 1 increases contrast, beta increases brightness
-                    shared.blurredBackground.convertTo(shared.blurredBackground, -1,
-                                                       shared.processingConfig.contrast_alpha,
-                                                       shared.processingConfig.contrast_beta);
-
-                    // std::cout << "Background set with contrast enhancement applied." << std::endl;
-                }
-                else
-                {
-                    // std::cout << "Background set." << std::endl;
-                }
+                // Contrast enhancement removed
 
                 // Record the timestamp when background was captured
                 auto now = std::chrono::system_clock::now();
@@ -1798,6 +1785,9 @@ void autofocusControlThread(SharedResources &shared)
     const double minVoltage = config.value("autofocus_min_voltage", 0.0);
     const double initialVoltage = config.value("initial_voltage", 50.0);
     const double manualVoltageStep = config.value("manual_voltage_step", 1.0); // Manual control step size
+    const int ringRatioStaleMs = config.value("ring_ratio_stale_ms", 1500);
+    const bool requireNewSamplePerStep = config.value("require_new_sample_per_step", true);
+    const int minSamplesPerStep = config.value("autofocus_min_samples_per_step", 100);
 
     // Initialize serial connection
     int result = OpenComConnectRS232(comPort, baudRate);
@@ -1823,13 +1813,16 @@ void autofocusControlThread(SharedResources &shared)
     double currentVoltage = XMT_COMMAND_ReadData(deviceAddress, 5, 0, 0);
     shared.currentVoltage.store(currentVoltage);
 
-    // Initialize autofocus enabled state from config
-    shared.autofocusEnabled.store(config.value("autofocus_enabled_at_start", true));
+    // Initialize semi-auto (autofocus) to OFF by default (not configurable)
+    shared.autofocusEnabled.store(false);
 
     // Set initial voltage
     XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, initialVoltage);
     currentVoltage = initialVoltage;
     shared.currentVoltage.store(currentVoltage);
+
+    // Initialize semi-auto freshness state
+    uint64_t lastAppliedSequence = shared.ringRatioSequence.load(std::memory_order_relaxed);
 
     // Main autofocus loop
     while (!shared.done)
@@ -1870,8 +1863,19 @@ void autofocusControlThread(SharedResources &shared)
             // Use the median ring ratio already calculated by the processing thread
             double medianRingRatio = shared.medianRingRatio.load(std::memory_order_relaxed);
 
-            // Only perform autofocus control if we have a valid median value
-            if (medianRingRatio > 0.0)
+            // Semi-auto gating: require valid, fresh ring measurement and optionally a new sample
+            uint64_t currentSequence = shared.ringRatioSequence.load(std::memory_order_relaxed);
+            int64_t lastTsNs = shared.lastRingRatioTimestampNs.load(std::memory_order_relaxed);
+            int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+            bool freshTimestamp = (lastTsNs > 0) && (nowNs - lastTsNs <= static_cast<int64_t>(ringRatioStaleMs) * 1000000LL);
+            bool hasNewSample = (currentSequence != lastAppliedSequence);
+            uint64_t samplesSinceStep = currentSequence - lastAppliedSequence;
+            bool hasEnoughSamples = samplesSinceStep >= static_cast<uint64_t>(minSamplesPerStep);
+
+            // Only perform autofocus control if we have a valid median value AND freshness criteria
+            if (medianRingRatio > 0.0 && freshTimestamp && (!requireNewSamplePerStep || hasNewSample) && hasEnoughSamples)
             {
                 // Use median for autofocus control
                 double deviation = medianRingRatio - focusSetpoint;
@@ -1915,6 +1919,16 @@ void autofocusControlThread(SharedResources &shared)
                 // Apply the new voltage
                 XMT_COMMAND_SinglePoint(deviceAddress, 0, 0, 0, currentVoltage);
                 shared.currentVoltage.store(currentVoltage);
+
+                // Mark that we've reacted to this sample
+                lastAppliedSequence = currentSequence;
+
+                // Clear buffer after a step to ensure next statistics are based on post-step samples
+                {
+                    std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+                    shared.autofocusRingRatioBuffer.clear();
+                    shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
+                }
             }
         }
 
