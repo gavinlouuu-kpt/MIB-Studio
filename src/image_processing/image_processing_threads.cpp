@@ -292,7 +292,7 @@ void metricDisplayThread(SharedResources &shared)
             reset_position = screen.ResetPosition();
             shared.updated = false;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     // Signal that this thread is ready to be joined
@@ -458,15 +458,17 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
 
                 // Show the combined display
                 cv::imshow(windowName, combinedDisplay);
+                cv::pollKey();
             }
             else
             {
                 // Show placeholder when no valid frames are available
                 cv::imshow(windowName, noValidFramesImg);
+                cv::pollKey();
             }
 
-            // Process UI events with a short timeout to check done flag frequently
-            if (cv::waitKey(1) >= 0 || shared.done)
+            // Avoid calling cv::waitKey from this thread to prevent cross-thread HighGUI hangs
+            if (shared.done)
             {
                 break;
             }
@@ -474,6 +476,8 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
             // Update last frame time
             lastFrameTime = std::chrono::high_resolution_clock::now();
         }
+        // Small delay to avoid busy-spin
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
         // Check done flag one more time to ensure responsiveness
         if (shared.done)
@@ -482,7 +486,19 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
         }
     }
 
-    cv::destroyWindow(windowName);
+    // Close only this thread's window
+    try
+    {
+        cv::destroyWindow(windowName);
+        for (int i = 0; i < 3; ++i)
+        {
+            cv::pollKey();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    catch (...)
+    {
+    }
 
     // Signal that this thread is ready to be joined
     {
@@ -776,6 +792,8 @@ void displayThreadTask(
             overlay.setTo(overlayColor, mask);
             cv::addWeighted(displayImage, 1.0, overlay, opacity, 0, displayImage);
         }
+        // Pump key events without blocking, to allow ESC detection
+        cv::pollKey();
 
         // Draw ROI rectangle
         {
@@ -943,9 +961,21 @@ void displayThreadTask(
 
         // Handle keyboard input more frequently
         for (int i = 0; i < 5; i++)
-        { // Check multiple times per frame
-            int key = cv::waitKey(1) & 0xFF;
-            if (key != -1 && shared.keyboardCallback)
+        {                            // Check multiple times per frame
+            int key = cv::pollKey(); // non-blocking; avoids cross-thread waitKey issues
+            if (key == 27)
+            {
+                // Handle ESC immediately even if keyboard callback isn't initialized yet
+                shared.done = true;
+                shared.validFramesCondition.notify_all();
+                shared.displayQueueCondition.notify_all();
+                shared.processingQueueCondition.notify_all();
+                shared.savingCondition.notify_all();
+                shared.scatterDataCondition.notify_all();
+                shared.newValidFrameAvailable = true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            else if (key != -1 && shared.keyboardCallback)
             {
                 std::lock_guard<std::mutex> lock(shared.keyboardMutex);
                 shared.keyboardCallback(key);
@@ -965,7 +995,20 @@ void displayThreadTask(
         }
     }
 
-    cv::destroyAllWindows();
+    // Close only this thread's window to avoid cross-thread window manager deadlocks
+    try
+    {
+        cv::destroyWindow("Live Feed");
+        // Pump events briefly to ensure teardown completes
+        for (int i = 0; i < 3; ++i)
+        {
+            cv::pollKey();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    catch (...)
+    {
+    }
 
     // Signal that this thread is ready to be joined
     {
@@ -1295,6 +1338,9 @@ void keyboardHandlingThread(
             // Set new valid frame available to ensure the valid frames thread wakes up
             shared.newValidFrameAvailable = true;
 
+            // Simple wait to allow other threads to observe shutdown before proceeding
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
             std::cout << "ESC pressed, exiting..." << std::endl;
         }
         else if (key == 32)
@@ -1489,7 +1535,12 @@ void keyboardHandlingThread(
             int ch = _getch();
             handleKeypress(ch);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Keep polling even faster during shutdown to avoid hang
+        if (shared.done)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
     // Signal that this thread is ready to be joined
@@ -1616,9 +1667,11 @@ void commonSampleLogic(SharedResources &shared, const std::string &SAVE_DIRECTOR
         shared.validFramesCondition.notify_all();
         shared.scatterDataCondition.notify_all();
 
-        // Wait for all threads to be ready to join
-        shared.threadShutdownCondition.wait(lock, [&shared]()
-                                            { return shared.threadsReadyToJoin >= shared.activeThreadCount; });
+        // Wait for all threads to be ready to join, with periodic wake and progress logs
+        while (shared.threadsReadyToJoin.load() < shared.activeThreadCount.load())
+        {
+            shared.threadShutdownCondition.wait_for(lock, std::chrono::milliseconds(100));
+        }
 
         std::cout << "All threads are ready to be joined." << std::endl;
     }

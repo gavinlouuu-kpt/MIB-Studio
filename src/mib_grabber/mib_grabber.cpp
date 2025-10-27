@@ -156,12 +156,27 @@ void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 
 void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    // Initial delay, but interruptible so ESC does not block shutdown
+    auto delay_start = std::chrono::steady_clock::now();
+    while (!shared.done && std::chrono::steady_clock::now() - delay_start < std::chrono::seconds(5))
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     while (!shared.done)
     {
         triggerOut(grabber, shared);
-        // wait do not sleep
+        // Yield briefly to reduce bus traffic and allow responsive shutdown
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+
+    std::cout << "Trigger thread interrupted." << std::endl;
 }
 
 void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
@@ -172,6 +187,8 @@ void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared
         auto trigger_start = std::chrono::high_resolution_clock::now();
         // grabber.setString<InterfaceModule>("LineSelector", "TTLIO12");
         // grabber.setString<InterfaceModule>("LineMode", "Output");
+        if (shared.done)
+            return;
         grabber.setString<InterfaceModule>("LineSource", "High");
         auto trigger_end = std::chrono::high_resolution_clock::now();
         auto trigger_onset_duration = std::chrono::duration_cast<std::chrono::microseconds>(trigger_end - trigger_start);
@@ -181,11 +198,14 @@ void processTrigger(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared
 
         // Busy-wait loop for approximately 1 microsecond
         auto start = std::chrono::high_resolution_clock::now();
-        while (std::chrono::high_resolution_clock::now() - start < std::chrono::microseconds(1))
+        while (!shared.done && std::chrono::high_resolution_clock::now() - start < std::chrono::microseconds(1))
         {
             // Busy-wait
         }
-        grabber.setString<InterfaceModule>("LineSource", "Low");
+        if (!shared.done)
+        {
+            grabber.setString<InterfaceModule>("LineSource", "Low");
+        }
         shared.processTrigger = false;
     }
 }
@@ -197,7 +217,18 @@ void processTriggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &
     while (!shared.done)
     {
         processTrigger(grabber, shared);
+        // Yield a bit to let shutdown progress
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    // Signal that this thread is ready to be joined
+    {
+        std::lock_guard<std::mutex> lock(shared.threadShutdownMutex);
+        shared.threadsReadyToJoin.fetch_add(1, std::memory_order_release);
+        shared.threadShutdownCondition.notify_one();
+    }
+
+    std::cout << "Process trigger thread interrupted." << std::endl;
 }
 
 void hybrid_sample(EGrabber<CallbackOnDemand> &grabber, const ImageParams &params, CircularBuffer &cameraBuffer, CircularBuffer &circularBuffer, CircularBuffer &processingBuffer, SharedResources &shared)
