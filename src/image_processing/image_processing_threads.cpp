@@ -566,6 +566,7 @@ void processingThreadTask(
                 if (filterResult.isValid)
                 {
                     shared.processTrigger = true;
+                    shared.triggerCondition.notify_one();
                     shared.validProcessingFrame = true;
                     std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
                     shared.autofocusRingRatioBuffer.push(reinterpret_cast<const uint8_t *>(&filterResult.ringRatio));
@@ -974,6 +975,8 @@ void displayThreadTask(
                 shared.scatterDataCondition.notify_all();
                 shared.newValidFrameAvailable = true;
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                shared.triggerCondition.notify_all();
+                shared.manualTriggerCondition.notify_all();
             }
             else if (key != -1 && shared.keyboardCallback)
             {
@@ -1334,6 +1337,8 @@ void keyboardHandlingThread(
             shared.processingQueueCondition.notify_all();
             shared.savingCondition.notify_all();
             shared.scatterDataCondition.notify_all();
+            shared.triggerCondition.notify_all();
+            shared.manualTriggerCondition.notify_all();
 
             // Set new valid frame available to ensure the valid frames thread wakes up
             shared.newValidFrameAvailable = true;
@@ -1351,6 +1356,8 @@ void keyboardHandlingThread(
                 shared.currentFrameIndex = static_cast<int>(circularBuffer.size() - 1);
                 shared.displayNeedsUpdate = true;
             }
+            shared.triggerCondition.notify_all();
+            shared.manualTriggerCondition.notify_all();
         }
         else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < static_cast<int>(circularBuffer.size() - 1))
         {
@@ -1370,6 +1377,8 @@ void keyboardHandlingThread(
         {
             shared.overlayMode = !shared.overlayMode;
             shared.displayNeedsUpdate = true;
+            shared.triggerCondition.notify_all();
+            shared.manualTriggerCondition.notify_all();
         }
         else if (key == 'q' || key == 'Q')
         {
@@ -1395,6 +1404,8 @@ void keyboardHandlingThread(
 
             // Notify histogram thread (if running) to process the clear request
             shared.scatterDataCondition.notify_one();
+            shared.triggerCondition.notify_all();
+            shared.manualTriggerCondition.notify_all();
 
             // std::cout << "Clearing histogram data and ring ratio buffer..." << std::endl;
         }
@@ -1478,11 +1489,15 @@ void keyboardHandlingThread(
             }
             shared.displayNeedsUpdate = true;
             shared.updated = true; // Ensure dashboard gets updated
+            shared.triggerCondition.notify_all();
+            shared.manualTriggerCondition.notify_all();
         }
         else if (key == 'r' || key == 'R')
         {
             // Toggle running state
             shared.running = !shared.running;
+            shared.triggerCondition.notify_all();
+            shared.manualTriggerCondition.notify_all();
         }
         // Autofocus Manual Control - only available when COM port is open
         else if ((key == 'z' || key == 'Z') && shared.autofocusComPortOpen.load())
@@ -1519,6 +1534,7 @@ void keyboardHandlingThread(
             // Toggle manual trigger mode
             bool currentState = shared.manualTriggerEnabled.load();
             shared.manualTriggerEnabled.store(!currentState);
+            shared.manualTriggerCondition.notify_all();
             // std::cout << "Manual Trigger " << (shared.manualTriggerEnabled.load() ? "ON" : "OFF") << std::endl;
         }
         shared.updated = true;

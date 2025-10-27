@@ -156,17 +156,17 @@ void triggerOut(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 
 void triggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &shared)
 {
-    // Initial delay, but interruptible so ESC does not block shutdown
-    auto delay_start = std::chrono::steady_clock::now();
-    while (!shared.done && std::chrono::steady_clock::now() - delay_start < std::chrono::seconds(5))
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    // Event-driven manual trigger: follow manualTriggerEnabled changes immediately
     while (!shared.done)
     {
+        {
+            std::unique_lock<std::mutex> lk(shared.manualTriggerMutex);
+            shared.manualTriggerCondition.wait(lk, [&]
+                                               { return shared.done || shared.manualTriggerEnabled.load(); });
+        }
+        if (shared.done)
+            break;
         triggerOut(grabber, shared);
-        // Yield briefly to reduce bus traffic and allow responsive shutdown
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     // Signal that this thread is ready to be joined
@@ -216,9 +216,14 @@ void processTriggerThread(EGrabber<CallbackOnDemand> &grabber, SharedResources &
     grabber.setString<InterfaceModule>("LineMode", "Output");
     while (!shared.done)
     {
+        {
+            std::unique_lock<std::mutex> lk(shared.triggerMutex);
+            shared.triggerCondition.wait(lk, [&]
+                                         { return shared.done || shared.processTrigger.load(); });
+        }
+        if (shared.done)
+            break;
         processTrigger(grabber, shared);
-        // Yield a bit to let shutdown progress
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     // Signal that this thread is ready to be joined

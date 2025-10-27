@@ -230,6 +230,12 @@ struct SharedResources
     std::atomic<bool> processTrigger{false};
     std::atomic<bool> manualTriggerEnabled{false}; // Toggle for manual trigger mode
 
+    // Event-driven signaling for triggers
+    std::condition_variable triggerCondition; // Notified when processTrigger becomes true or on shutdown
+    std::mutex triggerMutex;
+    std::condition_variable manualTriggerCondition; // Notified when manualTriggerEnabled toggles or on shutdown
+    std::mutex manualTriggerMutex;
+
     // Ring ratio buffer managed by processing thread, consumed by autofocus thread
     CircularBuffer autofocusRingRatioBuffer{1000, sizeof(double)}; // Buffer for ring ratios for autofocus
     std::mutex autofocusRingRatioMutex;
