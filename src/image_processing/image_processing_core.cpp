@@ -306,13 +306,11 @@ FilterResult filterProcessedImage(const cv::Mat &processedImage, const cv::Rect 
             bool areaInRange = !config.enable_area_range_check ||
                                (hullArea >= config.area_threshold_min && hullArea <= config.area_threshold_max);
 
-            // Check ring ratio range (13 < ringRatio < 25) - TODO: move these values to config.json
-            bool ringRatioInRange = (result.ringRatio > 15.0 && result.ringRatio < 25.0);
-
-            if (areaInRange && ringRatioInRange)
+            // Ring ratio is computed and recorded but no longer used as a validity filter
+            if (areaInRange)
             {
                 result.inRange = true;
-                // Set isValid to true for frames with exactly one inner contour and valid ring ratio
+                // Set isValid to true for frames with exactly one inner contour and valid area
                 result.isValid = true;
             }
         }
