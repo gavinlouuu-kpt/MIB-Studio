@@ -46,7 +46,6 @@ int selectCamera()
     {
         EGenTL genTL;
         EGrabberDiscovery discovery(genTL);
-        std::cout << "Scanning for available eGrabbers and cameras..." << std::endl;
         discovery.discover();
 
         // Display available cameras
@@ -440,3 +439,5 @@ int mib_grabber_main()
     }
     return 0;
 }
+
+

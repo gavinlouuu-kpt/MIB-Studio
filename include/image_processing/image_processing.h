@@ -302,3 +302,11 @@ BrightnessQuantiles calculateBrightnessQuantiles(const cv::Mat &originalImage, c
 std::string autoDetectPrefix(const std::string &dir);
 
 void autofocusControlThread(SharedResources &shared);
+
+// Reusable keyboard handler (same mapping as legacy HighGUI path)
+void handleKeypress(int key,
+                    const CircularBuffer &circularBuffer,
+                    size_t bufferCount,
+                    size_t width,
+                    size_t height,
+                    SharedResources &shared);

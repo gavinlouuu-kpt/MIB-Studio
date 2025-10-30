@@ -89,6 +89,7 @@ void simulateCameraThread(
     std::cout << "Camera thread interrupted." << std::endl;
 }
 
+#ifndef MIB_DISABLE_DISPLAY_THREADS
 void metricDisplayThread(SharedResources &shared)
 {
     using namespace ftxui;
@@ -298,7 +299,9 @@ void metricDisplayThread(SharedResources &shared)
         shared.threadShutdownCondition.notify_one();
     }
 }
+#endif
 
+#ifndef MIB_DISABLE_DISPLAY_THREADS
 void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &circularBuffer, const ImageParams &imageParams)
 {
     const std::string windowName = "Valid Frames";
@@ -505,6 +508,7 @@ void validFramesDisplayThread(SharedResources &shared, const CircularBuffer &cir
 
     std::cout << "Valid frames display thread interrupted." << std::endl;
 }
+#endif
 
 void processingThreadTask(
     std::mutex &processingQueueMutex,
@@ -746,6 +750,7 @@ void processingThreadTask(
     std::cout << "Processing thread interrupted." << std::endl;
 }
 
+#ifndef MIB_DISABLE_DISPLAY_THREADS
 void displayThreadTask(
     std::queue<size_t> &framesToDisplay,
     std::mutex &displayQueueMutex,
@@ -1023,6 +1028,7 @@ void displayThreadTask(
 
     std::cout << "Display thread interrupted." << std::endl;
 }
+#endif
 
 void onTrackbar(int pos, void *userdata)
 {
@@ -1031,6 +1037,7 @@ void onTrackbar(int pos, void *userdata)
     shared->displayNeedsUpdate = true;
 }
 
+#ifndef MIB_DISABLE_DISPLAY_THREADS
 void updateScatterPlot(SharedResources &shared)
 {
     using namespace matplot;
@@ -1165,7 +1172,9 @@ void updateScatterPlot(SharedResources &shared)
 
     std::cout << "Scatter plot thread interrupted." << std::endl;
 }
+#endif
 
+#ifndef MIB_DISABLE_DISPLAY_THREADS
 void updateRingRatioHistogram(SharedResources &shared)
 {
     using namespace matplot;
@@ -1320,211 +1329,18 @@ void updateRingRatioHistogram(SharedResources &shared)
 
     std::cout << "Ring ratio histogram thread interrupted." << std::endl;
 }
+#endif
 
+#ifndef MIB_DISABLE_DISPLAY_THREADS
+#ifndef MIB_DISABLE_DISPLAY_THREADS
 void keyboardHandlingThread(
     const CircularBuffer &circularBuffer,
     size_t bufferCount, size_t width, size_t height,
     SharedResources &shared)
 {
-    auto handleKeypress = [&](int key)
+    auto handleKeypressLambda = [&](int key)
     {
-        if (key == 27)
-        { // ESC key
-            shared.done = true;
-
-            // Signal all condition variables to wake up their threads
-            shared.validFramesCondition.notify_all();
-            shared.displayQueueCondition.notify_all();
-            shared.processingQueueCondition.notify_all();
-            shared.savingCondition.notify_all();
-            shared.scatterDataCondition.notify_all();
-            shared.triggerCondition.notify_all();
-            shared.manualTriggerCondition.notify_all();
-
-            // Set new valid frame available to ensure the valid frames thread wakes up
-            shared.newValidFrameAvailable = true;
-
-            // Simple wait to allow other threads to observe shutdown before proceeding
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-            std::cout << "ESC pressed, exiting..." << std::endl;
-        }
-        else if (key == 32)
-        { // Space bar
-            shared.paused = !shared.paused;
-            if (shared.paused)
-            {
-                shared.currentFrameIndex = static_cast<int>(circularBuffer.size() - 1);
-                shared.displayNeedsUpdate = true;
-            }
-            shared.triggerCondition.notify_all();
-            shared.manualTriggerCondition.notify_all();
-        }
-        else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < static_cast<int>(circularBuffer.size() - 1))
-        {
-            shared.currentFrameIndex++;
-            shared.displayNeedsUpdate = true;
-        }
-        else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex > 0)
-        {
-            shared.currentFrameIndex--;
-            shared.displayNeedsUpdate = true;
-        }
-        else if (key == 'f' || key == 'F')
-        {
-            configure_js("egrabberConfig.js");
-        }
-        else if (key == 'p' || key == 'P')
-        {
-            shared.overlayMode = !shared.overlayMode;
-            shared.displayNeedsUpdate = true;
-            shared.triggerCondition.notify_all();
-            shared.manualTriggerCondition.notify_all();
-        }
-        else if (key == 'q' || key == 'Q')
-        {
-            // Clear deformability buffer
-            std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
-            shared.deformabilityBuffer.clear();
-
-            // Set flag to clear histogram data (for histogram thread if it's running)
-            shared.clearHistogramData = true;
-
-            // Also clear the ring ratio buffer directly (in case histogram is disabled)
-            {
-                std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
-                shared.autofocusRingRatioBuffer.clear();
-                shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
-            }
-
-            // Reset ring ratio statistics
-            shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
-            shared.minRingRatio.store(0.0, std::memory_order_relaxed);
-            shared.maxRingRatio.store(0.0, std::memory_order_relaxed);
-            shared.medianRingRatio.store(0.0, std::memory_order_relaxed);
-
-            // Notify histogram thread (if running) to process the clear request
-            shared.scatterDataCondition.notify_one();
-            shared.triggerCondition.notify_all();
-            shared.manualTriggerCondition.notify_all();
-
-            // std::cout << "Clearing histogram data and ring ratio buffer..." << std::endl;
-        }
-        else if (key == 'S')
-        {
-            std::filesystem::path outputDir = "stream_output";
-            if (!std::filesystem::exists(outputDir))
-            {
-                std::filesystem::create_directory(outputDir);
-            }
-            // Find the next available numbered folder
-            int folderNum = 1;
-            while (std::filesystem::exists(outputDir / std::to_string(folderNum)))
-            {
-                folderNum++;
-            }
-
-            // Create the numbered subfolder
-            std::filesystem::path currentSaveDir = outputDir / std::to_string(folderNum);
-            std::filesystem::create_directory(currentSaveDir);
-
-            size_t frameCount = circularBuffer.size();
-            // std::cout << "Saving " << frameCount << " frames..." << std::endl;
-
-            for (size_t i = 0; i < frameCount; ++i)
-            {
-                // Use the same indexing as the trackbar to maintain consistency
-                auto imageData = circularBuffer.get(i);
-                cv::Mat image(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
-
-                std::ostringstream oss;
-                oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".tiff";
-                std::string filename = oss.str();
-
-                std::filesystem::path fullPath = currentSaveDir / filename;
-
-                cv::imwrite(fullPath.string(), image);
-                // std::cout << "Saved frame " << (i + 1) << "/" << frameCount << ": " << filename << "\r" << std::flush;
-            }
-        }
-        else if ((key == 'b' || key == 'B') && shared.paused)
-        {
-            auto backgroundImageData = circularBuffer.get(shared.currentFrameIndex);
-            {
-                std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
-                shared.backgroundFrame = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, backgroundImageData.data()).clone();
-
-                // Apply Gaussian blur to the background frame
-                cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
-                                 cv::Size(shared.processingConfig.gaussian_blur_size,
-                                          shared.processingConfig.gaussian_blur_size),
-                                 0);
-
-                // Contrast enhancement removed
-
-                // Record the timestamp when background was captured
-                auto now = std::chrono::system_clock::now();
-                auto time_t_now = std::chrono::system_clock::to_time_t(now);
-                std::lock_guard<std::mutex> timeLock(shared.backgroundCaptureTimeMutex);
-
-                // Format time to only show hours:minutes:seconds
-                std::tm timeInfo;
-                localtime_s(&timeInfo, &time_t_now);
-                char buffer[9]; // HH:MM:SS + null terminator
-                strftime(buffer, sizeof(buffer), "%H:%M:%S", &timeInfo);
-                shared.backgroundCaptureTime = buffer;
-            }
-            shared.displayNeedsUpdate = true;
-            shared.updated = true; // Ensure dashboard gets updated
-            shared.triggerCondition.notify_all();
-            shared.manualTriggerCondition.notify_all();
-        }
-        else if (key == 'r' || key == 'R')
-        {
-            // Toggle running state
-            shared.running = !shared.running;
-            shared.triggerCondition.notify_all();
-            shared.manualTriggerCondition.notify_all();
-        }
-        // Autofocus Manual Control - only available when COM port is open
-        else if ((key == 'z' || key == 'Z') && shared.autofocusComPortOpen.load())
-        {
-            // Request voltage increase
-            std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
-            shared.increaseVoltageRequest.store(true);
-            {
-                std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
-                shared.autofocusRingRatioBuffer.clear();
-                shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
-            }
-        }
-        else if ((key == 'x' || key == 'X') && shared.autofocusComPortOpen.load())
-        {
-            // Request voltage decrease
-            std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
-            shared.decreaseVoltageRequest.store(true);
-            {
-                std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
-                shared.autofocusRingRatioBuffer.clear();
-                shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
-            }
-        }
-        else if ((key == 'm' || key == 'M') && shared.autofocusComPortOpen.load())
-        {
-            // Toggle autofocus enabled/disabled
-            bool currentState = shared.autofocusEnabled.load();
-            shared.autofocusEnabled.store(!currentState);
-            // std::cout << "Autofocus " << (shared.autofocusEnabled.load() ? "enabled" : "disabled") << std::endl;
-        }
-        else if (key == 't' || key == 'T')
-        {
-            // Toggle manual trigger mode
-            bool currentState = shared.manualTriggerEnabled.load();
-            shared.manualTriggerEnabled.store(!currentState);
-            shared.manualTriggerCondition.notify_all();
-            // std::cout << "Manual Trigger " << (shared.manualTriggerEnabled.load() ? "ON" : "OFF") << std::endl;
-        }
-        shared.updated = true;
+        handleKeypress(key, circularBuffer, bufferCount, width, height, shared);
     };
 
     // Store the callback for use in displayThreadTask
@@ -1536,7 +1352,7 @@ void keyboardHandlingThread(
         if (_kbhit())
         {
             int ch = _getch();
-            handleKeypress(ch);
+            handleKeypressLambda(ch);
         }
         // Keep polling even faster during shutdown to avoid hang
         if (shared.done)
@@ -1555,6 +1371,169 @@ void keyboardHandlingThread(
 
     std::cout << "Keyboard handling thread interrupted." << std::endl;
 }
+#endif
+
+// Reusable handler implementation
+void handleKeypress(int key,
+                    const CircularBuffer &circularBuffer,
+                    size_t bufferCount,
+                    size_t width,
+                    size_t height,
+                    SharedResources &shared)
+{
+    if (key == 27)
+    {
+        shared.done = true;
+        shared.validFramesCondition.notify_all();
+        shared.displayQueueCondition.notify_all();
+        shared.processingQueueCondition.notify_all();
+        shared.savingCondition.notify_all();
+        shared.scatterDataCondition.notify_all();
+        shared.triggerCondition.notify_all();
+        shared.manualTriggerCondition.notify_all();
+        shared.newValidFrameAvailable = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    else if (key == 32)
+    {
+        shared.paused = !shared.paused;
+        if (shared.paused)
+        {
+            shared.currentFrameIndex = static_cast<int>(circularBuffer.size() - 1);
+            shared.displayNeedsUpdate = true;
+        }
+        shared.triggerCondition.notify_all();
+        shared.manualTriggerCondition.notify_all();
+    }
+    else if ((key == 'd' || key == 'D') && shared.paused && shared.currentFrameIndex < static_cast<int>(circularBuffer.size() - 1))
+    {
+        shared.currentFrameIndex++;
+        shared.displayNeedsUpdate = true;
+    }
+    else if ((key == 'a' || key == 'A') && shared.paused && shared.currentFrameIndex > 0)
+    {
+        shared.currentFrameIndex--;
+        shared.displayNeedsUpdate = true;
+    }
+    else if (key == 'f' || key == 'F')
+    {
+        configure_js("egrabberConfig.js");
+    }
+    else if (key == 'p' || key == 'P')
+    {
+        shared.overlayMode = !shared.overlayMode;
+        shared.displayNeedsUpdate = true;
+        shared.triggerCondition.notify_all();
+        shared.manualTriggerCondition.notify_all();
+    }
+    else if (key == 'q' || key == 'Q')
+    {
+        std::lock_guard<std::mutex> lock(shared.deformabilityBufferMutex);
+        shared.deformabilityBuffer.clear();
+        shared.clearHistogramData = true;
+        {
+            std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+            shared.autofocusRingRatioBuffer.clear();
+            shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
+        }
+        shared.averageRingRatio.store(0.0, std::memory_order_relaxed);
+        shared.minRingRatio.store(0.0, std::memory_order_relaxed);
+        shared.maxRingRatio.store(0.0, std::memory_order_relaxed);
+        shared.medianRingRatio.store(0.0, std::memory_order_relaxed);
+        shared.scatterDataCondition.notify_one();
+        shared.triggerCondition.notify_all();
+        shared.manualTriggerCondition.notify_all();
+    }
+    else if (key == 'S')
+    {
+        std::filesystem::path outputDir = "stream_output";
+        if (!std::filesystem::exists(outputDir))
+        {
+            std::filesystem::create_directory(outputDir);
+        }
+        int folderNum = 1;
+        while (std::filesystem::exists(outputDir / std::to_string(folderNum)))
+        {
+            folderNum++;
+        }
+        std::filesystem::path currentSaveDir = outputDir / std::to_string(folderNum);
+        std::filesystem::create_directory(currentSaveDir);
+        size_t frameCount = circularBuffer.size();
+        for (size_t i = 0; i < frameCount; ++i)
+        {
+            auto imageData = circularBuffer.get(i);
+            cv::Mat image(static_cast<int>(height), static_cast<int>(width), CV_8UC1, imageData.data());
+            std::ostringstream oss;
+            oss << "frame_" << std::setw(5) << std::setfill('0') << i << ".tiff";
+            std::string filename = oss.str();
+            std::filesystem::path fullPath = currentSaveDir / filename;
+            cv::imwrite(fullPath.string(), image);
+        }
+    }
+    else if ((key == 'b' || key == 'B') && shared.paused)
+    {
+        auto backgroundImageData = circularBuffer.get(shared.currentFrameIndex);
+        {
+            std::lock_guard<std::mutex> lock(shared.backgroundFrameMutex);
+            shared.backgroundFrame = cv::Mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, backgroundImageData.data()).clone();
+            cv::GaussianBlur(shared.backgroundFrame, shared.blurredBackground,
+                             cv::Size(shared.processingConfig.gaussian_blur_size,
+                                      shared.processingConfig.gaussian_blur_size),
+                             0);
+            auto now = std::chrono::system_clock::now();
+            auto time_t_now = std::chrono::system_clock::to_time_t(now);
+            std::lock_guard<std::mutex> timeLock(shared.backgroundCaptureTimeMutex);
+            std::tm timeInfo;
+            localtime_s(&timeInfo, &time_t_now);
+            char timebuf[9];
+            strftime(timebuf, sizeof(timebuf), "%H:%M:%S", &timeInfo);
+            shared.backgroundCaptureTime = timebuf;
+        }
+        shared.displayNeedsUpdate = true;
+        shared.updated = true;
+        shared.triggerCondition.notify_all();
+        shared.manualTriggerCondition.notify_all();
+    }
+    else if (key == 'r' || key == 'R')
+    {
+        shared.running = !shared.running;
+        shared.triggerCondition.notify_all();
+        shared.manualTriggerCondition.notify_all();
+    }
+    else if ((key == 'z' || key == 'Z') && shared.autofocusComPortOpen.load())
+    {
+        std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
+        shared.increaseVoltageRequest.store(true);
+        {
+            std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+            shared.autofocusRingRatioBuffer.clear();
+            shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
+        }
+    }
+    else if ((key == 'x' || key == 'X') && shared.autofocusComPortOpen.load())
+    {
+        std::lock_guard<std::mutex> lock(shared.autofocusControlMutex);
+        shared.decreaseVoltageRequest.store(true);
+        {
+            std::lock_guard<std::mutex> autofocusLock(shared.autofocusRingRatioMutex);
+            shared.autofocusRingRatioBuffer.clear();
+            shared.ringRatioBufferSize.store(0, std::memory_order_relaxed);
+        }
+    }
+    else if ((key == 'm' || key == 'M') && shared.autofocusComPortOpen.load())
+    {
+        bool currentState = shared.autofocusEnabled.load();
+        shared.autofocusEnabled.store(!currentState);
+    }
+    else if (key == 't' || key == 'T')
+    {
+        bool currentState = shared.manualTriggerEnabled.load();
+        shared.manualTriggerEnabled.store(!currentState);
+        shared.manualTriggerCondition.notify_all();
+    }
+    shared.updated = true;
+}
+#endif
 
 void resultSavingThread(SharedResources &shared, const std::string &saveDirectory)
 {

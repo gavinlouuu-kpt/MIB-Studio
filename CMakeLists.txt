@@ -27,17 +27,103 @@ find_library(XMT_DLL_SER_LIB XMT_DLL_SER
 # List all your source files here
 set(SOURCES
     src/main.cpp
-    src/image_processing/image_processing_core.cpp
-    src/image_processing/image_processing_utils.cpp
-    src/image_processing/image_processing_threads.cpp
+    src/core/image_processing/image_processing_core.cpp
+    src/core/image_processing/image_processing_utils.cpp
+    src/core/image_processing/image_processing_threads.cpp
     src/menu_system/menu_system.cpp
     src/CircularBuffer/CircularBuffer.cpp
-    src/mib_grabber/mib_grabber.cpp
+    src/core/grabber/mib_grabber.cpp
     # Add other source files here
+)
+
+# New modular targets for decoupled architecture
+# Core static library (no GUI framework dependency intended; current sources include HighGUI and will be refactored later)
+set(MIB_CORE_SOURCES
+    src/core/image_processing/image_processing_core.cpp
+    src/core/image_processing/image_processing_utils.cpp
+    src/core/image_processing/image_processing_threads.cpp
+    src/CircularBuffer/CircularBuffer.cpp
+    src/core/grabber/mib_grabber.cpp
+)
+
+add_library(mib_core STATIC ${MIB_CORE_SOURCES})
+target_include_directories(mib_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/Coremor
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(mib_core PUBLIC
+    Matplot++::matplot
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+    nlohmann_json::nlohmann_json
+    ${OpenCV_LIBS}
+    ${XMT_DLL_SER_LIB}
+)
+target_compile_definitions(mib_core PUBLIC MIB_DISABLE_DISPLAY_THREADS=1)
+
+# API static library (placeholder for controller + public API headers)
+add_library(mib_api STATIC
+    src/api/dummy.cpp
+    src/api/MibController.cpp
+)
+target_include_directories(mib_api PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(mib_api PUBLIC mib_core)
+
+# Optional Qt adapter (disabled by default if Qt is not available)
+option(BUILD_QT_ADAPTER ON)
+if(BUILD_QT_ADAPTER)
+    find_package(Qt6 COMPONENTS Core Gui Widgets REQUIRED)
+    add_library(mib_qt_adapter STATIC
+        src/qt/dummy.cpp
+        src/qt/QtMibController.h
+        src/qt/QtMibController.cpp
+    )
+    target_include_directories(mib_qt_adapter PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(mib_qt_adapter PUBLIC
+        mib_api
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+    )
+    set_target_properties(mib_qt_adapter PROPERTIES AUTOMOC ON)
+endif()
+
+# Combined TUI + Qt image window app
+add_executable(mib_tui_qt
+    apps/tui_qt/main.cpp
+)
+target_include_directories(mib_tui_qt PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(mib_tui_qt PRIVATE
+    mib_api
+    mib_qt_adapter
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
 )
 
 # Add main executable
 add_executable(${PROJECT_NAME} ${SOURCES})
+
+# Standalone CLI app using API
+add_executable(mib_cli
+    apps/cli/main.cpp
+)
+target_include_directories(mib_cli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(mib_cli PRIVATE mib_api)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE 
@@ -77,7 +163,7 @@ foreach(test_source ${TEST_SOURCES})
         src/image_processing/image_processing_threads.cpp
         src/menu_system/menu_system.cpp
         src/CircularBuffer/CircularBuffer.cpp
-        src/mib_grabber/mib_grabber.cpp
+        src/core/grabber/mib_grabber.cpp
 
     )
     target_include_directories(${test_name} PRIVATE 
